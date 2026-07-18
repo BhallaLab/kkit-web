@@ -1,0 +1,11 @@
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Backend
+backend/__pycache__/
+backend/**/__pycache__/
+*.pyc
+
+# Editor/OS
+.DS_Store
