@@ -50,6 +50,7 @@ def describe_pool(path):
         "conc": p.conc,
         "concInit": p.concInit,
         "diffConst": p.diffConst,
+        "motorConst": p.motorConst,
         "volume": p.volume,
         "isBuffered": p.isBuffered,
     })
@@ -57,7 +58,10 @@ def describe_pool(path):
 
 def describe_reac(path):
     r = moose.element(path)
-    return _node(r, "reac", {"Kf": r.Kf, "Kb": r.Kb})
+    # Kf/Kb (concentration.time units) and numKf/numKb (number.time units)
+    # are both native MOOSE fields, kept in sync internally -- no manual
+    # unit-conversion math needed to show both.
+    return _node(r, "reac", {"Kf": r.Kf, "Kb": r.Kb, "numKf": r.numKf, "numKb": r.numKb})
 
 
 def describe_enz(path):
@@ -67,7 +71,13 @@ def describe_enz(path):
     if is_mm:
         extra.update({"Km": e.Km, "kcat": e.kcat})
     else:
-        extra.update({"k1": e.k1, "k2": e.k2, "k3": e.k3})
+        # Km/kcat/ratio exist on explicit-complex Enz too, but as derived
+        # readouts of k1/k2/k3 (MOOSE recomputes them, not independently
+        # settable) -- included for display, not meant to be edited here.
+        extra.update({
+            "k1": e.k1, "k2": e.k2, "k3": e.k3,
+            "Km": e.Km, "kcat": e.kcat, "ratio": e.ratio,
+        })
     return _node(e, "enz", extra)
 
 

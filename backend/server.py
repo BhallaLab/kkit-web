@@ -56,7 +56,14 @@ def _update_node(node_id, fields, numeric_fields, bool_fields, describe_fn):
         return jsonify({"error": f"node not found: {node_id}"}), 404
 
     elem = moose.element(node_id)
+    # `info` is a live object reference, not a path string -- it stays valid
+    # even after the rename below changes elem's (and info's) own .path.
     info = moose.element(node_id + "/info")
+
+    new_name = fields.get("name")
+    if new_name and new_name != elem.name:
+        elem.name = new_name
+
     for key, value in fields.items():
         if key in numeric_fields:
             setattr(elem, key, float(value))
@@ -65,10 +72,12 @@ def _update_node(node_id, fields, numeric_fields, bool_fields, describe_fn):
         elif key in ("color", "notes"):
             setattr(info, key, value)
 
-    return jsonify(describe_fn(node_id))
+    result = describe_fn(elem.path)
+    result["previousId"] = node_id
+    return jsonify(result)
 
 
-_POOL_SIM_FIELDS = {"n", "nInit", "conc", "concInit", "diffConst"}
+_POOL_SIM_FIELDS = {"n", "nInit", "conc", "concInit", "diffConst", "motorConst"}
 
 
 @app.post("/api/update_pool")
@@ -79,7 +88,7 @@ def update_pool():
     )
 
 
-_REAC_SIM_FIELDS = {"Kf", "Kb"}
+_REAC_SIM_FIELDS = {"Kf", "Kb", "numKf", "numKb"}
 
 
 @app.post("/api/update_reac")

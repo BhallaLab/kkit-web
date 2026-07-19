@@ -1,19 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ReactFlow,
-  Background,
-  Controls,
-  MiniMap,
-  applyNodeChanges,
-  applyEdgeChanges,
-} from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
-import { nodeTypes } from './nodes';
-import BendableEdge from './BendableEdge';
-import { EdgeActionsContext } from './EdgeContext';
-import PoolEditDialog from './PoolEditDialog';
-import ReacEditDialog from './ReacEditDialog';
-import EnzEditDialog from './EnzEditDialog';
+import { applyNodeChanges, applyEdgeChanges } from '@xyflow/react';
+import AppLayout from './AppLayout';
 
 const API_BASE = `http://${window.location.hostname}:5001`;
 const SCALE = 100;
@@ -33,12 +20,12 @@ const HANDLE_BY_TYPE = {
   enzyme: { targetHandle: 'enzSite' },
 };
 
-const edgeTypes = { default: BendableEdge };
-
-const EDITABLE_TYPES = {
-  pool: { dialog: PoolEditDialog, endpoint: '/api/update_pool' },
-  reac: { dialog: ReacEditDialog, endpoint: '/api/update_reac' },
-  enz: { dialog: EnzEditDialog, endpoint: '/api/update_enz' },
+// Which backend endpoint updates each editable node type -- field rendering
+// itself lives in PropertiesMenuBox, not per-type here.
+const EDITABLE_ENDPOINTS = {
+  pool: '/api/update_pool',
+  reac: '/api/update_reac',
+  enz: '/api/update_enz',
 };
 
 // Mirrors kkit's ADDMSGARROW pairing rules (xreac.g/xpool.g/xenz.g): which
@@ -125,26 +112,33 @@ function toFlowGraph(graph) {
 export default function App() {
   const [flowGraph, setFlowGraph] = useState({ nodes: [], edges: [] });
   const [status, setStatus] = useState('loading feedback.g...');
-  const [editingNode, setEditingNode] = useState(null);
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const [activeMenu, setActiveMenu] = useState('File');
 
-  const loadFile = useCallback((path) => {
-    setStatus(`loading ${path}...`);
-    fetch(`${API_BASE}/api/load_gfile`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path }),
-    })
-      .then((r) => r.json())
-      .then((graph) => {
-        if (graph.error) {
-          setStatus(`error: ${graph.error}`);
-          return;
-        }
-        setFlowGraph(toFlowGraph(graph));
-        setStatus(`loaded ${graph.nodes.length} nodes, ${graph.edges.length} edges`);
-      })
-      .catch((err) => setStatus(`error: ${err}`));
+  const handleGraphResult = useCallback((graph) => {
+    if (graph.error) {
+      setStatus(`error: ${graph.error}`);
+      return;
+    }
+    setFlowGraph(toFlowGraph(graph));
+    setSelectedNodeId(null);
+    setStatus(`loaded ${graph.nodes.length} nodes, ${graph.edges.length} edges`);
   }, []);
+
+  const loadFile = useCallback(
+    (path) => {
+      setStatus(`loading ${path}...`);
+      fetch(`${API_BASE}/api/load_gfile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      })
+        .then((r) => r.json())
+        .then(handleGraphResult)
+        .catch((err) => setStatus(`error: ${err}`));
+    },
+    [handleGraphResult]
+  );
 
   const didInit = useRef(false);
   useEffect(() => {
@@ -153,9 +147,19 @@ export default function App() {
     loadFile('/home/bhalla/homework/KKIT/kkit11/examples/feedback.g');
   }, [loadFile]);
 
-  const onNodeDoubleClick = useCallback((event, node) => {
-    if (EDITABLE_TYPES[node.type]) setEditingNode(node);
+  const selectedNode = useMemo(
+    () => flowGraph.nodes.find((n) => n.id === selectedNodeId) ?? null,
+    [flowGraph.nodes, selectedNodeId]
+  );
+
+  const onNodeClick = useCallback((event, node) => {
+    if (EDITABLE_ENDPOINTS[node.type]) {
+      setSelectedNodeId(node.id);
+      setActiveMenu('Properties');
+    }
   }, []);
+
+  const onPaneClick = useCallback(() => setSelectedNodeId(null), []);
 
   const onNodesChange = useCallback((changes) => {
     setFlowGraph((g) => ({ ...g, nodes: applyNodeChanges(changes, g.nodes) }));
@@ -262,65 +266,207 @@ export default function App() {
 
   const edgeActions = useMemo(() => ({ selectEdge, moveEdgeVia }), [selectEdge, moveEdgeVia]);
 
-  const handleSave = useCallback((nodeId, fields) => {
-    // `flipped` is frontend-only (not tracked by the backend/MOOSE), so it's
-    // stripped before the request and reattached from what was submitted --
-    // otherwise the backend's response (which doesn't know about it) would
-    // wipe it out when merged into node data.
-    const { flipped, ...backendFields } = fields;
-    const endpoint = EDITABLE_TYPES[editingNode.type].endpoint;
-    fetch(`${API_BASE}${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: nodeId, fields: backendFields }),
-    })
+  const onSaveNode = useCallback(
+    (nodeId, fields) => {
+      // `flipped` is frontend-only (not tracked by the backend/MOOSE), so
+      // it's stripped before the request and reattached from what was
+      // submitted -- otherwise the backend's response (which doesn't know
+      // about it) would wipe it out when merged into node data.
+      const { flipped, ...backendFields } = fields;
+      const node = flowGraph.nodes.find((n) => n.id === nodeId);
+      const endpoint = EDITABLE_ENDPOINTS[node.type];
+      fetch(`${API_BASE}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: nodeId, fields: backendFields }),
+      })
+        .then((r) => r.json())
+        .then((updated) => {
+          if (updated.error) {
+            setStatus(`error: ${updated.error}`);
+            return;
+          }
+          // Renaming an object changes its MOOSE path, which is what we use
+          // as the node id -- when that happens, every reference to the old
+          // id (the node itself, any edges, and the current selection) has
+          // to be repointed at the new one.
+          const renamed = updated.previousId && updated.previousId !== updated.id;
+          setFlowGraph((g) => ({
+            nodes: g.nodes.map((n) =>
+              n.id === nodeId ? { ...n, id: updated.id, data: { ...updated, flipped } } : n
+            ),
+            edges: renamed
+              ? g.edges.map((e) => ({
+                  ...e,
+                  source: e.source === nodeId ? updated.id : e.source,
+                  target: e.target === nodeId ? updated.id : e.target,
+                }))
+              : g.edges,
+          }));
+          if (renamed && selectedNodeId === nodeId) {
+            setSelectedNodeId(updated.id);
+          }
+        })
+        .catch((err) => setStatus(`error: ${err}`));
+    },
+    [flowGraph.nodes, selectedNodeId]
+  );
+
+  // Re-fetches the whole graph rather than patching state locally -- used
+  // after operations whose effect on the node/edge set isn't a single known
+  // delta (creating an enzyme also creates a hidden complex pool; deleting a
+  // pool cascades to remove its enzyme children in MOOSE). Existing nodes'
+  // `flipped` state is preserved by id rather than recomputed, since the
+  // heuristic is only meant to run once per node, not on every refresh.
+  const refreshGraph = useCallback(() => {
+    fetch(`${API_BASE}/api/graph`)
       .then((r) => r.json())
-      .then((updated) => {
-        if (updated.error) {
-          setStatus(`error: ${updated.error}`);
+      .then((graph) => {
+        if (graph.error) {
+          setStatus(`error: ${graph.error}`);
           return;
         }
-        setFlowGraph((g) => ({
-          ...g,
-          nodes: g.nodes.map((n) =>
-            n.id === nodeId ? { ...n, data: { ...updated, flipped } } : n
-          ),
-        }));
-        setEditingNode(null);
+        setFlowGraph((g) => {
+          const existingFlipped = {};
+          g.nodes.forEach((n) => {
+            existingFlipped[n.id] = n.data.flipped;
+          });
+          const freshFlips = computeInitialFlips(graph);
+          const nodes = graph.nodes.map((n) => ({
+            id: n.id,
+            type: n.type,
+            position: { x: n.x * SCALE, y: -n.y * SCALE },
+            data: { ...n, flipped: existingFlipped[n.id] ?? freshFlips[n.id] ?? false },
+          }));
+          const edges = graph.edges.map((e, i) => toEdge(e.from, e.to, e.type, i));
+          return { nodes, edges };
+        });
       })
       .catch((err) => setStatus(`error: ${err}`));
-  }, [editingNode]);
+  }, []);
 
-  const EditDialog = editingNode ? EDITABLE_TYPES[editingNode.type].dialog : null;
+  const addNodeToGraph = useCallback((nodeData) => {
+    setFlowGraph((g) => ({
+      ...g,
+      nodes: [
+        ...g.nodes,
+        {
+          id: nodeData.id,
+          type: nodeData.type,
+          position: { x: nodeData.x * SCALE, y: -nodeData.y * SCALE },
+          data: { ...nodeData, flipped: false },
+        },
+      ],
+    }));
+    setSelectedNodeId(nodeData.id);
+    setActiveMenu('Properties');
+  }, []);
+
+  const creationCounter = useRef(0);
+
+  const handleAddPool = useCallback(() => {
+    const n = ++creationCounter.current;
+    fetch(`${API_BASE}/api/create_pool`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `pool${n}`, x: n * 1.5, y: -2 }),
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.error) {
+          setStatus(`error: ${res.error}`);
+          return;
+        }
+        addNodeToGraph(res);
+      })
+      .catch((err) => setStatus(`error: ${err}`));
+  }, [addNodeToGraph]);
+
+  const handleAddReac = useCallback(() => {
+    const n = ++creationCounter.current;
+    fetch(`${API_BASE}/api/create_reac`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `reac${n}`, x: n * 1.5, y: -3 }),
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.error) {
+          setStatus(`error: ${res.error}`);
+          return;
+        }
+        addNodeToGraph(res);
+      })
+      .catch((err) => setStatus(`error: ${err}`));
+  }, [addNodeToGraph]);
+
+  const handleAddEnz = useCallback(() => {
+    if (!selectedNode || selectedNode.type !== 'pool') {
+      setStatus('select a pool first to attach an enzyme to it');
+      return;
+    }
+    const n = ++creationCounter.current;
+    const x = selectedNode.data.x + 0.5;
+    const y = selectedNode.data.y - 1;
+    fetch(`${API_BASE}/api/create_enz`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parentPoolId: selectedNode.id, name: `enz${n}`, x, y }),
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.error) {
+          setStatus(`error: ${res.error}`);
+          return;
+        }
+        refreshGraph();
+        setSelectedNodeId(res.id);
+        setActiveMenu('Properties');
+      })
+      .catch((err) => setStatus(`error: ${err}`));
+  }, [selectedNode, refreshGraph]);
+
+  const handleDeleteSelected = useCallback(() => {
+    if (!selectedNodeId) return;
+    fetch(`${API_BASE}/api/delete_node`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: selectedNodeId }),
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.error) {
+          setStatus(`error: ${res.error}`);
+          return;
+        }
+        setSelectedNodeId(null);
+        refreshGraph();
+      })
+      .catch((err) => setStatus(`error: ${err}`));
+  }, [selectedNodeId, refreshGraph]);
 
   return (
-    <div style={{ width: '100vw', height: '100vh' }}>
-      <div style={{ position: 'absolute', zIndex: 10, padding: 8, background: 'white' }}>
-        {status}
-      </div>
-      <EdgeActionsContext.Provider value={edgeActions}>
-        <ReactFlow
-          nodes={flowGraph.nodes}
-          edges={flowGraph.edges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          onNodeDoubleClick={onNodeDoubleClick}
-          onNodesChange={onNodesChange}
-          onNodeDragStop={onNodeDragStop}
-          onConnect={onConnect}
-          isValidConnection={isValidConnection}
-          onEdgesChange={onEdgesChange}
-          deleteKeyCode={['Backspace', 'Delete']}
-          fitView
-        >
-          <Background />
-          <Controls />
-          <MiniMap />
-        </ReactFlow>
-      </EdgeActionsContext.Provider>
-      {EditDialog && (
-        <EditDialog node={editingNode} onClose={() => setEditingNode(null)} onSave={handleSave} />
-      )}
-    </div>
+    <AppLayout
+      activeMenu={activeMenu}
+      setActiveMenu={setActiveMenu}
+      status={status}
+      loadFile={loadFile}
+      onGraphLoaded={handleGraphResult}
+      selectedNode={selectedNode}
+      onSaveNode={onSaveNode}
+      onAddPool={handleAddPool}
+      onAddReac={handleAddReac}
+      onAddEnz={handleAddEnz}
+      onDeleteSelected={handleDeleteSelected}
+      flowGraph={flowGraph}
+      edgeActions={edgeActions}
+      onNodeClick={onNodeClick}
+      onPaneClick={onPaneClick}
+      onNodesChange={onNodesChange}
+      onNodeDragStop={onNodeDragStop}
+      onConnect={onConnect}
+      isValidConnection={isValidConnection}
+      onEdgesChange={onEdgesChange}
+    />
   );
 }

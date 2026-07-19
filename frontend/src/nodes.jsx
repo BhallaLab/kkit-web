@@ -1,10 +1,10 @@
 import { Handle, Position } from '@xyflow/react';
+import { getContrastTextColor } from './colorUtils';
 
 const baseStyle = {
   padding: '4px 10px',
   fontSize: 12,
   border: '1px solid #333',
-  color: 'black',
 };
 
 function selectedStyle(selected) {
@@ -114,7 +114,15 @@ function ProductHandle({ flipped }) {
 
 export function PoolNode({ data, selected }) {
   return (
-    <div style={{ ...baseStyle, ...selectedStyle(selected), background: data.color, borderRadius: 2 }}>
+    <div
+      style={{
+        ...baseStyle,
+        ...selectedStyle(selected),
+        background: data.color,
+        color: getContrastTextColor(data.color),
+        borderRadius: 2,
+      }}
+    >
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
       {data.name}
@@ -130,6 +138,7 @@ export function ReacNode({ data, selected }) {
         ...baseStyle,
         ...selectedStyle(selected),
         background: data.color,
+        color: getContrastTextColor(data.color),
         borderRadius: '50%',
         textAlign: 'center',
         fontSize: 24,
@@ -162,7 +171,7 @@ export function EnzNode({ data, selected }) {
           position: 'absolute',
           inset: 0,
           background: data.color,
-          color: data.textColor,
+          color: getContrastTextColor(data.color),
           fontWeight: 'bold',
           fontSize: 11,
           clipPath: flipped ? ENZ_CLIP_PATH_LEFT : ENZ_CLIP_PATH_RIGHT,
