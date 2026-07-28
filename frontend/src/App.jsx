@@ -3,7 +3,48 @@ import { applyNodeChanges, applyEdgeChanges } from '@xyflow/react';
 import AppLayout from './AppLayout';
 
 const API_BASE = `http://${window.location.hostname}:5001`;
-const SCALE = 100;
+
+// px per kkit layout unit -- no single fixed value works across models,
+// since different .g files use wildly different native coordinate spacing
+// (verified directly: kholodenko.g's median nearest-neighbor spacing is 3.0
+// layout units, feedback.g's is 1.41). Computed fresh per model instead (see
+// computeAutoScale) so node spacing lands at a consistent, readable pixel
+// distance regardless of a given file's own unit convention.
+const TARGET_NEIGHBOR_SPACING_PX = 180;
+const DEFAULT_SCALE = 50;
+const MIN_SCALE = 15;
+const MAX_SCALE = 200;
+
+// Median (not minimum) nearest-neighbor distance across all node positions.
+// Minimum would be thrown off by deliberately-tight pairs that are common in
+// kkit layouts (our own create_enz places an enzyme only ~0.5-1 unit from
+// its parent pool, and legacy .g files use similar tight diagonal offsets
+// for enz/reac icons next to their substrate pool) -- those pairs shouldn't
+// dictate the overall scale, but they would if we took the true minimum.
+function computeAutoScale(graph) {
+  const points = graph.nodes.map((n) => ({ x: n.x, y: n.y }));
+  if (points.length < 2) return DEFAULT_SCALE;
+
+  const nearestDistances = points
+    .map((p, i) => {
+      let min = Infinity;
+      points.forEach((q, j) => {
+        if (i === j) return;
+        const d = Math.hypot(p.x - q.x, p.y - q.y);
+        if (d > 0 && d < min) min = d;
+      });
+      return min;
+    })
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+
+  if (nearestDistances.length === 0) return DEFAULT_SCALE;
+
+  const median = nearestDistances[Math.floor(nearestDistances.length / 2)];
+  if (!median || median <= 0) return DEFAULT_SCALE;
+
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, TARGET_NEIGHBOR_SPACING_PX / median));
+}
 
 const EDGE_STYLE = {
   substrate: { stroke: 'green' },
@@ -97,12 +138,12 @@ function computeInitialFlips(graph) {
   return flips;
 }
 
-function toFlowGraph(graph) {
+function toFlowGraph(graph, scale) {
   const flips = computeInitialFlips(graph);
   const nodes = graph.nodes.map((n) => ({
     id: n.id,
     type: n.type,
-    position: { x: n.x * SCALE, y: -n.y * SCALE },
+    position: { x: n.x * scale, y: -n.y * scale },
     data: { ...n, flipped: flips[n.id] ?? false },
   }));
   const edges = graph.edges.map((e, i) => toEdge(e.from, e.to, e.type, i));
@@ -114,13 +155,23 @@ export default function App() {
   const [status, setStatus] = useState('loading feedback.g...');
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [activeMenu, setActiveMenu] = useState('File');
+  const [plotData, setPlotData] = useState(null);
+  const [isRunning, setIsRunning] = useState(false);
+  const [runError, setRunError] = useState(null);
+  const [lastRuntime, setLastRuntime] = useState(null);
+  // Recomputed only on full graph reloads (load/reset/refresh), not on
+  // incremental edits (drag, single add) -- so a drag or single new node
+  // never rescales/shifts everything else already laid out.
+  const [scale, setScale] = useState(DEFAULT_SCALE);
 
   const handleGraphResult = useCallback((graph) => {
     if (graph.error) {
       setStatus(`error: ${graph.error}`);
       return;
     }
-    setFlowGraph(toFlowGraph(graph));
+    const newScale = computeAutoScale(graph);
+    setScale(newScale);
+    setFlowGraph(toFlowGraph(graph, newScale));
     setSelectedNodeId(null);
     setStatus(`loaded ${graph.nodes.length} nodes, ${graph.edges.length} edges`);
   }, []);
@@ -166,8 +217,8 @@ export default function App() {
   }, []);
 
   const onNodeDragStop = useCallback((event, node) => {
-    const x = node.position.x / SCALE;
-    const y = -node.position.y / SCALE;
+    const x = node.position.x / scale;
+    const y = -node.position.y / scale;
     fetch(`${API_BASE}/api/update_position`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -187,7 +238,7 @@ export default function App() {
         }));
       })
       .catch((err) => setStatus(`error: ${err}`));
-  }, []);
+  }, [scale]);
 
   const nodeTypeById = useMemo(() => {
     const map = {};
@@ -318,6 +369,9 @@ export default function App() {
   // pool cascades to remove its enzyme children in MOOSE). Existing nodes'
   // `flipped` state is preserved by id rather than recomputed, since the
   // heuristic is only meant to run once per node, not on every refresh.
+  // Scale IS recomputed here, same as on load -- the node set just changed,
+  // so re-fitting the spacing to whatever remains is the point, unlike drag
+  // or single-add which intentionally keep the current scale untouched.
   const refreshGraph = useCallback(() => {
     fetch(`${API_BASE}/api/graph`)
       .then((r) => r.json())
@@ -326,6 +380,8 @@ export default function App() {
           setStatus(`error: ${graph.error}`);
           return;
         }
+        const newScale = computeAutoScale(graph);
+        setScale(newScale);
         setFlowGraph((g) => {
           const existingFlipped = {};
           g.nodes.forEach((n) => {
@@ -335,7 +391,7 @@ export default function App() {
           const nodes = graph.nodes.map((n) => ({
             id: n.id,
             type: n.type,
-            position: { x: n.x * SCALE, y: -n.y * SCALE },
+            position: { x: n.x * newScale, y: -n.y * newScale },
             data: { ...n, flipped: existingFlipped[n.id] ?? freshFlips[n.id] ?? false },
           }));
           const edges = graph.edges.map((e, i) => toEdge(e.from, e.to, e.type, i));
@@ -353,14 +409,14 @@ export default function App() {
         {
           id: nodeData.id,
           type: nodeData.type,
-          position: { x: nodeData.x * SCALE, y: -nodeData.y * SCALE },
+          position: { x: nodeData.x * scale, y: -nodeData.y * scale },
           data: { ...nodeData, flipped: false },
         },
       ],
     }));
     setSelectedNodeId(nodeData.id);
     setActiveMenu('Properties');
-  }, []);
+  }, [scale]);
 
   const creationCounter = useRef(0);
 
@@ -445,6 +501,43 @@ export default function App() {
       .catch((err) => setStatus(`error: ${err}`));
   }, [selectedNodeId, refreshGraph]);
 
+  const handleStartRun = useCallback((runtime, plotDt) => {
+    setIsRunning(true);
+    setRunError(null);
+    fetch(`${API_BASE}/api/run/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runtime, plotDt }),
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.error) {
+          setRunError(res.error);
+          return;
+        }
+        setPlotData(res);
+        setLastRuntime(runtime);
+      })
+      .catch((err) => setRunError(String(err)))
+      .finally(() => setIsRunning(false));
+  }, []);
+
+  const handleResetRun = useCallback(() => {
+    fetch(`${API_BASE}/api/run/reset`, { method: 'POST' })
+      .then((r) => r.json())
+      .then((graph) => {
+        if (graph.error) {
+          setRunError(graph.error);
+          return;
+        }
+        handleGraphResult(graph);
+        setPlotData(null);
+        setLastRuntime(null);
+        setRunError(null);
+      })
+      .catch((err) => setRunError(String(err)));
+  }, [handleGraphResult]);
+
   return (
     <AppLayout
       activeMenu={activeMenu}
@@ -458,6 +551,12 @@ export default function App() {
       onAddReac={handleAddReac}
       onAddEnz={handleAddEnz}
       onDeleteSelected={handleDeleteSelected}
+      onStartRun={handleStartRun}
+      onResetRun={handleResetRun}
+      isRunning={isRunning}
+      runError={runError}
+      lastRuntime={lastRuntime}
+      plotData={plotData}
       flowGraph={flowGraph}
       edgeActions={edgeActions}
       onNodeClick={onNodeClick}

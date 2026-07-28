@@ -15,8 +15,10 @@
     "@mui/icons-material": "^9.2.0",
     "@mui/material": "^9.2.0",
     "@xyflow/react": "^12.11.2",
+    "plotly.js": "^3.7.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "react-plotly.js": "^4.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",

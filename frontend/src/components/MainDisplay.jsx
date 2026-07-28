@@ -5,6 +5,7 @@ import '@xyflow/react/dist/style.css';
 import { nodeTypes } from '../nodes';
 import BendableEdge from '../BendableEdge';
 import { EdgeActionsContext } from '../EdgeContext';
+import PlotsPanel from './PlotsPanel';
 
 const edgeTypes = { default: BendableEdge };
 
@@ -18,9 +19,8 @@ export default function MainDisplay({
   onConnect,
   isValidConnection,
   onEdgesChange,
+  plotData,
 }) {
-  // Only one tab today -- more (Plots, once task #7 lands) slot in alongside
-  // it the same way jardesigner's DisplayWindow adds panels per feature.
   const [tabIndex, setTabIndex] = useState(0);
 
   return (
@@ -37,6 +37,7 @@ export default function MainDisplay({
       <Box sx={{ borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
         <Tabs value={tabIndex} onChange={(e, v) => setTabIndex(v)}>
           <Tab label="Reaction Layout" />
+          <Tab label="Plots" />
         </Tabs>
       </Box>
       <Box sx={{ flexGrow: 1, position: 'relative', display: tabIndex === 0 ? 'block' : 'none' }}>
@@ -54,6 +55,7 @@ export default function MainDisplay({
             isValidConnection={isValidConnection}
             onEdgesChange={onEdgesChange}
             deleteKeyCode={['Backspace', 'Delete']}
+            minZoom={0.05}
             fitView
           >
             <Background />
@@ -61,6 +63,9 @@ export default function MainDisplay({
             <MiniMap />
           </ReactFlow>
         </EdgeActionsContext.Provider>
+      </Box>
+      <Box sx={{ flexGrow: 1, position: 'relative', display: tabIndex === 1 ? 'block' : 'none' }}>
+        <PlotsPanel plotData={plotData} nodes={flowGraph.nodes} />
       </Box>
     </Box>
   );

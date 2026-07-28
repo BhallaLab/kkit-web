@@ -7,6 +7,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 from moose_graph import build_graph, describe_pool, describe_reac, describe_enz, create_info
+from sim_runner import run_simulation
 
 app = Flask(__name__)
 CORS(app)
@@ -267,6 +268,33 @@ def delete_node():
         return jsonify({"error": f"node not found: {node_id}"}), 404
     moose.delete(node_id)
     return jsonify({"ok": True})
+
+
+@app.post("/api/run/start")
+def run_start():
+    """Runs the simulation to completion and returns the full time course in
+    one response -- synchronous for now, no live/incremental streaming."""
+    if _current_model_path is None or not moose.exists(_current_model_path):
+        return jsonify({"error": "no model loaded"}), 400
+    body = request.json or {}
+    try:
+        runtime = float(body.get("runtime", 1.0))
+        plot_dt = float(body.get("plotDt", 0.01))
+    except (TypeError, ValueError):
+        return jsonify({"error": "runtime and plotDt must be numbers"}), 400
+    if runtime <= 0 or plot_dt <= 0:
+        return jsonify({"error": "runtime and plotDt must be positive"}), 400
+
+    result = run_simulation(_current_model_path, runtime, plot_dt)
+    return jsonify(result)
+
+
+@app.post("/api/run/reset")
+def run_reset():
+    if _current_model_path is None or not moose.exists(_current_model_path):
+        return jsonify({"error": "no model loaded"}), 400
+    moose.reinit()
+    return jsonify(build_graph(_current_model_path))
 
 
 @app.post("/api/save_sbml")

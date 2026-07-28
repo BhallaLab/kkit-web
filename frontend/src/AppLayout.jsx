@@ -2,17 +2,18 @@ import { AppBar, Toolbar, Button, Box } from '@mui/material';
 import FolderIcon from '@mui/icons-material/Folder';
 import TuneIcon from '@mui/icons-material/Tune';
 import AddCircleIcon from '@mui/icons-material/AddCircle';
+import PlayCircleIcon from '@mui/icons-material/PlayCircle';
 import FileMenuBox from './components/MenuBoxes/FileMenuBox';
 import PropertiesMenuBox from './components/MenuBoxes/PropertiesMenuBox';
 import AddMenuBox from './components/MenuBoxes/AddMenuBox';
+import RunMenuBox from './components/MenuBoxes/RunMenuBox';
 import MainDisplay from './components/MainDisplay';
 
-// More entries (Run) slot in here as task #7 lands -- same pattern as
-// jardesigner's own toolbar-button-per-concern convention.
 const MENU_ITEMS = [
   { key: 'File', label: 'File', Icon: FolderIcon },
   { key: 'Add', label: 'Add', Icon: AddCircleIcon },
   { key: 'Properties', label: 'Properties', Icon: TuneIcon },
+  { key: 'Run', label: 'Run', Icon: PlayCircleIcon },
 ];
 
 export default function AppLayout({
@@ -27,6 +28,12 @@ export default function AppLayout({
   onAddReac,
   onAddEnz,
   onDeleteSelected,
+  onStartRun,
+  onResetRun,
+  isRunning,
+  runError,
+  lastRuntime,
+  plotData,
   ...canvasProps
 }) {
   const menuComponents = {
@@ -41,6 +48,15 @@ export default function AppLayout({
       />
     ),
     Properties: <PropertiesMenuBox node={selectedNode} onSave={onSaveNode} />,
+    Run: (
+      <RunMenuBox
+        onStart={onStartRun}
+        onReset={onResetRun}
+        isRunning={isRunning}
+        error={runError}
+        lastRuntime={lastRuntime}
+      />
+    ),
   };
 
   return (
@@ -63,7 +79,7 @@ export default function AppLayout({
       <Box sx={{ display: 'flex', flexGrow: 1, p: 2, gap: 2, minHeight: 0 }}>
         <Box sx={{ width: '33%', height: '100%' }}>{menuComponents[activeMenu]}</Box>
         <Box sx={{ width: '67%', height: '100%' }}>
-          <MainDisplay {...canvasProps} />
+          <MainDisplay {...canvasProps} plotData={plotData} />
         </Box>
       </Box>
     </Box>
