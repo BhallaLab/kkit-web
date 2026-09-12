@@ -9,6 +9,7 @@ import {
   Grid,
   Divider,
 } from '@mui/material';
+import { RAINBOW_16 } from '../../colorUtils';
 
 // Display-only rounding -- fields are edited as plain strings (see
 // initialFieldsFor/handleSave) so this never fights the user mid-keystroke;
@@ -65,7 +66,7 @@ function initialFieldsFor(node) {
       fields[key] = formatNumber(node.data[key]);
     });
   if (node.type === 'pool') fields.isBuffered = !!node.data.isBuffered;
-  if (node.type === 'reac' || node.type === 'enz') fields.flipped = !!node.data.flipped;
+  fields.flipped = !!node.data.flipped;
   return fields;
 }
 
@@ -75,7 +76,7 @@ function titleFor(node) {
   return `Enzyme (${node.data.mechanism})`;
 }
 
-export default function PropertiesMenuBox({ node, onSave }) {
+export default function PropertiesMenuBox({ node, onSave, onToggleFlip }) {
   const [fields, setFields] = useState(null);
 
   useEffect(() => {
@@ -170,13 +171,26 @@ export default function PropertiesMenuBox({ node, onSave }) {
         )}
 
         <Grid size={12}>
-          <TextField
-            fullWidth
-            label="Color"
-            size="small"
-            value={fields.color}
-            onChange={(e) => setField('color', e.target.value)}
-          />
+          <Typography variant="caption" color="text.secondary">
+            Color
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
+            {RAINBOW_16.map((c) => (
+              <Box
+                key={c}
+                onClick={() => setField('color', c)}
+                sx={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  background: c,
+                  boxSizing: 'border-box',
+                  border: fields.color === c ? '3px solid #000' : '1px solid #999',
+                }}
+              />
+            ))}
+          </Box>
         </Grid>
         <Grid size={12}>
           <TextField
@@ -190,19 +204,25 @@ export default function PropertiesMenuBox({ node, onSave }) {
           />
         </Grid>
 
-        {(node.type === 'reac' || node.type === 'enz') && (
-          <Grid size={12}>
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={fields.flipped}
-                  onChange={(e) => setField('flipped', e.target.checked)}
-                />
-              }
-              label="Flip orientation (swap substrate/product sides)"
-            />
-          </Grid>
-        )}
+        <Grid size={12}>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={fields.flipped}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setField('flipped', checked);
+                  onToggleFlip(node.id, checked);
+                }}
+              />
+            }
+            label={
+              node.type === 'pool'
+                ? 'Flip orientation (swap left/right connection sides)'
+                : 'Flip orientation (swap substrate/product sides)'
+            }
+          />
+        </Grid>
 
         <Grid size={12}>
           <Divider sx={{ my: 1 }} />

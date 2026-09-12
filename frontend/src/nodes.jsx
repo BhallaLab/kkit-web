@@ -1,8 +1,21 @@
 import { Handle, Position } from '@xyflow/react';
-import { getContrastTextColor } from './colorUtils';
+import { getContrastTextColor, PLOT_WINDOW_COLORS } from './colorUtils';
+import PlotSquiggleIcon from './PlotSquiggleIcon';
 
 const baseStyle = {
   padding: '4px 10px',
+  fontSize: 28,
+  border: '1px solid #333',
+};
+
+// An enzyme's hidden "cplx" pool is an implementation detail, not a
+// molecule the user manages directly -- rendered at a fraction of a normal
+// pool's size (real font/padding values, not a CSS transform, since a
+// transform wouldn't change what React Flow's ResizeObserver measures, and
+// Handles would end up anchored to the pre-transform box instead of the
+// visibly smaller one).
+const complexPoolStyle = {
+  padding: '1px 5px',
   fontSize: 12,
   border: '1px solid #333',
 };
@@ -112,20 +125,49 @@ function ProductHandle({ flipped }) {
   );
 }
 
-export function PoolNode({ data, selected }) {
+export function PoolNode({ id, data, selected }) {
+  const flipped = !!data.flipped;
+  const style = data.isEnzComplex ? complexPoolStyle : baseStyle;
+
+  const handleBadgeDragStart = (event) => {
+    event.dataTransfer.setData('application/kkit-unplot', JSON.stringify({ poolId: id }));
+    event.dataTransfer.effectAllowed = 'move';
+  };
+
   return (
-    <div
-      style={{
-        ...baseStyle,
-        ...selectedStyle(selected),
-        background: data.color,
-        color: getContrastTextColor(data.color),
-        borderRadius: 2,
-      }}
-    >
-      <Handle type="target" position={Position.Left} />
-      <Handle type="source" position={Position.Right} />
-      {data.name}
+    // The extra wrapper (rather than putting the badge directly alongside
+    // the styled div) keeps its own box exactly the size of the pool
+    // rectangle -- the badge is positioned absolutely and protrudes outside
+    // it, which doesn't enlarge an inline-block parent's own layout size,
+    // so the Handles below are unaffected by whether the badge is showing.
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <div
+        style={{
+          ...style,
+          ...selectedStyle(selected),
+          background: data.color,
+          color: getContrastTextColor(data.color),
+          borderRadius: 2,
+        }}
+      >
+        <Handle type="target" position={flipped ? Position.Right : Position.Left} />
+        <Handle type="source" position={flipped ? Position.Left : Position.Right} />
+        {data.name}
+      </div>
+      {data.plotWindow && (
+        // Draggable (native HTML5 DnD, not React Flow's node dragging,
+        // since this is a plain child element) so it can be dragged onto
+        // the palette's trash icon to un-plot -- see EntityPalette.jsx's
+        // TrashTarget and App.jsx's handleUnplot.
+        <div
+          draggable
+          onDragStart={handleBadgeDragStart}
+          title="Drag to the trash icon above to un-plot"
+          style={{ position: 'absolute', top: -40, right: -40, cursor: 'grab' }}
+        >
+          <PlotSquiggleIcon width={36} height={26} traceColor={PLOT_WINDOW_COLORS[data.plotWindow]} />
+        </div>
+      )}
     </div>
   );
 }
@@ -141,7 +183,7 @@ export function ReacNode({ data, selected }) {
         color: getContrastTextColor(data.color),
         borderRadius: '50%',
         textAlign: 'center',
-        fontSize: 24,
+        fontSize: 48,
       }}
     >
       <SubstrateHandle flipped={flipped} />
@@ -156,7 +198,9 @@ export function ReacNode({ data, selected }) {
 // shaft. Flipping swaps in a genuinely mirrored clip-path (arrowhead on the
 // other side) rather than transforming the same one, for the same reason
 // the handles use separate geometry above.
-const ENZ_CLIP_PATH_RIGHT = 'polygon(0% 25%, 65% 25%, 65% 0%, 100% 50%, 65% 100%, 65% 75%, 0% 75%)';
+// Exported so the Add palette's enzyme icon (EntityPalette.jsx) can render
+// the exact same arrow shape rather than a separately-drawn lookalike.
+export const ENZ_CLIP_PATH_RIGHT = 'polygon(0% 25%, 65% 25%, 65% 0%, 100% 50%, 65% 100%, 65% 75%, 0% 75%)';
 const ENZ_CLIP_PATH_LEFT = 'polygon(100% 25%, 35% 25%, 35% 0%, 0% 50%, 35% 100%, 35% 75%, 100% 75%)';
 
 export function EnzNode({ data, selected }) {
@@ -165,7 +209,9 @@ export function EnzNode({ data, selected }) {
     // The clip-path lives on an inner decorative layer, not this outer
     // container -- otherwise it would also clip away the substrate/product
     // triangles, which deliberately protrude outside the visible shape.
-    <div style={{ position: 'relative', boxSizing: 'border-box', width: 55, height: 40 }}>
+    // Box scaled up along with the doubled font size below -- otherwise
+    // the bigger name text would get clipped by the arrowhead shape.
+    <div style={{ position: 'relative', boxSizing: 'border-box', width: 110, height: 80 }}>
       <div
         style={{
           position: 'absolute',
@@ -173,7 +219,7 @@ export function EnzNode({ data, selected }) {
           background: data.color,
           color: getContrastTextColor(data.color),
           fontWeight: 'bold',
-          fontSize: 11,
+          fontSize: 26,
           clipPath: flipped ? ENZ_CLIP_PATH_LEFT : ENZ_CLIP_PATH_RIGHT,
           display: 'flex',
           alignItems: 'center',

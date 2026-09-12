@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { applyNodeChanges, applyEdgeChanges } from '@xyflow/react';
 import AppLayout from './AppLayout';
+import { RAINBOW_16 } from './colorUtils';
 
 const API_BASE = `http://${window.location.hostname}:5001`;
 
@@ -14,6 +15,9 @@ const TARGET_NEIGHBOR_SPACING_PX = 180;
 const DEFAULT_SCALE = 50;
 const MIN_SCALE = 15;
 const MAX_SCALE = 200;
+// Rendered pool node height in px (see nodes.jsx's baseStyle) -- used to
+// auto-offset a newly-created enzyme two pool-heights above its parent.
+const POOL_HEIGHT_PX = 28;
 
 // Median (not minimum) nearest-neighbor distance across all node positions.
 // Minimum would be thrown off by deliberately-tight pairs that are common in
@@ -111,41 +115,80 @@ function toEdge(from, to, type, i) {
 // silently re-flip nodes the user has already arranged or manually toggled.
 function computeInitialFlips(graph) {
   const poolX = {};
+  const otherX = {};
   graph.nodes.forEach((n) => {
     if (n.type === 'pool') poolX[n.id] = n.x;
+    else otherX[n.id] = n.x;
   });
 
+  // For reac/enz nodes: X of the pools feeding in as substrate vs. the
+  // pools receiving as product.
   const subXs = {};
   const prodXs = {};
+  // For pool nodes (mirror image): X of the reac/enz nodes it's a
+  // substrate for (attaches at its source/right handle by default) vs.
+  // the ones it's a product of (attaches at its target/left handle).
+  const poolSubXs = {};
+  const poolProdXs = {};
   graph.edges.forEach((e) => {
-    if (e.type === 'substrate' && poolX[e.from] !== undefined) {
-      if (!subXs[e.to]) subXs[e.to] = [];
-      subXs[e.to].push(poolX[e.from]);
-    } else if (e.type === 'product' && poolX[e.to] !== undefined) {
-      if (!prodXs[e.from]) prodXs[e.from] = [];
-      prodXs[e.from].push(poolX[e.to]);
+    if (e.type === 'substrate') {
+      if (poolX[e.from] !== undefined) {
+        if (!subXs[e.to]) subXs[e.to] = [];
+        subXs[e.to].push(poolX[e.from]);
+      }
+      if (otherX[e.to] !== undefined) {
+        if (!poolSubXs[e.from]) poolSubXs[e.from] = [];
+        poolSubXs[e.from].push(otherX[e.to]);
+      }
+    } else if (e.type === 'product') {
+      if (poolX[e.to] !== undefined) {
+        if (!prodXs[e.from]) prodXs[e.from] = [];
+        prodXs[e.from].push(poolX[e.to]);
+      }
+      if (otherX[e.from] !== undefined) {
+        if (!poolProdXs[e.to]) poolProdXs[e.to] = [];
+        poolProdXs[e.to].push(otherX[e.from]);
+      }
     }
   });
 
   const avg = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
   const flips = {};
   graph.nodes.forEach((n) => {
-    if (n.type !== 'reac' && n.type !== 'enz') return;
-    const subs = subXs[n.id];
-    const prods = prodXs[n.id];
-    flips[n.id] = !!subs && !!prods && avg(subs) > avg(prods);
+    if (n.type === 'reac' || n.type === 'enz') {
+      const subs = subXs[n.id];
+      const prods = prodXs[n.id];
+      flips[n.id] = !!subs && !!prods && avg(subs) > avg(prods);
+    } else if (n.type === 'pool') {
+      const asSub = poolSubXs[n.id];
+      const asProd = poolProdXs[n.id];
+      // A pool need not have both roles (e.g. a pure end-product has no
+      // substrate role at all) -- when only one is present, compare it
+      // against the pool's own position instead of requiring both.
+      if (!asSub && !asProd) {
+        flips[n.id] = false;
+      } else {
+        const relSub = asSub ? avg(asSub) - poolX[n.id] : 0;
+        const relProd = asProd ? avg(asProd) - poolX[n.id] : 0;
+        flips[n.id] = relSub - relProd < 0;
+      }
+    }
   });
   return flips;
 }
 
 function toFlowGraph(graph, scale) {
   const flips = computeInitialFlips(graph);
-  const nodes = graph.nodes.map((n) => ({
-    id: n.id,
-    type: n.type,
-    position: { x: n.x * scale, y: -n.y * scale },
-    data: { ...n, flipped: flips[n.id] ?? false },
-  }));
+  let poolIndex = 0;
+  const nodes = graph.nodes.map((n) => {
+    const color = n.type === 'pool' ? RAINBOW_16[poolIndex++ % 16] : n.color;
+    return {
+      id: n.id,
+      type: n.type,
+      position: { x: n.x * scale, y: -n.y * scale },
+      data: { ...n, color, flipped: flips[n.id] ?? false, plotWindow: null },
+    };
+  });
   const edges = graph.edges.map((e, i) => toEdge(e.from, e.to, e.type, i));
   return { nodes, edges };
 }
@@ -163,6 +206,10 @@ export default function App() {
   // incremental edits (drag, single add) -- so a drag or single new node
   // never rescales/shifts everything else already laid out.
   const [scale, setScale] = useState(DEFAULT_SCALE);
+  // Bumped on every full graph load (not incremental edits) so MainDisplay
+  // knows to re-fit the viewport to the new node set -- React Flow's own
+  // `fitView` prop only ever runs once, on initial mount.
+  const [loadGeneration, setLoadGeneration] = useState(0);
 
   const handleGraphResult = useCallback((graph) => {
     if (graph.error) {
@@ -174,6 +221,7 @@ export default function App() {
     setFlowGraph(toFlowGraph(graph, newScale));
     setSelectedNodeId(null);
     setStatus(`loaded ${graph.nodes.length} nodes, ${graph.edges.length} edges`);
+    setLoadGeneration((g) => g + 1);
   }, []);
 
   const loadFile = useCallback(
@@ -216,7 +264,58 @@ export default function App() {
     setFlowGraph((g) => ({ ...g, nodes: applyNodeChanges(changes, g.nodes) }));
   }, []);
 
+  // A node dragged onto the palette's trash icon is deleted instead of
+  // repositioned -- the trash icon lives outside the React Flow canvas
+  // (in EntityPalette), so this is a plain DOM hit-test against its
+  // rect rather than anything React Flow's own drop handling knows about.
+  const isOverTrash = (event) => {
+    const trash = document.getElementById('kkit-trash-target');
+    if (!trash) return false;
+    const rect = trash.getBoundingClientRect();
+    return (
+      event.clientX >= rect.left &&
+      event.clientX <= rect.right &&
+      event.clientY >= rect.top &&
+      event.clientY <= rect.bottom
+    );
+  };
+
+  // refreshGraph is only defined further down (it's the shared "re-fetch
+  // and rebuild the whole flow graph" helper also used after other
+  // structural edits), but onNodeDragStop's callback only ever *runs* at
+  // drag-event time, long after the component has finished this render --
+  // so reading it via a ref (populated once refreshGraph is actually
+  // declared, below) avoids a temporal-dead-zone reference without having
+  // to relocate that whole block earlier in the file.
+  const refreshGraphRef = useRef(null);
+
   const onNodeDragStop = useCallback((event, node) => {
+    if (isOverTrash(event)) {
+      if (node.data.isEnzComplex) {
+        setStatus("an enzyme's complex pool can't be deleted on its own -- delete the enzyme instead");
+        return;
+      }
+      // A pool can have enzyme (and complex-pool) children that MOOSE
+      // cascades onto when it's deleted -- a full graph re-fetch (rather
+      // than just filtering this one id out of local state) is what keeps
+      // those removed on screen too.
+      fetch(`${API_BASE}/api/delete_node`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: node.id }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.error) {
+            setStatus(`error: ${res.error}`);
+            return;
+          }
+          setSelectedNodeId((sel) => (sel === node.id ? null : sel));
+          refreshGraphRef.current?.();
+        })
+        .catch((err) => setStatus(`error: ${err}`));
+      return;
+    }
     const x = node.position.x / scale;
     const y = -node.position.y / scale;
     fetch(`${API_BASE}/api/update_position`, {
@@ -372,6 +471,11 @@ export default function App() {
   // Scale IS recomputed here, same as on load -- the node set just changed,
   // so re-fitting the spacing to whatever remains is the point, unlike drag
   // or single-add which intentionally keep the current scale untouched.
+  // Deliberately does NOT recompute scale (unlike the initial load/reset
+  // path) -- this runs after incremental structural edits (delete, enzyme
+  // creation), and rescaling would shift every other node's pixel position
+  // out from under the user mid-edit, which reads as the view jumping
+  // around for no reason. Keeps the current scale, same as drag/single-add.
   const refreshGraph = useCallback(() => {
     fetch(`${API_BASE}/api/graph`)
       .then((r) => r.json())
@@ -380,107 +484,213 @@ export default function App() {
           setStatus(`error: ${graph.error}`);
           return;
         }
-        const newScale = computeAutoScale(graph);
-        setScale(newScale);
         setFlowGraph((g) => {
           const existingFlipped = {};
+          const existingColor = {};
+          const existingPlotWindow = {};
           g.nodes.forEach((n) => {
             existingFlipped[n.id] = n.data.flipped;
+            if (n.type === 'pool') {
+              existingColor[n.id] = n.data.color;
+              existingPlotWindow[n.id] = n.data.plotWindow;
+            }
           });
           const freshFlips = computeInitialFlips(graph);
-          const nodes = graph.nodes.map((n) => ({
-            id: n.id,
-            type: n.type,
-            position: { x: n.x * newScale, y: -n.y * newScale },
-            data: { ...n, flipped: existingFlipped[n.id] ?? freshFlips[n.id] ?? false },
-          }));
+          let nextPoolIndex = Object.keys(existingColor).length;
+          const nodes = graph.nodes.map((n) => {
+            const color =
+              n.type === 'pool' ? existingColor[n.id] ?? RAINBOW_16[nextPoolIndex++ % 16] : n.color;
+            return {
+              id: n.id,
+              type: n.type,
+              position: { x: n.x * scale, y: -n.y * scale },
+              data: {
+                ...n,
+                color,
+                flipped: existingFlipped[n.id] ?? freshFlips[n.id] ?? false,
+                plotWindow: existingPlotWindow[n.id] ?? null,
+              },
+            };
+          });
           const edges = graph.edges.map((e, i) => toEdge(e.from, e.to, e.type, i));
           return { nodes, edges };
         });
       })
       .catch((err) => setStatus(`error: ${err}`));
-  }, []);
+  }, [scale]);
+  refreshGraphRef.current = refreshGraph;
 
   const addNodeToGraph = useCallback((nodeData) => {
-    setFlowGraph((g) => ({
-      ...g,
-      nodes: [
-        ...g.nodes,
-        {
-          id: nodeData.id,
-          type: nodeData.type,
-          position: { x: nodeData.x * scale, y: -nodeData.y * scale },
-          data: { ...nodeData, flipped: false },
-        },
-      ],
-    }));
+    setFlowGraph((g) => {
+      const color =
+        nodeData.type === 'pool'
+          ? RAINBOW_16[g.nodes.filter((n) => n.type === 'pool').length % 16]
+          : nodeData.color;
+      return {
+        ...g,
+        nodes: [
+          ...g.nodes,
+          {
+            id: nodeData.id,
+            type: nodeData.type,
+            position: { x: nodeData.x * scale, y: -nodeData.y * scale },
+            data: { ...nodeData, color, flipped: false, plotWindow: null },
+          },
+        ],
+      };
+    });
     setSelectedNodeId(nodeData.id);
     setActiveMenu('Properties');
   }, [scale]);
 
+  // `flipped` is frontend-only (see onSaveNode), so it applies immediately
+  // on toggle rather than waiting for the properties panel's Save button --
+  // there's no backend round-trip for it to wait on.
+  const onToggleFlip = useCallback((nodeId, flipped) => {
+    setFlowGraph((g) => ({
+      ...g,
+      nodes: g.nodes.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, flipped } } : n)),
+    }));
+  }, []);
+
   const creationCounter = useRef(0);
 
-  const handleAddPool = useCallback(() => {
-    const n = ++creationCounter.current;
-    fetch(`${API_BASE}/api/create_pool`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: `pool${n}`, x: n * 1.5, y: -2 }),
-    })
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.error) {
-          setStatus(`error: ${res.error}`);
-          return;
-        }
-        addNodeToGraph(res);
+  // x/y default to a spread-out placeholder spot (the old click-to-add
+  // behavior) when not given -- drag-and-drop passes the actual drop
+  // position instead.
+  const handleAddPool = useCallback(
+    (x, y) => {
+      const n = ++creationCounter.current;
+      fetch(`${API_BASE}/api/create_pool`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: `pool${n}`, x: x ?? n * 1.5, y: y ?? -2 }),
       })
-      .catch((err) => setStatus(`error: ${err}`));
-  }, [addNodeToGraph]);
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.error) {
+            setStatus(`error: ${res.error}`);
+            return;
+          }
+          addNodeToGraph(res);
+        })
+        .catch((err) => setStatus(`error: ${err}`));
+    },
+    [addNodeToGraph]
+  );
 
-  const handleAddReac = useCallback(() => {
-    const n = ++creationCounter.current;
-    fetch(`${API_BASE}/api/create_reac`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: `reac${n}`, x: n * 1.5, y: -3 }),
-    })
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.error) {
-          setStatus(`error: ${res.error}`);
-          return;
-        }
-        addNodeToGraph(res);
+  const handleAddReac = useCallback(
+    (x, y) => {
+      const n = ++creationCounter.current;
+      fetch(`${API_BASE}/api/create_reac`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: `reac${n}`, x: x ?? n * 1.5, y: y ?? -3 }),
       })
-      .catch((err) => setStatus(`error: ${err}`));
-  }, [addNodeToGraph]);
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.error) {
+            setStatus(`error: ${res.error}`);
+            return;
+          }
+          addNodeToGraph(res);
+        })
+        .catch((err) => setStatus(`error: ${err}`));
+    },
+    [addNodeToGraph]
+  );
+
+  // Shared by the click-to-add flow (parent = whatever's selected) and the
+  // drag-and-drop flow (parent = whatever pool the enzyme icon landed on).
+  // Position is always computed from the parent pool -- two pool-heights
+  // directly above it -- rather than from wherever the icon was actually
+  // dropped, so the result is consistent regardless of exactly where on the
+  // pool you land.
+  const createEnzOnPool = useCallback(
+    (poolNode) => {
+      const n = ++creationCounter.current;
+      const x = poolNode.data.x;
+      const y = poolNode.data.y + (2 * POOL_HEIGHT_PX) / scale;
+      fetch(`${API_BASE}/api/create_enz`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parentPoolId: poolNode.id, name: `enz${n}`, x, y }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.error) {
+            setStatus(`error: ${res.error}`);
+            return;
+          }
+          refreshGraph();
+          setSelectedNodeId(res.id);
+          setActiveMenu('Properties');
+        })
+        .catch((err) => setStatus(`error: ${err}`));
+    },
+    [refreshGraph, scale]
+  );
 
   const handleAddEnz = useCallback(() => {
     if (!selectedNode || selectedNode.type !== 'pool') {
       setStatus('select a pool first to attach an enzyme to it');
       return;
     }
-    const n = ++creationCounter.current;
-    const x = selectedNode.data.x + 0.5;
-    const y = selectedNode.data.y - 1;
-    fetch(`${API_BASE}/api/create_enz`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ parentPoolId: selectedNode.id, name: `enz${n}`, x, y }),
-    })
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.error) {
-          setStatus(`error: ${res.error}`);
+    createEnzOnPool(selectedNode);
+  }, [selectedNode, createEnzOnPool]);
+
+  // Drop target for the Add menu's drag-and-drop icons -- position arrives
+  // in on-screen flow-pixel space (from React Flow's screenToFlowPosition),
+  // so it's converted back to kkit layout units the same way toFlowGraph's
+  // own transform is inverted (x/scale, and y negated back).
+  const handleCanvasDrop = useCallback(
+    (type, flowPosition, hitNodeId) => {
+      const kx = flowPosition.x / scale;
+      const ky = -flowPosition.y / scale;
+      if (type === 'pool') {
+        handleAddPool(kx, ky);
+      } else if (type === 'reac') {
+        handleAddReac(kx, ky);
+      } else if (type === 'enz') {
+        const hitNode = flowGraph.nodes.find((n) => n.id === hitNodeId);
+        if (!hitNode || hitNode.type !== 'pool') {
+          setStatus('drop the enzyme icon onto an existing pool');
           return;
         }
-        refreshGraph();
-        setSelectedNodeId(res.id);
-        setActiveMenu('Properties');
-      })
-      .catch((err) => setStatus(`error: ${err}`));
-  }, [selectedNode, refreshGraph]);
+        createEnzOnPool(hitNode);
+      } else if (type === 'plot1' || type === 'plot2') {
+        const window = type === 'plot1' ? 1 : 2;
+        const hitNode = flowGraph.nodes.find((n) => n.id === hitNodeId);
+        if (!hitNode || hitNode.type !== 'pool') {
+          setStatus('drop the plot icon onto a pool to plot it');
+          return;
+        }
+        // Purely a frontend marker (like flipped/color) -- toggled so
+        // dropping the same window's icon on an already-assigned pool
+        // un-plots it; dropping the other window's icon reassigns it.
+        setFlowGraph((g) => ({
+          ...g,
+          nodes: g.nodes.map((n) =>
+            n.id === hitNode.id
+              ? { ...n, data: { ...n.data, plotWindow: n.data.plotWindow === window ? null : window } }
+              : n
+          ),
+        }));
+      }
+    },
+    [scale, flowGraph.nodes, handleAddPool, handleAddReac, createEnzOnPool]
+  );
+
+  // Un-plotting by dragging the on-canvas plot badge to the trash icon --
+  // that badge is a plain DOM element (not a React Flow node, see
+  // nodes.jsx's PoolNode), so it uses native HTML5 drag-and-drop rather
+  // than React Flow's own onNodeDragStop hit-test.
+  const handleUnplot = useCallback((poolId) => {
+    setFlowGraph((g) => ({
+      ...g,
+      nodes: g.nodes.map((n) => (n.id === poolId ? { ...n, data: { ...n.data, plotWindow: null } } : n)),
+    }));
+  }, []);
 
   const handleDeleteSelected = useCallback(() => {
     if (!selectedNodeId) return;
@@ -543,10 +753,13 @@ export default function App() {
       activeMenu={activeMenu}
       setActiveMenu={setActiveMenu}
       status={status}
-      loadFile={loadFile}
       onGraphLoaded={handleGraphResult}
       selectedNode={selectedNode}
       onSaveNode={onSaveNode}
+      onToggleFlip={onToggleFlip}
+      loadGeneration={loadGeneration}
+      onCanvasDrop={handleCanvasDrop}
+      onUnplot={handleUnplot}
       onAddPool={handleAddPool}
       onAddReac={handleAddReac}
       onAddEnz={handleAddEnz}

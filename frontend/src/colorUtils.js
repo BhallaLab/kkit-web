@@ -1,3 +1,15 @@
+// 16 evenly-spaced hues (360/16 = 22.5 degrees apart) -- shared between the
+// auto-assignment of molecule colors on load (App.jsx) and the colorbar
+// swatches in the properties panel, so what you click there is exactly
+// what a freshly-loaded model's molecules are colored with.
+export const RAINBOW_16 = Array.from({ length: 16 }, (_, i) => `hsl(${i * 22.5}, 70%, 50%)`);
+
+// Accent colors distinguishing the two Plots-tab windows -- used by the
+// palette's two plot icons and by the matching on-canvas badge, independent
+// of a molecule's own (rainbow) color, which the actual plotted trace still
+// uses.
+export const PLOT_WINDOW_COLORS = { 1: '#1a73e8', 2: '#e91e63' };
+
 let _canvas;
 
 // Resolves ANY valid CSS color string (named color, hex, rgb(), etc.) via

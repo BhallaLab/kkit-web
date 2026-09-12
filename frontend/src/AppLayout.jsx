@@ -11,19 +11,19 @@ import MainDisplay from './components/MainDisplay';
 
 const MENU_ITEMS = [
   { key: 'File', label: 'File', Icon: FolderIcon },
-  { key: 'Add', label: 'Add', Icon: AddCircleIcon },
-  { key: 'Properties', label: 'Properties', Icon: TuneIcon },
   { key: 'Run', label: 'Run', Icon: PlayCircleIcon },
+  { key: 'Properties', label: 'Properties', Icon: TuneIcon },
+  { key: 'Add', label: 'Add', Icon: AddCircleIcon },
 ];
 
 export default function AppLayout({
   activeMenu,
   setActiveMenu,
   status,
-  loadFile,
   onGraphLoaded,
   selectedNode,
   onSaveNode,
+  onToggleFlip,
   onAddPool,
   onAddReac,
   onAddEnz,
@@ -37,17 +37,11 @@ export default function AppLayout({
   ...canvasProps
 }) {
   const menuComponents = {
-    File: <FileMenuBox onLoadGFile={loadFile} onGraphLoaded={onGraphLoaded} status={status} />,
-    Add: (
-      <AddMenuBox
-        onAddPool={onAddPool}
-        onAddReac={onAddReac}
-        onAddEnz={onAddEnz}
-        onDeleteSelected={onDeleteSelected}
-        selectedNode={selectedNode}
-      />
+    File: <FileMenuBox onGraphLoaded={onGraphLoaded} status={status} />,
+    Add: <AddMenuBox onDeleteSelected={onDeleteSelected} selectedNode={selectedNode} />,
+    Properties: (
+      <PropertiesMenuBox node={selectedNode} onSave={onSaveNode} onToggleFlip={onToggleFlip} />
     ),
-    Properties: <PropertiesMenuBox node={selectedNode} onSave={onSaveNode} />,
     Run: (
       <RunMenuBox
         onStart={onStartRun}
@@ -79,7 +73,14 @@ export default function AppLayout({
       <Box sx={{ display: 'flex', flexGrow: 1, p: 2, gap: 2, minHeight: 0 }}>
         <Box sx={{ width: '33%', height: '100%' }}>{menuComponents[activeMenu]}</Box>
         <Box sx={{ width: '67%', height: '100%' }}>
-          <MainDisplay {...canvasProps} plotData={plotData} />
+          <MainDisplay
+            {...canvasProps}
+            plotData={plotData}
+            selectedNode={selectedNode}
+            onAddPool={onAddPool}
+            onAddReac={onAddReac}
+            onAddEnz={onAddEnz}
+          />
         </Box>
       </Box>
     </Box>

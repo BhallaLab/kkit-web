@@ -1,13 +1,35 @@
+import html
 import itertools
 import os
+import re
 import tempfile
 
+import libsbml
 import moose
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
-from moose_graph import build_graph, describe_pool, describe_reac, describe_enz, create_info
+from moose_graph import build_graph, describe_pool, describe_reac, describe_enz, create_info, is_enz_complex
 from sim_runner import run_simulation
+
+_NOTES_BODY_RE = re.compile(r"<body[^>]*>\s*<p>(.*?)</p>\s*</body>", re.DOTALL)
+
+
+def _wrap_notes(text):
+    """Plain text -> a valid SBML <notes> element (an XHTML fragment, as the
+    spec requires) attached to the model, so free-text notes ride along with
+    the model inside the same .xml file rather than needing a side channel."""
+    escaped = html.escape(text).replace("\n", "<br/>")
+    return f'<notes><body xmlns="http://www.w3.org/1999/xhtml"><p>{escaped}</p></body></notes>'
+
+
+def _unwrap_notes(notes_xml):
+    if not notes_xml:
+        return ""
+    m = _NOTES_BODY_RE.search(notes_xml)
+    if not m:
+        return ""
+    return html.unescape(m.group(1).replace("<br/>", "\n"))
 
 app = Flask(__name__)
 CORS(app)
@@ -40,6 +62,23 @@ def load_gfile():
         return jsonify({"error": f"file not found: {path}"}), 400
     model_path = _new_model_path()
     moose.loadModel(path, model_path, "ee")
+    return jsonify(build_graph(model_path))
+
+
+@app.post("/api/upload_gfile")
+def upload_gfile():
+    """Load a legacy kkit .g file from raw text content (the file-picker
+    upload path), mirroring /api/load_sbml's temp-file pattern -- moose.loadModel
+    needs an actual filesystem path, so the uploaded content is staged to one."""
+    content = request.json.get("content")
+    if not content:
+        return jsonify({"error": "no file content provided"}), 400
+    fd, path = tempfile.mkstemp(suffix=".g")
+    with os.fdopen(fd, "w") as f:
+        f.write(content)
+    model_path = _new_model_path()
+    moose.loadModel(path, model_path, "ee")
+    os.remove(path)
     return jsonify(build_graph(model_path))
 
 
@@ -266,6 +305,8 @@ def delete_node():
         return jsonify({"error": "invalid or stale node id"}), 400
     if not moose.exists(node_id):
         return jsonify({"error": f"node not found: {node_id}"}), 404
+    if is_enz_complex(node_id):
+        return jsonify({"error": "an enzyme's complex pool can't be deleted on its own -- delete the enzyme instead"}), 400
     moose.delete(node_id)
     return jsonify({"ok": True})
 
@@ -301,12 +342,17 @@ def run_reset():
 def save_sbml():
     if _current_model_path is None or not moose.exists(_current_model_path):
         return jsonify({"error": "no model loaded"}), 400
+    notes = (request.json or {}).get("notes", "") if request.is_json else ""
     fd, path = tempfile.mkstemp(suffix=".xml")
     os.close(fd)
     moose.writeSBML(_current_model_path, path)
     with open(path) as f:
         content = f.read()
     os.remove(path)
+    if notes:
+        doc = libsbml.readSBMLFromString(content)
+        doc.getModel().setNotes(_wrap_notes(notes))
+        content = libsbml.writeSBMLToString(doc)
     return jsonify({"sbml": content})
 
 
@@ -315,13 +361,20 @@ def load_sbml():
     content = request.json.get("sbml")
     if not content:
         return jsonify({"error": "no sbml content provided"}), 400
+    notes = ""
+    doc = libsbml.readSBMLFromString(content)
+    model = doc.getModel()
+    if model is not None:
+        notes = _unwrap_notes(model.getNotesString())
     fd, path = tempfile.mkstemp(suffix=".xml")
     with os.fdopen(fd, "w") as f:
         f.write(content)
     model_path = _new_model_path()
     moose.readSBML(path, model_path)
     os.remove(path)
-    return jsonify(build_graph(model_path))
+    result = build_graph(model_path)
+    result["notes"] = notes
+    return jsonify(result)
 
 
 if __name__ == "__main__":

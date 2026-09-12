@@ -42,6 +42,18 @@ def _node(elem, node_type, extra=None):
     return node
 
 
+def is_enz_complex(path):
+    """The hidden "cplx" pool an explicit-complex enzyme owns (created
+    alongside it in create_enz, or already present in a loaded .g/SBML file)
+    is structurally nested directly under its parent Enz element -- that
+    nesting, not the name, is the reliable signal (verified directly: an
+    Enz's own cplx pool's .parent.className is "Enz"; a plain pool's parent
+    is a Neutral/compartment)."""
+    p = moose.element(path)
+    parent = p.parent
+    return parent is not None and "Enz" in parent.className
+
+
 def describe_pool(path):
     p = moose.element(path)
     return _node(p, "pool", {
@@ -53,6 +65,7 @@ def describe_pool(path):
         "motorConst": p.motorConst,
         "volume": p.volume,
         "isBuffered": p.isBuffered,
+        "isEnzComplex": is_enz_complex(path),
     })
 
 

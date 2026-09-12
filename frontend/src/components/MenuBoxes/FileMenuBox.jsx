@@ -3,11 +3,36 @@ import { Box, Typography, TextField, Button, Stack, Divider, Alert } from '@mui/
 
 const API_BASE = `http://${window.location.hostname}:5001`;
 
-export default function FileMenuBox({ onLoadGFile, onGraphLoaded, status }) {
-  const [path, setPath] = useState('/home/bhalla/homework/KKIT/kkit11/examples/feedback.g');
+export default function FileMenuBox({ onGraphLoaded, status }) {
+  const [modelNotes, setModelNotes] = useState('');
+
+  const handleLoadGFile = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      fetch(`${API_BASE}/api/upload_gfile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: reader.result }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          // Legacy .g files carry no model-level notes field.
+          setModelNotes('');
+          onGraphLoaded(res);
+        });
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  };
 
   const handleSaveSbml = () => {
-    fetch(`${API_BASE}/api/save_sbml`, { method: 'POST' })
+    fetch(`${API_BASE}/api/save_sbml`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes: modelNotes }),
+    })
       .then((r) => r.json())
       .then((res) => {
         if (res.error) return;
@@ -32,26 +57,45 @@ export default function FileMenuBox({ onLoadGFile, onGraphLoaded, status }) {
         body: JSON.stringify({ sbml: reader.result }),
       })
         .then((r) => r.json())
-        .then(onGraphLoaded);
+        .then((res) => {
+          setModelNotes(res.notes || '');
+          onGraphLoaded(res);
+        });
     };
     reader.readAsText(file);
     event.target.value = '';
   };
 
+  const handleNew = () => {
+    window.open(window.location.href, '_blank').focus();
+  };
+
+  const handleQuit = () => {
+    window.close();
+    // If this tab wasn't opened by JavaScript, close() is silently blocked
+    // by the browser -- the timeout only fires if the window is still open.
+    setTimeout(() => {
+      alert('Please close this tab manually (Ctrl+W or Cmd+W).');
+    }, 500);
+  };
+
   return (
-    <Box sx={{ p: 2, background: '#f5f5f5', borderRadius: 2, height: '100%' }}>
+    <Box sx={{ p: 2, background: '#f5f5f5', borderRadius: 2, height: '100%', overflowY: 'auto' }}>
+      <Stack spacing={1.5}>
+        <Button variant="contained" onClick={handleNew}>
+          New window
+        </Button>
+      </Stack>
+
+      <Divider sx={{ my: 2 }} />
+
       <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1 }}>
         Legacy kkit (.g) file
       </Typography>
       <Stack spacing={1.5}>
-        <TextField
-          label="Server-side path"
-          size="small"
-          value={path}
-          onChange={(e) => setPath(e.target.value)}
-        />
-        <Button variant="contained" onClick={() => onLoadGFile(path)}>
+        <Button variant="contained" component="label">
           Load .g file
+          <input type="file" accept=".g" hidden onChange={handleLoadGFile} />
         </Button>
       </Stack>
 
@@ -67,6 +111,23 @@ export default function FileMenuBox({ onLoadGFile, onGraphLoaded, status }) {
         <Button variant="outlined" component="label">
           Load SBML file
           <input type="file" accept=".xml,.sbml" hidden onChange={handleLoadSbmlFile} />
+        </Button>
+        <TextField
+          label="Model notes"
+          size="small"
+          multiline
+          minRows={3}
+          value={modelNotes}
+          onChange={(e) => setModelNotes(e.target.value)}
+          helperText="Saved into the SBML file's model notes; loaded back from any SBML file that has them."
+        />
+      </Stack>
+
+      <Divider sx={{ my: 2 }} />
+
+      <Stack spacing={1.5}>
+        <Button variant="contained" color="error" onClick={handleQuit}>
+          Quit
         </Button>
       </Stack>
 

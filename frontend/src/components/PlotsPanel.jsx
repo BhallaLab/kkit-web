@@ -1,32 +1,11 @@
 import Plot from 'react-plotly.js';
 import { Box, Typography } from '@mui/material';
 
-export default function PlotsPanel({ plotData, nodes }) {
-  if (!plotData) {
-    return (
-      <Box sx={{ p: 2 }}>
-        <Typography color="text.secondary">
-          Run a simulation (see the Run panel) to see concentration traces here.
-        </Typography>
-      </Box>
-    );
-  }
-
-  const nameById = {};
-  nodes.forEach((n) => {
-    nameById[n.id] = n.data.name;
-  });
-
-  const traces = Object.entries(plotData.series).map(([poolId, values]) => ({
-    x: plotData.time,
-    y: values,
-    type: 'scatter',
-    mode: 'lines',
-    name: nameById[poolId] || poolId,
-  }));
-
+// Plotly's legend already toggles a trace's visibility on click (its
+// default itemclick behavior) -- no extra wiring needed for that.
+function PlotWindow({ traces, style }) {
   return (
-    <Box sx={{ height: '100%', width: '100%' }}>
+    <Box sx={{ height: '100%', width: '100%', ...style }}>
       <Plot
         data={traces}
         layout={{
@@ -40,6 +19,62 @@ export default function PlotsPanel({ plotData, nodes }) {
         useResizeHandler
         config={{ responsive: true }}
       />
+    </Box>
+  );
+}
+
+export default function PlotsPanel({ plotData, nodes }) {
+  if (!plotData) {
+    return (
+      <Box sx={{ p: 2 }}>
+        <Typography color="text.secondary">
+          Run a simulation (see the Run panel) to see concentration traces here.
+        </Typography>
+      </Box>
+    );
+  }
+
+  const nameById = {};
+  const colorById = {};
+  const windowById = {};
+  nodes.forEach((n) => {
+    nameById[n.id] = n.data.name;
+    colorById[n.id] = n.data.color;
+    if (n.type === 'pool' && n.data.plotWindow) windowById[n.id] = n.data.plotWindow;
+  });
+
+  const toTrace = ([poolId, values]) => ({
+    x: plotData.time,
+    y: values,
+    type: 'scatter',
+    mode: 'lines',
+    name: nameById[poolId] || poolId,
+    line: { color: colorById[poolId] },
+  });
+
+  const entries = Object.entries(plotData.series).filter(([poolId]) => windowById[poolId]);
+  const traces1 = entries.filter(([poolId]) => windowById[poolId] === 1).map(toTrace);
+  const traces2 = entries.filter(([poolId]) => windowById[poolId] === 2).map(toTrace);
+
+  if (traces1.length === 0 && traces2.length === 0) {
+    return (
+      <Box sx={{ p: 2 }}>
+        <Typography color="text.secondary">
+          No molecules are marked for plotting yet. Drag one of the two plot
+          icons (above the reaction layout) onto a molecule to plot it.
+        </Typography>
+      </Box>
+    );
+  }
+
+  // Only one window in use -> it takes the full display; both in use ->
+  // side by side, so an empty second window is never shown.
+  const showBoth = traces1.length > 0 && traces2.length > 0;
+
+  return (
+    <Box sx={{ height: '100%', width: '100%', display: 'flex' }}>
+      {traces1.length > 0 && <PlotWindow traces={traces1} style={{ width: showBoth ? '50%' : '100%' }} />}
+      {traces2.length > 0 && <PlotWindow traces={traces2} style={{ width: showBoth ? '50%' : '100%' }} />}
     </Box>
   );
 }
