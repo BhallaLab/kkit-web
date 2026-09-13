@@ -1,8 +1,26 @@
-import { useContext } from 'react';
-import { Handle, NodeResizer, Position } from '@xyflow/react';
+import { useContext, useEffect } from 'react';
+import { Handle, NodeResizer, Position, useUpdateNodeInternals } from '@xyflow/react';
 import { getContrastTextColor, PLOT_WINDOW_COLORS } from './colorUtils';
 import PlotSquiggleIcon from './PlotSquiggleIcon';
 import { NodeActionsContext } from './NodeActionsContext';
+
+// Flipping swaps which side of the node a handle renders on (see
+// SubstrateHandle/ProductHandle/ChanInHandle/ChanOutHandle below) without
+// changing the node's own overall box -- React Flow only re-measures a
+// handle's actual screen position via its own internal ResizeObserver,
+// which fires on a *size* change, not a handle moving to the opposite
+// edge within the same-size box. Left alone, an edge keeps rendering from
+// the handle's old (pre-flip) position until something else forces a
+// remeasure -- this is exactly what useUpdateNodeInternals is for
+// (verified against its own doc comment: "When you... update a node's
+// handle position, you need to let React Flow know about it using this
+// hook"), called here whenever a node's own flipped flag changes.
+function useFlipRemeasure(id, flipped) {
+  const updateNodeInternals = useUpdateNodeInternals();
+  useEffect(() => {
+    updateNodeInternals(id);
+  }, [id, flipped, updateNodeInternals]);
+}
 
 const baseStyle = {
   padding: '4px 10px',
@@ -129,6 +147,7 @@ function ProductHandle({ flipped }) {
 
 export function PoolNode({ id, data, selected }) {
   const flipped = !!data.flipped;
+  useFlipRemeasure(id, flipped);
   const style = data.isEnzComplex ? complexPoolStyle : baseStyle;
 
   const handleBadgeDragStart = (event) => {
@@ -182,8 +201,9 @@ export function PoolNode({ id, data, selected }) {
   );
 }
 
-export function ReacNode({ data, selected }) {
+export function ReacNode({ id, data, selected }) {
   const flipped = !!data.flipped;
+  useFlipRemeasure(id, flipped);
   return (
     <div
       style={{
@@ -213,8 +233,9 @@ export function ReacNode({ data, selected }) {
 export const ENZ_CLIP_PATH_RIGHT = 'polygon(0% 25%, 65% 25%, 65% 0%, 100% 50%, 65% 100%, 65% 75%, 0% 75%)';
 const ENZ_CLIP_PATH_LEFT = 'polygon(100% 25%, 35% 25%, 35% 0%, 0% 50%, 35% 100%, 35% 75%, 100% 75%)';
 
-export function EnzNode({ data, selected }) {
+export function EnzNode({ id, data, selected }) {
   const flipped = !!data.flipped;
+  useFlipRemeasure(id, flipped);
   return (
     // The clip-path lives on an inner decorative layer, not this outer
     // container -- otherwise it would also clip away the substrate/product
@@ -282,8 +303,9 @@ function ChanOutHandle({ flipped }) {
   return <ArrowHandle type="source" id="chanOut" side={flipped ? 'left' : 'right'} pointsRight={!flipped} />;
 }
 
-export function ConcChanNode({ data, selected }) {
+export function ConcChanNode({ id, data, selected }) {
   const flipped = !!data.flipped;
+  useFlipRemeasure(id, flipped);
   const { width, height } = CONC_CHAN_SIZE;
   const capRx = 10;
   const railY = 6;

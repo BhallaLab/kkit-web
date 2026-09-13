@@ -137,6 +137,15 @@ export default function PropertiesMenuBox({ node, onSave, onToggleFlip }) {
             size="small"
             value={fields.name}
             onChange={(e) => setField('name', e.target.value)}
+            // Commits (and so shows up on the canvas) as soon as the field
+            // is left, not per keystroke -- a rename changes the object's
+            // underlying MOOSE path, so firing it on every keystroke would
+            // mean constantly re-pathing it (and every edge/id referencing
+            // it) mid-type. Skipped entirely if nothing actually changed
+            // (e.g. just tabbing through without editing).
+            onBlur={() => {
+              if (fields.name && fields.name !== node.data.name) onSave(node.id, { name: fields.name });
+            }}
           />
         </Grid>
 
@@ -224,7 +233,15 @@ export default function PropertiesMenuBox({ node, onSave, onToggleFlip }) {
             {RAINBOW_16.map((c) => (
               <Box
                 key={c}
-                onClick={() => setField('color', c)}
+                onClick={() => {
+                  // Applies immediately (like flip), rather than waiting
+                  // for the Save button -- a color pick is a single
+                  // discrete action, not something typed incrementally, so
+                  // there's no keystroke-storm concern the way a live
+                  // rename would have.
+                  setField('color', c);
+                  onSave(node.id, { color: c });
+                }}
                 sx={{
                   width: 24,
                   height: 24,

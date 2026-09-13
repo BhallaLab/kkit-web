@@ -777,12 +777,16 @@ export default function App() {
 
   const onSaveNode = useCallback(
     (nodeId, fields) => {
+      const node = flowGraph.nodes.find((n) => n.id === nodeId);
       // `flipped` is frontend-only (not tracked by the backend/MOOSE), so
       // it's stripped before the request and reattached from what was
       // submitted -- otherwise the backend's response (which doesn't know
-      // about it) would wipe it out when merged into node data.
-      const { flipped, ...backendFields } = fields;
-      const node = flowGraph.nodes.find((n) => n.id === nodeId);
+      // about it) would wipe it out when merged into node data. Defaults to
+      // the node's own current value when the caller didn't include it at
+      // all -- true for the live per-field saves (color on click, name on
+      // blur) that don't go through the full Properties form, which would
+      // otherwise blank out an existing flip on every such save.
+      const { flipped = node.data.flipped, ...backendFields } = fields;
       const endpoint = EDITABLE_ENDPOINTS[node.data.type];
       const body = { id: nodeId, fields: backendFields };
       // A Stimulus's Save is gated on a negative-value check run against
