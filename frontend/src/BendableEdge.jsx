@@ -119,6 +119,7 @@ export default function BendableEdge({
   }, [id, selectEdge]);
 
   const edgeStyle = selected ? { ...style, stroke: '#1a73e8', strokeWidth: 3 } : style;
+  const stoich = data?.stoich ?? 1;
 
   return (
     <>
@@ -141,6 +142,28 @@ export default function BendableEdge({
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
         />
+        {/* Stoichiometry > 1 (multiple separate MOOSE messages between the
+            same reac/enz and pool -- see moose_graph.py's build_graph) --
+            offset from the drag handle above so the two don't overlap. */}
+        {stoich > 1 && (
+          <div
+            className="nodrag nopan"
+            style={{
+              position: 'absolute',
+              transform: `translate(-50%, -50%) translate(${via.x + 10}px, ${via.y - 10}px)`,
+              fontSize: 12,
+              fontWeight: 'bold',
+              color: '#333',
+              background: '#fff',
+              border: '1px solid #333',
+              borderRadius: 3,
+              padding: '0 3px',
+              pointerEvents: 'none',
+            }}
+          >
+            {stoich}
+          </div>
+        )}
       </EdgeLabelRenderer>
     </>
   );

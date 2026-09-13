@@ -3,7 +3,7 @@ import { Box, Typography, TextField, Button, Stack, Divider, Alert } from '@mui/
 
 const API_BASE = `http://${window.location.hostname}:5001`;
 
-export default function FileMenuBox({ onGraphLoaded, status }) {
+export default function FileMenuBox({ onGraphLoaded, status, plots }) {
   const [modelNotes, setModelNotes] = useState('');
 
   const handleLoadGFile = (event) => {
@@ -27,23 +27,44 @@ export default function FileMenuBox({ onGraphLoaded, status }) {
     event.target.value = '';
   };
 
-  const handleSaveSbml = () => {
-    fetch(`${API_BASE}/api/save_sbml`, {
+  // A plain <a download> always saves silently to the browser's default
+  // downloads folder as "model.xml" -- window.showSaveFilePicker (where
+  // available; matches jardesigner's own FileMenuBox) gives a real native
+  // save dialog instead, falling back to the download link otherwise.
+  const handleSaveSbml = async () => {
+    const res = await fetch(`${API_BASE}/api/save_sbml`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notes: modelNotes }),
-    })
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.error) return;
-        const blob = new Blob([res.sbml], { type: 'application/xml' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'model.xml';
-        a.click();
-        URL.revokeObjectURL(url);
-      });
+      body: JSON.stringify({ notes: modelNotes, plots }),
+    }).then((r) => r.json());
+    if (res.error) return;
+    const blob = new Blob([res.sbml], { type: 'application/xml' });
+
+    if (window.showSaveFilePicker) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: 'model.xml',
+          types: [{ description: 'SBML file', accept: { 'application/xml': ['.xml'] } }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return;
+      } catch (err) {
+        // User cancelled the picker -- nothing more to do, not a failure.
+        if (err.name === 'AbortError') return;
+        // Any other failure (a browser that defines showSaveFilePicker but
+        // doesn't fully support it, a permissions quirk, etc.) falls
+        // through to the plain download below instead of just giving up.
+        console.error('showSaveFilePicker failed, falling back to plain download:', err);
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'model.xml';
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleLoadSbmlFile = (event) => {

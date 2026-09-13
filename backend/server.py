@@ -9,7 +9,19 @@ import moose
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
-from moose_graph import build_graph, describe_pool, describe_reac, describe_enz, create_info, is_enz_complex
+from moose_graph import (
+    build_graph,
+    describe_pool,
+    describe_reac,
+    describe_enz,
+    describe_group,
+    describe_compartment,
+    create_info,
+    is_enz_complex,
+    container_parent_id,
+    diameter_to_volume,
+    name_path,
+)
 from sim_runner import run_simulation
 
 _NOTES_BODY_RE = re.compile(r"<body[^>]*>\s*<p>(.*?)</p>\s*</body>", re.DOTALL)
@@ -21,6 +33,443 @@ def _wrap_notes(text):
     the model inside the same .xml file rather than needing a side channel."""
     escaped = html.escape(text).replace("\n", "<br/>")
     return f'<notes><body xmlns="http://www.w3.org/1999/xhtml"><p>{escaped}</p></body></notes>'
+
+
+_GROUP_ANNOTATION_FIELD_RE = re.compile(r"<moose:(x|y|width|height|bgColor)>([^<]*)</moose:\1>")
+_GROUP_META_RE = re.compile(
+    r"<moose:Group>([^<]*)</moose:Group>|<moose:Compartment>([^<]*)</moose:Compartment>"
+)
+_ENZYME_REF_RE = re.compile(r"<moose:enzyme>([^<]*)</moose:enzyme>")
+
+_SPECIES_BLOCK_RE = re.compile(r"<species\b[^>]*>.*?</species>", re.DOTALL)
+_REACTION_BLOCK_RE = re.compile(r"<reaction\b[^>]*>.*?</reaction>", re.DOTALL)
+_ID_ATTR_RE = re.compile(r'\bid="([^"]+)"')
+_XCORD_RE = re.compile(r"(<moose:xCord>)[^<]*(</moose:xCord>)")
+_YCORD_RE = re.compile(r"(<moose:yCord>)[^<]*(</moose:yCord>)")
+
+
+class _SbmlNamePaths:
+    """Reconstructs the same (compartment, ...group names..., own name)
+    tuple moose_graph.name_path computes on the live model, but purely from
+    what a plain SBML file (as MOOSE writes it) can express -- so a written
+    or reloaded element can be matched back to its live counterpart without
+    relying on MOOSE's own idValue, which is session-ephemeral (see
+    name_path's docstring: even reloading the same file twice gives
+    different idValues, since it's a global, ever-incrementing counter, not
+    one scoped to a single model). Built once per save/load and reused for
+    every lookup during it."""
+
+    def __init__(self, model):
+        self._model = model
+        self._compartment_name = {
+            c.getId(): (c.getName() or c.getId()) for c in model.getListOfCompartments()
+        }
+        self._group_name = {}
+        self._group_name_to_id = {}
+        self._group_parent_name = {}
+        self._group_compartment_id = {}
+        self._member_group = {}
+        plugin = model.getPlugin("groups")
+        if plugin is not None:
+            for i in range(plugin.getNumGroups()):
+                grp = plugin.getGroup(i)
+                gid = grp.getId()
+                name = grp.getName() or gid
+                self._group_name[gid] = name
+                self._group_name_to_id[name] = gid
+                parent_name = None
+                compt_id = None
+                for m in _GROUP_META_RE.finditer(grp.getAnnotationString() or ""):
+                    if m.group(1) is not None:
+                        parent_name = m.group(1)
+                    elif m.group(2) is not None:
+                        compt_id = m.group(2)
+                self._group_parent_name[gid] = parent_name
+                self._group_compartment_id[gid] = compt_id
+                for member in grp.getListOfMembers():
+                    self._member_group[member.getIdRef()] = gid
+
+    def group_path(self, group_id):
+        name = self._group_name.get(group_id)
+        if name is None:
+            return None
+        parent_name = self._group_parent_name.get(group_id)
+        if parent_name:
+            parent_id = self._group_name_to_id.get(parent_name)
+            parent_path = self.group_path(parent_id) if parent_id else None
+            if parent_path is not None:
+                return parent_path + (name,)
+            return (parent_name, name)
+        compt_id = self._group_compartment_id.get(group_id)
+        return (self._compartment_name.get(compt_id, compt_id), name)
+
+    def _species_name(self, species_id):
+        sp = self._model.getSpecies(species_id)
+        return (sp.getName() or sp.getId()) if sp else species_id
+
+    def species_path(self, species_id):
+        group_id = self._member_group.get(species_id)
+        if group_id is not None:
+            group_path = self.group_path(group_id)
+            if group_path is not None:
+                return group_path + (self._species_name(species_id),)
+        sp = self._model.getSpecies(species_id)
+        compt_name = self._compartment_name.get(sp.getCompartment()) if sp else None
+        return (compt_name, self._species_name(species_id))
+
+    def reaction_path(self, reaction):
+        """`reaction` is a libsbml Reaction object -- covers both a plain
+        kinetic reaction and one stage of an EnzymaticReaction, which SBML
+        can only place via its parent pool's species id (it has no
+        container of its own in kkit, same as a plain reaction). An
+        explicit-complex enzyme's stage(s) carry a moose:enzyme annotation
+        naming that pool directly; a Michaelis-Menten enzyme carries no
+        such tag at all (verified directly) -- its catalyzing pool is
+        instead the reaction's sole SBML modifier species."""
+        name = reaction.getName() or reaction.getId()
+        enz_match = _ENZYME_REF_RE.search(reaction.getAnnotationString() or "")
+        if enz_match:
+            return self.species_path(enz_match.group(1)) + (name,)
+        modifiers = reaction.getListOfModifiers()
+        if modifiers.size() == 1:
+            return self.species_path(modifiers.get(0).getSpecies()) + (name,)
+
+        participant_ids = [
+            ref_list.get(j).getSpecies()
+            for ref_list in (reaction.getListOfReactants(), reaction.getListOfProducts())
+            for j in range(ref_list.size())
+        ]
+        group_id = self._member_group.get(reaction.getId())
+        if group_id is None:
+            # moose's writer doesn't reliably list a plain reaction as a
+            # group member even when it structurally belongs to one
+            # (verified directly against group_epi.g: its pools are listed,
+            # its own "inhib" reaction is not) -- inferred here from
+            # whichever group its own participant species belong to
+            # instead, since a reaction and its substrate/product pools are
+            # always grouped together in kkit.
+            for sid in participant_ids:
+                group_id = self._member_group.get(sid)
+                if group_id is not None:
+                    break
+        if group_id is not None:
+            group_path = self.group_path(group_id)
+            if group_path is not None:
+                return group_path + (name,)
+
+        # Ungrouped (or unresolved), and a plain <reaction> carries no
+        # compartment attribute of its own in SBML -- inferred from a
+        # participant species instead (safe given this app doesn't support
+        # cross-compartment reactions).
+        if participant_ids:
+            sp = self._model.getSpecies(participant_ids[0])
+            compt_name = self._compartment_name.get(sp.getCompartment()) if sp else None
+            return (compt_name, name)
+        return (None, name)
+
+
+def _snapshot_positions(model_path):
+    """moose.writeSBML has a confirmed side effect: for any pool, reaction,
+    or enzyme that's (or, for an enzyme, whose parent pool is) a member of
+    an SBML group, it silently overwrites that element's *live* /info x/y
+    with an internally auto-computed layout position while producing the
+    file -- verified directly for all three kinds (a plain top-level
+    pool/reac's position survives a save untouched; the identical one
+    nested in a group gets its live Annotator corrupted by the save itself,
+    before the file is even looked at again). Snapshotting beforehand,
+    keyed by name_path rather than MOOSE's own idValue (session-ephemeral --
+    see that function's docstring), is what lets save_sbml both restore the
+    live model afterward (so just clicking Save doesn't scramble the
+    running session) and patch the written XML with the true values (see
+    _fix_positions_in_sbml)."""
+    snapshot = {}
+    for isa in ("PoolBase", "Reac", "EnzBase"):
+        for e in moose.wildcardFind(f"{model_path}/##[ISA={isa}]"):
+            e = moose.element(e)
+            if moose.exists(e.path + "/info"):
+                info = moose.element(e.path + "/info")
+                snapshot[name_path(e.path, model_path)] = (e.path, info.x, info.y)
+    return snapshot
+
+
+def _restore_positions(snapshot):
+    for path, x, y in snapshot.values():
+        info = moose.element(path + "/info")
+        info.x = x
+        info.y = y
+
+
+def _fix_positions_in_sbml(content, snapshot):
+    """Patches the xCord/yCord baked into the SBML text for every species
+    and reaction (the latter also covering each stage of an
+    EnzymaticReaction) using the pre-write snapshot (see
+    _snapshot_positions), since moose.writeSBML writes the very same
+    auto-computed value into the file that it corrupts the live model
+    with."""
+    doc = libsbml.readSBMLFromString(content)
+    model = doc.getModel()
+    if model is None:
+        return content
+    paths = _SbmlNamePaths(model)
+
+    def _patch(block, key):
+        if key not in snapshot:
+            return block
+        _, x, y = snapshot[key]
+        block = _XCORD_RE.sub(rf"\g<1>{x}\g<2>", block, count=1)
+        block = _YCORD_RE.sub(rf"\g<1>{y}\g<2>", block, count=1)
+        return block
+
+    def _replace_species(m):
+        sid_match = _ID_ATTR_RE.search(m.group(0))
+        if not sid_match:
+            return m.group(0)
+        return _patch(m.group(0), paths.species_path(sid_match.group(1)))
+
+    content = _SPECIES_BLOCK_RE.sub(_replace_species, content)
+
+    def _replace_reaction(m):
+        rid_match = _ID_ATTR_RE.search(m.group(0))
+        reaction = model.getReaction(rid_match.group(1)) if rid_match else None
+        if reaction is None:
+            return m.group(0)
+        return _patch(m.group(0), paths.reaction_path(reaction))
+
+    return _REACTION_BLOCK_RE.sub(_replace_reaction, content)
+
+
+_LIST_OF_MEMBERS_CLOSE_RE = re.compile(r"</groups:listOfMembers>")
+
+
+def _fix_missing_reaction_group_memberships(content):
+    """moose.writeSBML doesn't reliably list a plain reaction as a member
+    of the group it structurally belongs to (verified directly against
+    group_epi.g: its pools are listed as members, its own "inhib" reaction
+    is not). Without that membership, moose.readSBML has no way to know the
+    reaction belongs there and places it at the model's top level on
+    reload instead -- a real structural loss, not just a missing display
+    position. This adds the missing membership before the file is ever
+    reloaded, inferred the same way _SbmlNamePaths.reaction_path already
+    does: from whichever group the reaction's own participant species
+    belong to."""
+    doc = libsbml.readSBMLFromString(content)
+    model = doc.getModel()
+    if model is None:
+        return content
+    plugin = model.getPlugin("groups")
+    if plugin is None:
+        return content
+    paths = _SbmlNamePaths(model)
+
+    to_add = {}
+    for i in range(model.getNumReactions()):
+        r = model.getReaction(i)
+        rid = r.getId()
+        if rid in paths._member_group:
+            continue
+        # Enzyme stages are placed via their pool (moose:enzyme tag, or the
+        # sole modifier for a Michaelis-Menten stage), not group
+        # membership -- nothing to add for those.
+        if _ENZYME_REF_RE.search(r.getAnnotationString() or ""):
+            continue
+        if r.getListOfModifiers().size() == 1:
+            continue
+        participant_ids = [
+            ref_list.get(j).getSpecies()
+            for ref_list in (r.getListOfReactants(), r.getListOfProducts())
+            for j in range(ref_list.size())
+        ]
+        group_id = next((paths._member_group.get(sid) for sid in participant_ids
+                          if paths._member_group.get(sid) is not None), None)
+        if group_id is not None:
+            to_add.setdefault(group_id, []).append(rid)
+
+    if not to_add:
+        return content
+
+    def _replace_group(m):
+        block = m.group(0)
+        id_match = _GROUPS_ID_ATTR_RE.search(block)
+        rids = to_add.get(id_match.group(1)) if id_match else None
+        if not rids:
+            return block
+        insertion = "".join(f'<groups:member groups:idRef="{rid}"/>' for rid in rids)
+        return _LIST_OF_MEMBERS_CLOSE_RE.sub(insertion + "</groups:listOfMembers>", block, count=1)
+
+    return _GROUP_BLOCK_RE.sub(_replace_group, content)
+
+
+_KKIT_NS = "http://www.moose.ncbs.res.in/kkit-web"
+_PLOT_WINDOW_TAG_RE = re.compile(r"<kkit:plotWindow[^>]*>(\d+)</kkit:plotWindow>")
+
+
+def _inject_plot_annotations(content, model_path, plots):
+    """`plots` ({live pool path: window}, from the frontend's own
+    plotWindow -- see App.jsx) has no native SBML representation to ride
+    along in (confirmed directly: moose.writeSBML never serializes the
+    legacy .g format's own /graphs plot tables at all), so this adds a
+    small custom-namespaced annotation to each plotted species -- the
+    standard SBML mechanism for vendor-specific extensions, which any
+    other SBML-aware tool simply ignores rather than chokes on."""
+    if not plots:
+        return content
+    doc = libsbml.readSBMLFromString(content)
+    model = doc.getModel()
+    if model is None:
+        return content
+    paths = _SbmlNamePaths(model)
+
+    name_path_to_species_id = {
+        paths.species_path(sp.getId()): sp.getId() for sp in model.getListOfSpecies()
+    }
+    window_by_species_id = {}
+    for pool_path, window in plots.items():
+        sid = name_path_to_species_id.get(name_path(pool_path, model_path))
+        if sid is not None:
+            window_by_species_id[sid] = window
+    if not window_by_species_id:
+        return content
+
+    def _replace(m):
+        sid_match = _ID_ATTR_RE.search(m.group(0))
+        if not sid_match or sid_match.group(1) not in window_by_species_id:
+            return m.group(0)
+        window = window_by_species_id[sid_match.group(1)]
+        tag = f'<kkit:plotWindow xmlns:kkit="{_KKIT_NS}">{window}</kkit:plotWindow>'
+        block = m.group(0)
+        if "</annotation>" in block:
+            return block.replace("</annotation>", tag + "</annotation>", 1)
+        return block.replace("</species>", f"<annotation>{tag}</annotation></species>", 1)
+
+    return _SPECIES_BLOCK_RE.sub(_replace, content)
+
+
+def _extract_plot_windows(content, model_path):
+    """Reads back the kkit:plotWindow annotation this app writes on save
+    (see _inject_plot_annotations), resolved to the freshly-reloaded live
+    pool paths via name_path -- for build_graph's extra_plot_windows."""
+    doc = libsbml.readSBMLFromString(content)
+    model = doc.getModel()
+    if model is None:
+        return {}
+    paths = _SbmlNamePaths(model)
+
+    windows_by_name_path = {}
+    for sp in model.getListOfSpecies():
+        m = _PLOT_WINDOW_TAG_RE.search(sp.getAnnotationString() or "")
+        if m:
+            windows_by_name_path[paths.species_path(sp.getId())] = int(m.group(1))
+    if not windows_by_name_path:
+        return {}
+
+    result = {}
+    for p in moose.wildcardFind(model_path + "/##[ISA=PoolBase]"):
+        p = moose.element(p)
+        window = windows_by_name_path.get(name_path(p.path, model_path))
+        if window is not None:
+            result[p.path] = window
+    return result
+
+
+_GROUP_BLOCK_RE = re.compile(r"<groups:group\b.*?</groups:group>", re.DOTALL)
+_GROUPS_ID_ATTR_RE = re.compile(r'groups:id="([^"]+)"')
+_GROUP_ANN_OPEN_RE = re.compile(r"(<moose:GroupAnnotation>)")
+_STALE_LAYOUT_FIELD_RE = re.compile(r"<moose:(x|y|width|height|bgColor)>[^<]*</moose:\1>\s*")
+
+
+def _snapshot_group_boxes(model_path):
+    """Companion to _snapshot_positions, for groups: moose.writeSBML has a
+    second, distinct bug here -- rather than writing a wrong auto-computed
+    value like it does for a grouped pool/reac/enz, it omits a group's
+    x/y/width/height annotation *entirely* whenever its live width is 0
+    (verified directly), which is true for every group that's never been
+    explicitly resized -- the common case for a freshly-loaded legacy .g
+    file. Snapshotting each group's full box (plus color) beforehand is
+    what lets _fix_group_positions_in_sbml regenerate it unconditionally."""
+    snapshot = {}
+    for g in moose.wildcardFind(f"{model_path}/##[CLASS=Neutral]"):
+        g = moose.element(g)
+        if moose.exists(g.path + "/info"):
+            info = moose.element(g.path + "/info")
+            snapshot[name_path(g.path, model_path)] = (
+                info.x, info.y, info.width, info.height, info.color
+            )
+    return snapshot
+
+
+def _fix_group_positions_in_sbml(content, snapshot):
+    """Regenerates each group's x/y/width/height/bgColor annotation fields
+    from the pre-write snapshot (see _snapshot_group_boxes) unconditionally
+    -- rather than patch-if-present, since the writer may have omitted them
+    entirely -- dropping whatever (possibly absent, possibly present) ones
+    it actually produced."""
+    doc = libsbml.readSBMLFromString(content)
+    model = doc.getModel()
+    if model is None:
+        return content
+    paths = _SbmlNamePaths(model)
+
+    def _replace(m):
+        block = m.group(0)
+        id_match = _GROUPS_ID_ATTR_RE.search(block)
+        if not id_match:
+            return block
+        key = paths.group_path(id_match.group(1))
+        if key not in snapshot:
+            return block
+        x, y, width, height, color = snapshot[key]
+        fresh = (
+            f"<moose:x>{x}</moose:x><moose:y>{y}</moose:y>"
+            f"<moose:width>{width}</moose:width><moose:height>{height}</moose:height>"
+            f"<moose:bgColor>{color}</moose:bgColor>"
+        )
+        block = _STALE_LAYOUT_FIELD_RE.sub("", block)
+        return _GROUP_ANN_OPEN_RE.sub(r"\1" + fresh.replace("\\", "\\\\"), block, count=1)
+
+    return _GROUP_BLOCK_RE.sub(_replace, content)
+
+
+def _restore_group_annotations(doc, model_path):
+    """moose.writeSBML already emits a full, native SBML "groups" package
+    entry for each kkit Group -- structure and membership round-trip on
+    their own via moose.readSBML -- but its position/size/color (carried in
+    a custom moose:GroupAnnotation on that same group element, verified
+    directly by writing then reloading one) isn't recreated as an /info
+    Annotator on read. This re-derives that Annotator from the SBML text
+    itself after the structural reload, matching each SBML group to the
+    reloaded moose Neutral by name_path (not bare name -- two groups with
+    the same name in different compartments/parents, while unusual, would
+    otherwise collide; name_path disambiguates them exactly like it does
+    for positions -- see _snapshot_positions)."""
+    model = doc.getModel()
+    if model is None:
+        return
+    plugin = model.getPlugin("groups")
+    if plugin is None:
+        return
+    paths = _SbmlNamePaths(model)
+
+    live_by_path = {}
+    for g in moose.wildcardFind(model_path + "/##[CLASS=Neutral]"):
+        g = moose.element(g)
+        live_by_path[name_path(g.path, model_path)] = g.path
+
+    for i in range(plugin.getNumGroups()):
+        grp = plugin.getGroup(i)
+        fields = dict(_GROUP_ANNOTATION_FIELD_RE.findall(grp.getAnnotationString() or ""))
+        if not fields:
+            continue
+        live_path = live_by_path.get(paths.group_path(grp.getId()))
+        if live_path is None:
+            continue
+        create_info(
+            live_path,
+            float(fields.get("x", 0)),
+            float(fields.get("y", 0)),
+            color=fields.get("bgColor", "white"),
+            width=float(fields.get("width", 0)),
+            height=float(fields.get("height", 0)),
+        )
 
 
 def _unwrap_notes(notes_xml):
@@ -158,6 +607,34 @@ def update_enz():
     return _update_node(node_id, body.get("fields", {}), _ENZ_SIM_FIELDS[mechanism], set(), describe_enz)
 
 
+@app.post("/api/update_group")
+def update_group():
+    body = request.json or {}
+    return _update_node(body.get("id"), body.get("fields", {}), set(), set(), describe_group)
+
+
+@app.post("/api/update_compartment")
+def update_compartment():
+    body = request.json or {}
+    node_id = body.get("id")
+    fields = dict(body.get("fields", {}))
+    if _current_model_path is None or not node_id or not node_id.startswith(_current_model_path):
+        return jsonify({"error": "invalid or stale node id"}), 400
+    if not moose.exists(node_id):
+        return jsonify({"error": f"node not found: {node_id}"}), 404
+
+    # diameter is a derived, invertible convenience (see
+    # moose_graph.diameter_to_volume), not a real CubeMesh field -- when
+    # present it always wins over a same-request "volume" (which the
+    # frontend sends alongside it unconditionally, per its usual
+    # send-every-field-in-the-row pattern, but would otherwise still hold
+    # its pre-edit, now-stale value).
+    if "diameter" in fields:
+        moose.element(node_id).volume = diameter_to_volume(float(fields.pop("diameter")))
+        fields.pop("volume", None)
+    return _update_node(node_id, fields, {"volume"}, set(), describe_compartment)
+
+
 @app.post("/api/update_position")
 def update_position():
     body = request.json or {}
@@ -170,7 +647,17 @@ def update_position():
     info = moose.element(node_id + "/info")
     info.x = float(body.get("x"))
     info.y = float(body.get("y"))
-    return jsonify({"ok": True, "x": info.x, "y": info.y})
+    result = {"ok": True, "x": info.x, "y": info.y}
+    # width/height are only ever sent when resizing a group/compartment box
+    # (see nodes.jsx's NodeResizer) -- optional so plain pool/reac/enz drags
+    # don't need to touch them.
+    if "width" in body:
+        info.width = float(body["width"])
+        result["width"] = info.width
+    if "height" in body:
+        info.height = float(body["height"])
+        result["height"] = info.height
+    return jsonify(result)
 
 
 def _validate_edge_ids(from_id, to_id):
@@ -195,12 +682,19 @@ def add_edge():
 
     if edge_type == "substrate":
         moose.connect(moose.element(to_id), "sub", moose.element(from_id), "reac")
+        stoich = sum(1 for n in moose.element(to_id).neighbors["sub"] if n.path == from_id)
     elif edge_type == "product":
         moose.connect(moose.element(from_id), "prd", moose.element(to_id), "reac")
+        stoich = sum(1 for n in moose.element(from_id).neighbors["prd"] if n.path == to_id)
     else:
         return jsonify({"error": f"unsupported edge type: {edge_type}"}), 400
 
-    return jsonify({"ok": True})
+    # Connecting an already-connected reac/enz-pool pair again (kkit's way of
+    # expressing stoichiometry > 1, e.g. "2A -> B") adds another separate
+    # message rather than erroring or being a no-op -- reporting the new
+    # total lets the frontend update one edge's label instead of drawing a
+    # second, fully-overlapping edge.
+    return jsonify({"ok": True, "stoich": stoich})
 
 
 _EDGE_SRC_FIELD = {"substrate": "subOut", "product": "prdOut"}
@@ -220,20 +714,46 @@ def remove_edge():
     pool_id = from_id if edge_type == "substrate" else to_id
     src_field = _EDGE_SRC_FIELD[edge_type]
 
+    def _matches(msg):
+        return src_field in msg.srcFieldsOnE1 and moose.element(msg.e2).path == pool_id
+
+    deleted = False
     for m in moose.element(reac_or_enz_id).msgOut:
         msg = moose.element(m)
-        if src_field in msg.srcFieldsOnE1 and moose.element(msg.e2).path == pool_id:
+        if _matches(msg):
             moose.delete(msg)
-            return jsonify({"ok": True})
+            deleted = True
+            break
 
-    return jsonify({"error": "connection not found"}), 404
+    if not deleted:
+        return jsonify({"error": "connection not found"}), 404
+
+    # Only one message is ever deleted per call -- a stoichiometry > 1
+    # connection is multiple separate messages between the same reac/enz and
+    # pool (see build_graph's grouping), so this decrements by exactly one.
+    # Reporting the remaining count lets the frontend update (or remove) the
+    # edge's stoichiometry label without a full graph refetch.
+    remaining = sum(1 for m in moose.element(reac_or_enz_id).msgOut if _matches(moose.element(m)))
+    return jsonify({"ok": True, "stoich": remaining})
 
 
-def _container_path():
-    """New pools/reacs are created alongside the model's existing objects --
-    under its 'kinetics' compartment if there is one, else at the model root."""
+def _container_path(parent_id=None):
+    """New pools/reacs/groups/compartments are created under an explicit
+    group/compartment when one is given (dropped into its box on the
+    canvas); otherwise under the model's default 'kinetics' compartment, or
+    the model root if that's somehow missing."""
+    if parent_id is not None:
+        return parent_id
     kinetics = _current_model_path + "/kinetics"
     return kinetics if moose.exists(kinetics) else _current_model_path
+
+
+def _validate_parent_id(parent_id):
+    if parent_id is None:
+        return None
+    if not parent_id.startswith(_current_model_path) or not moose.exists(parent_id):
+        return f"invalid parent container: {parent_id}"
+    return None
 
 
 def _unique_name(container, base):
@@ -250,12 +770,18 @@ def create_pool():
     if _current_model_path is None or not moose.exists(_current_model_path):
         return jsonify({"error": "no model loaded"}), 400
     body = request.json or {}
-    container = _container_path()
+    parent_id = body.get("parentId")
+    err = _validate_parent_id(parent_id)
+    if err:
+        return jsonify({"error": err}), 400
+    container = _container_path(parent_id)
     name = _unique_name(container, body.get("name") or "pool")
     p = moose.Pool(f"{container}/{name}")
     p.concInit = 0.001
     create_info(p.path, float(body.get("x", 0)), float(body.get("y", 0)))
-    return jsonify(describe_pool(p.path))
+    result = describe_pool(p.path)
+    result["parentId"] = container_parent_id(p.path, _current_model_path)
+    return jsonify(result)
 
 
 @app.post("/api/create_reac")
@@ -263,12 +789,65 @@ def create_reac():
     if _current_model_path is None or not moose.exists(_current_model_path):
         return jsonify({"error": "no model loaded"}), 400
     body = request.json or {}
-    container = _container_path()
+    parent_id = body.get("parentId")
+    err = _validate_parent_id(parent_id)
+    if err:
+        return jsonify({"error": err}), 400
+    container = _container_path(parent_id)
     name = _unique_name(container, body.get("name") or "reac")
     r = moose.Reac(f"{container}/{name}")
     r.Kf, r.Kb = 0.1, 0.1
     create_info(r.path, float(body.get("x", 0)), float(body.get("y", 0)))
-    return jsonify(describe_reac(r.path))
+    result = describe_reac(r.path)
+    result["parentId"] = container_parent_id(r.path, _current_model_path)
+    return jsonify(result)
+
+
+@app.post("/api/create_group")
+def create_group():
+    if _current_model_path is None or not moose.exists(_current_model_path):
+        return jsonify({"error": "no model loaded"}), 400
+    body = request.json or {}
+    parent_id = body.get("parentId")
+    err = _validate_parent_id(parent_id)
+    if err:
+        return jsonify({"error": err}), 400
+    container = _container_path(parent_id)
+    name = _unique_name(container, body.get("name") or "group")
+    g = moose.Neutral(f"{container}/{name}")
+    create_info(
+        g.path,
+        float(body.get("x", 0)),
+        float(body.get("y", 0)),
+        width=float(body.get("width", 4.0)),
+        height=float(body.get("height", 3.0)),
+    )
+    result = describe_group(g.path)
+    result["parentId"] = container_parent_id(g.path, _current_model_path)
+    return jsonify(result)
+
+
+@app.post("/api/create_compartment")
+def create_compartment():
+    """Compartments never nest (parentId is always ignored/absent) -- always
+    created directly under the model root, alongside the default 'kinetics'
+    compartment every model already has."""
+    if _current_model_path is None or not moose.exists(_current_model_path):
+        return jsonify({"error": "no model loaded"}), 400
+    body = request.json or {}
+    name = _unique_name(_current_model_path, body.get("name") or "compartment")
+    c = moose.CubeMesh(f"{_current_model_path}/{name}")
+    c.volume = float(body.get("volume", 1.6667e-21))
+    create_info(
+        c.path,
+        float(body.get("x", 0)),
+        float(body.get("y", 0)),
+        width=float(body.get("width", 8.0)),
+        height=float(body.get("height", 6.0)),
+    )
+    result = describe_compartment(c.path)
+    result["parentId"] = None
+    return jsonify(result)
 
 
 @app.post("/api/create_enz")
@@ -342,13 +921,22 @@ def run_reset():
 def save_sbml():
     if _current_model_path is None or not moose.exists(_current_model_path):
         return jsonify({"error": "no model loaded"}), 400
-    notes = (request.json or {}).get("notes", "") if request.is_json else ""
+    body = request.json or {}
+    notes = body.get("notes", "") if request.is_json else ""
+    plots = body.get("plots") or {}
+    snapshot = _snapshot_positions(_current_model_path)
+    group_snapshot = _snapshot_group_boxes(_current_model_path)
     fd, path = tempfile.mkstemp(suffix=".xml")
     os.close(fd)
     moose.writeSBML(_current_model_path, path)
     with open(path) as f:
         content = f.read()
     os.remove(path)
+    _restore_positions(snapshot)
+    content = _fix_positions_in_sbml(content, snapshot)
+    content = _fix_group_positions_in_sbml(content, group_snapshot)
+    content = _fix_missing_reaction_group_memberships(content)
+    content = _inject_plot_annotations(content, _current_model_path, plots)
     if notes:
         doc = libsbml.readSBMLFromString(content)
         doc.getModel().setNotes(_wrap_notes(notes))
@@ -372,7 +960,9 @@ def load_sbml():
     model_path = _new_model_path()
     moose.readSBML(path, model_path)
     os.remove(path)
-    result = build_graph(model_path)
+    _restore_group_annotations(doc, model_path)
+    extra_plot_windows = _extract_plot_windows(content, model_path)
+    result = build_graph(model_path, extra_plot_windows)
     result["notes"] = notes
     return jsonify(result)
 

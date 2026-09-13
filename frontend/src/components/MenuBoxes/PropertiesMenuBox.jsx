@@ -34,6 +34,10 @@ const EDITABLE_ROWS = {
     ['numKf', 'numKb'],
     ['Kf', 'Kb'],
   ],
+  // diameter is a derived, invertible convenience for volume (kkit's
+  // classic sphere-equivalent convention), not a real CubeMesh field --
+  // editing either one updates the other.
+  compartment: [['volume', 'diameter']],
 };
 
 const ENZ_EDITABLE_ROWS = {
@@ -73,6 +77,8 @@ function initialFieldsFor(node) {
 function titleFor(node) {
   if (node.type === 'pool') return 'Pool';
   if (node.type === 'reac') return 'Reaction';
+  if (node.data.type === 'group') return 'Group';
+  if (node.type === 'compartment') return 'Compartment';
   return `Enzyme (${node.data.mechanism})`;
 }
 
@@ -87,7 +93,7 @@ export default function PropertiesMenuBox({ node, onSave, onToggleFlip }) {
     return (
       <Box sx={{ p: 2, background: '#f5f5f5', borderRadius: 2, height: '100%' }}>
         <Typography color="text.secondary">
-          Click a pool, reaction, or enzyme in the diagram to edit its properties.
+          Click a pool, reaction, enzyme, group, or compartment in the diagram to edit its properties.
         </Typography>
       </Box>
     );
@@ -204,25 +210,27 @@ export default function PropertiesMenuBox({ node, onSave, onToggleFlip }) {
           />
         </Grid>
 
-        <Grid size={12}>
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={fields.flipped}
-                onChange={(e) => {
-                  const checked = e.target.checked;
-                  setField('flipped', checked);
-                  onToggleFlip(node.id, checked);
-                }}
-              />
-            }
-            label={
-              node.type === 'pool'
-                ? 'Flip orientation (swap left/right connection sides)'
-                : 'Flip orientation (swap substrate/product sides)'
-            }
-          />
-        </Grid>
+        {node.data.type !== 'group' && node.data.type !== 'compartment' && (
+          <Grid size={12}>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={fields.flipped}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setField('flipped', checked);
+                    onToggleFlip(node.id, checked);
+                  }}
+                />
+              }
+              label={
+                node.type === 'pool'
+                  ? 'Flip orientation (swap left/right connection sides)'
+                  : 'Flip orientation (swap substrate/product sides)'
+              }
+            />
+          </Grid>
+        )}
 
         <Grid size={12}>
           <Divider sx={{ my: 1 }} />

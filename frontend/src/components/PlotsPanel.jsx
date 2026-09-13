@@ -68,13 +68,13 @@ export default function PlotsPanel({ plotData, nodes }) {
   }
 
   // Only one window in use -> it takes the full display; both in use ->
-  // side by side, so an empty second window is never shown.
+  // stacked one above the other, so an empty second window is never shown.
   const showBoth = traces1.length > 0 && traces2.length > 0;
 
   return (
-    <Box sx={{ height: '100%', width: '100%', display: 'flex' }}>
-      {traces1.length > 0 && <PlotWindow traces={traces1} style={{ width: showBoth ? '50%' : '100%' }} />}
-      {traces2.length > 0 && <PlotWindow traces={traces2} style={{ width: showBoth ? '50%' : '100%' }} />}
+    <Box sx={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column' }}>
+      {traces1.length > 0 && <PlotWindow traces={traces1} style={{ height: showBoth ? '50%' : '100%' }} />}
+      {traces2.length > 0 && <PlotWindow traces={traces2} style={{ height: showBoth ? '50%' : '100%' }} />}
     </Box>
   );
 }

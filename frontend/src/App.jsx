@@ -26,7 +26,13 @@ const POOL_HEIGHT_PX = 28;
 // for enz/reac icons next to their substrate pool) -- those pairs shouldn't
 // dictate the overall scale, but they would if we took the true minimum.
 function computeAutoScale(graph) {
-  const points = graph.nodes.map((n) => ({ x: n.x, y: n.y }));
+  // Groups/compartments aren't point-like molecules -- their spacing from
+  // everything else would skew this heuristic, and their own size is
+  // governed by their stored/auto-fit width & height instead (see
+  // effectiveContainerBox), not by neighbor spacing.
+  const points = graph.nodes
+    .filter((n) => n.type !== 'group' && n.type !== 'compartment')
+    .map((n) => ({ x: n.x, y: n.y }));
   if (points.length < 2) return DEFAULT_SCALE;
 
   const nearestDistances = points
@@ -71,6 +77,8 @@ const EDITABLE_ENDPOINTS = {
   pool: '/api/update_pool',
   reac: '/api/update_reac',
   enz: '/api/update_enz',
+  group: '/api/update_group',
+  compartment: '/api/update_compartment',
 };
 
 // Mirrors kkit's ADDMSGARROW pairing rules (xreac.g/xpool.g/xenz.g): which
@@ -97,13 +105,13 @@ function edgeTypeForConnection(conn, nodeTypeById) {
   return null;
 }
 
-function toEdge(from, to, type, i) {
+function toEdge(from, to, type, i, stoich = 1) {
   return {
     id: `e${i}-${from}-${to}-${type}`,
     source: from,
     target: to,
     style: EDGE_STYLE[type],
-    data: { type },
+    data: { type, stoich },
     ...HANDLE_BY_TYPE[type],
   };
 }
@@ -177,20 +185,231 @@ function computeInitialFlips(graph) {
   return flips;
 }
 
-function toFlowGraph(graph, scale) {
-  const flips = computeInitialFlips(graph);
-  let poolIndex = 0;
-  const nodes = graph.nodes.map((n) => {
-    const color = n.type === 'pool' ? RAINBOW_16[poolIndex++ % 16] : n.color;
-    return {
-      id: n.id,
-      type: n.type,
-      position: { x: n.x * scale, y: -n.y * scale },
-      data: { ...n, color, flipped: flips[n.id] ?? false, plotWindow: null },
-    };
+const CONTAINER_TYPES = ['group', 'compartment'];
+// React Flow reserves the literal node type "group" for its own built-in
+// group-node feature and auto-applies a default CSS border/padding/width to
+// any node so typed (verified directly in its stylesheet -- .react-flow__
+// node-group gets border:1px solid), which showed up as an unwanted second
+// border stacked on top of our own. Only the React-Flow-facing `type`
+// field needs remapping to sidestep that; the semantic type used
+// everywhere else (data.type, CONTAINER_TYPES, etc.) stays "group".
+const REACT_FLOW_NODE_TYPE = { group: 'kkitGroup' };
+const DEFAULT_CONTAINER_SIZE = {
+  group: { width: 4, height: 3 },
+  compartment: { width: 8, height: 6 },
+};
+const CONTAINER_PADDING = 1.5;
+// Extra breathing room specifically when a container's auto-fit box has to
+// wrap another container (rather than just plain pools/reacs) -- otherwise
+// the inner box's own border sits right up against the outer one's.
+const CONTAINER_NESTING_PADDING = 3.5;
+
+function isDescendantOf(nodeId, containerId, rawById) {
+  let cur = rawById[nodeId];
+  while (cur && cur.parentId) {
+    if (cur.parentId === containerId) return true;
+    cur = rawById[cur.parentId];
+  }
+  return false;
+}
+
+// A group/compartment cascades onto everything inside it when deleted
+// (MOOSE's own moose.delete already recursively removes descendants, and
+// there's no re-parenting in this version for orphans to escape into) --
+// confirmed before the fact if it's not empty, since that can otherwise
+// silently wipe out a whole reaction sub-system from one drag-to-trash.
+function confirmContainerDelete(node, flowNodes) {
+  // node.data.type (the semantic type), not node.type (the React-Flow
+  // rendering type -- remapped for groups, see REACT_FLOW_NODE_TYPE).
+  if (node.data.type !== 'group' && node.data.type !== 'compartment') return true;
+  const rawById = {};
+  flowNodes.forEach((n) => {
+    rawById[n.id] = n.data;
   });
-  const edges = graph.edges.map((e, i) => toEdge(e.from, e.to, e.type, i));
+  const hasChildren = flowNodes.some((n) => isDescendantOf(n.id, node.id, rawById));
+  if (!hasChildren) return true;
+  return window.confirm(
+    `Delete "${node.data.name}"? This also deletes everything inside it.`
+  );
+}
+
+// A container that's never been explicitly sized/positioned (width and
+// height both 0 -- true for every legacy .g file's default compartment,
+// which never stored these) gets its box auto-derived from whatever's
+// currently inside it instead of rendering as, and clamping all its
+// children into, a tiny empty box wherever its unset x/y happens to be.
+//
+// Direct child containers count by their own full box extent (position +
+// size), not just their anchor point, so an auto-fit box is always large
+// enough to actually contain a nested one rather than just its corner --
+// and that case gets extra padding (CONTAINER_NESTING_PADDING), since a
+// plain pool/reac doesn't have its own visible border to clear.
+//
+// `boxById` memoizes results across calls within one build (recursion, not
+// insertion order, resolves the "inner box needed before outer box"
+// dependency regardless of which order containers appear in graph.nodes).
+function effectiveContainerBox(n, rawNodes, rawById, boxById) {
+  if (boxById[n.id]) return boxById[n.id];
+  if (n.width > 0 || n.height > 0) {
+    const box = { x: n.x, y: n.y, width: n.width, height: n.height };
+    boxById[n.id] = box;
+    return box;
+  }
+
+  const xs = [];
+  const ys = [];
+  let touchesNestedContainer = false;
+  rawNodes.forEach((other) => {
+    if (other.id === n.id) return;
+    if (CONTAINER_TYPES.includes(other.type)) {
+      if (other.parentId !== n.id) return; // only direct container children
+      touchesNestedContainer = true;
+      const childBox = effectiveContainerBox(other, rawNodes, rawById, boxById);
+      xs.push(childBox.x, childBox.x + childBox.width);
+      ys.push(childBox.y, childBox.y - childBox.height);
+      return;
+    }
+    if (isDescendantOf(other.id, n.id, rawById)) {
+      xs.push(other.x);
+      ys.push(other.y);
+    }
+  });
+
+  if (xs.length === 0) {
+    const fallback = DEFAULT_CONTAINER_SIZE[n.type];
+    const box = { x: n.x, y: n.y, width: fallback.width, height: fallback.height };
+    boxById[n.id] = box;
+    return box;
+  }
+  const padding = touchesNestedContainer ? CONTAINER_NESTING_PADDING : CONTAINER_PADDING;
+  const box = {
+    x: Math.min(...xs) - padding,
+    y: Math.max(...ys) + padding,
+    width: Math.max(...xs) - Math.min(...xs) + padding * 2,
+    height: Math.max(...ys) - Math.min(...ys) + padding * 2,
+  };
+  boxById[n.id] = box;
+  return box;
+}
+
+// Shared by the initial/full load path and refreshGraph -- `preserve` lets
+// the latter carry forward frontend-only state (flipped/color/plotWindow)
+// that has no backend representation, keyed by node id; the former just
+// passes empty maps so everything gets freshly computed defaults.
+function buildFlowNodes(graph, scale, preserve = {}) {
+  const flips = computeInitialFlips(graph);
+  const rawById = {};
+  graph.nodes.forEach((n) => {
+    rawById[n.id] = n;
+  });
+
+  // Every group/compartment's effective box is computed once up front --
+  // both for its own rendering and as the reference point every child
+  // (including a nested group) measures its relative position against.
+  const boxById = {};
+  graph.nodes.forEach((n) => {
+    if (CONTAINER_TYPES.includes(n.type)) {
+      effectiveContainerBox(n, graph.nodes, rawById, boxById);
+    }
+  });
+
+  // Starts past however many pools already have a preserved color, so a
+  // newly-added pool never reuses a color already assigned to an existing
+  // one (matches the original refreshGraph behavior this replaced).
+  let poolIndex = Object.keys(preserve.color ?? {}).length;
+  const nodes = graph.nodes.map((n) => {
+    const isContainer = CONTAINER_TYPES.includes(n.type);
+    const color =
+      n.type === 'pool' ? preserve.color?.[n.id] ?? RAINBOW_16[poolIndex++ % 16] : n.color;
+
+    const parentBox = n.parentId ? boxById[n.parentId] : null;
+    const ownX = isContainer ? boxById[n.id].x : n.x;
+    const ownY = isContainer ? boxById[n.id].y : n.y;
+    const relX = parentBox ? ownX - parentBox.x : ownX;
+    const relY = parentBox ? ownY - parentBox.y : ownY;
+
+    const node = {
+      id: n.id,
+      type: REACT_FLOW_NODE_TYPE[n.type] ?? n.type,
+      position: { x: relX * scale, y: -relY * scale },
+      data: { ...n, color },
+    };
+    if (n.type === 'pool' || n.type === 'reac' || n.type === 'enz') {
+      node.data.flipped = preserve.flipped?.[n.id] ?? flips[n.id] ?? false;
+    }
+    if (n.type === 'pool') {
+      // Preserved session state wins (a user's own toggle shouldn't be
+      // undone by a refresh); otherwise fall back to what the backend
+      // detected from the file's own pre-existing plot definitions (see
+      // moose_graph.detect_existing_plots), not unconditionally null.
+      node.data.plotWindow = preserve.plotWindow?.[n.id] ?? n.plotWindow ?? null;
+    }
+    if (n.parentId) {
+      node.parentId = n.parentId;
+      node.extent = 'parent';
+    }
+    if (isContainer) {
+      const box = boxById[n.id];
+      node.style = { width: box.width * scale, height: box.height * scale };
+      node.zIndex = n.type === 'compartment' ? -2 : -1;
+    }
+    return node;
+  });
+
+  const edges = graph.edges.map((e, i) => toEdge(e.from, e.to, e.type, i, e.stoich));
   return { nodes, edges };
+}
+
+function toFlowGraph(graph, scale) {
+  return buildFlowNodes(graph, scale);
+}
+
+// Which group/compartment (if any) a drop point at (kx, ky) -- in the same
+// absolute kkit-unit space as every node's data.x/data.y -- falls inside,
+// for deciding a newly-dropped pool/reac/group's structural parent. Uses
+// each container's *effective* box (falling back to an auto-fit bounding
+// box for one that's never been explicitly sized, same as rendering does)
+// rather than raw stored width/height, since the raw values are 0 for the
+// ever-present default compartment until a user actually resizes it -- a
+// geometric test against that would never match despite it visually
+// covering most of the canvas. Picks the smallest (most specific/innermost)
+// match when boxes overlap.
+function findContainerAt(kx, ky, flowNodes) {
+  const rawNodes = flowNodes.map((n) => n.data);
+  const rawById = {};
+  rawNodes.forEach((n) => {
+    rawById[n.id] = n;
+  });
+  const boxById = {};
+  const candidates = rawNodes
+    .filter((n) => CONTAINER_TYPES.includes(n.type))
+    .map((n) => ({ id: n.id, box: effectiveContainerBox(n, rawNodes, rawById, boxById) }))
+    .filter(({ box }) => kx >= box.x && kx <= box.x + box.width && ky <= box.y && ky >= box.y - box.height);
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => a.box.width * a.box.height - b.box.width * b.box.height);
+  return candidates[0].id;
+}
+
+// React Flow reports a nested node's own `position` relative to its parent
+// (that's the whole point of the parentId/extent:'parent' containment
+// model -- see buildFlowNodes), so persisting it back as a kkit-unit
+// x/y (an absolute, flat coordinate, same convention legacy .g files use)
+// means walking up the parentId chain summing each ancestor's own relative
+// position, rather than assuming node.position is already absolute.
+function absoluteFlowPosition(nodeId, flowNodes) {
+  const byId = {};
+  flowNodes.forEach((n) => {
+    byId[n.id] = n;
+  });
+  let x = 0;
+  let y = 0;
+  let cur = byId[nodeId];
+  while (cur) {
+    x += cur.position.x;
+    y += cur.position.y;
+    cur = cur.parentId ? byId[cur.parentId] : null;
+  }
+  return { x, y };
 }
 
 export default function App() {
@@ -202,6 +421,10 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [runError, setRunError] = useState(null);
   const [lastRuntime, setLastRuntime] = useState(null);
+  // Which of MainDisplay's two tabs (0 = Reaction Layout, 1 = Plots) is
+  // showing -- lifted up here (rather than local state in MainDisplay) so a
+  // completed run can switch to it, not just the user clicking the tab.
+  const [displayTab, setDisplayTab] = useState(0);
   // Recomputed only on full graph reloads (load/reset/refresh), not on
   // incremental edits (drag, single add) -- so a drag or single new node
   // never rescales/shifts everything else already laid out.
@@ -252,7 +475,7 @@ export default function App() {
   );
 
   const onNodeClick = useCallback((event, node) => {
-    if (EDITABLE_ENDPOINTS[node.type]) {
+    if (EDITABLE_ENDPOINTS[node.data.type]) {
       setSelectedNodeId(node.id);
       setActiveMenu('Properties');
     }
@@ -295,29 +518,35 @@ export default function App() {
         setStatus("an enzyme's complex pool can't be deleted on its own -- delete the enzyme instead");
         return;
       }
-      // A pool can have enzyme (and complex-pool) children that MOOSE
-      // cascades onto when it's deleted -- a full graph re-fetch (rather
-      // than just filtering this one id out of local state) is what keeps
-      // those removed on screen too.
-      fetch(`${API_BASE}/api/delete_node`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: node.id }),
-      })
-        .then((r) => r.json())
-        .then((res) => {
-          if (res.error) {
-            setStatus(`error: ${res.error}`);
-            return;
-          }
-          setSelectedNodeId((sel) => (sel === node.id ? null : sel));
-          refreshGraphRef.current?.();
+      // A group/compartment's confirmation may be cancelled, in which case
+      // execution falls through to the normal position-update path below
+      // rather than leaving the drag in limbo.
+      if (confirmContainerDelete(node, flowGraph.nodes)) {
+        // A pool can have enzyme (and complex-pool) children that MOOSE
+        // cascades onto when it's deleted -- a full graph re-fetch (rather
+        // than just filtering this one id out of local state) is what keeps
+        // those removed on screen too.
+        fetch(`${API_BASE}/api/delete_node`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: node.id }),
         })
-        .catch((err) => setStatus(`error: ${err}`));
-      return;
+          .then((r) => r.json())
+          .then((res) => {
+            if (res.error) {
+              setStatus(`error: ${res.error}`);
+              return;
+            }
+            setSelectedNodeId((sel) => (sel === node.id ? null : sel));
+            refreshGraphRef.current?.();
+          })
+          .catch((err) => setStatus(`error: ${err}`));
+        return;
+      }
     }
-    const x = node.position.x / scale;
-    const y = -node.position.y / scale;
+    const abs = absoluteFlowPosition(node.id, flowGraph.nodes);
+    const x = abs.x / scale;
+    const y = -abs.y / scale;
     fetch(`${API_BASE}/api/update_position`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -337,7 +566,79 @@ export default function App() {
         }));
       })
       .catch((err) => setStatus(`error: ${err}`));
-  }, [scale]);
+  }, [scale, flowGraph.nodes]);
+
+  // A group/compartment's resize handle (nodes.jsx's NodeResizer, via
+  // NodeActionsContext) reports its new box in the same relative-to-parent
+  // flow-pixel space node.position uses -- so it needs the same ancestor
+  // walk as absoluteFlowPosition, just seeded from the resize event's own
+  // (possibly moved, if resized from the top/left) x/y instead of the
+  // node's last-known position.
+  const onContainerResize = useCallback(
+    (nodeId, box) => {
+      const byId = {};
+      flowGraph.nodes.forEach((n) => {
+        byId[n.id] = n;
+      });
+      let ax = box.x;
+      let ay = box.y;
+      let parentId = byId[nodeId]?.parentId;
+      while (parentId) {
+        const parent = byId[parentId];
+        if (!parent) break;
+        ax += parent.position.x;
+        ay += parent.position.y;
+        parentId = parent.parentId;
+      }
+      const x = ax / scale;
+      const y = -ay / scale;
+      const width = box.width / scale;
+      const height = box.height / scale;
+      fetch(`${API_BASE}/api/update_position`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: nodeId, x, y, width, height }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.error) {
+            setStatus(`error: ${res.error}`);
+            return;
+          }
+          setFlowGraph((g) => ({
+            ...g,
+            nodes: g.nodes.map((n) =>
+              n.id === nodeId
+                ? {
+                    ...n,
+                    position: { x: box.x, y: box.y },
+                    style: { width: box.width, height: box.height },
+                    data: { ...n.data, x, y, width, height },
+                  }
+                : n
+            ),
+          }));
+        })
+        .catch((err) => setStatus(`error: ${err}`));
+    },
+    [flowGraph.nodes, scale]
+  );
+
+  const nodeActions = useMemo(() => ({ onContainerResize }), [onContainerResize]);
+
+  // {poolId: window} for every pool currently marked plotted -- plotWindow
+  // is frontend-only state (see buildFlowNodes), so it has to be sent
+  // along explicitly whenever saving, for the backend to persist as a
+  // small custom annotation (SBML has no native "this is plotted" concept
+  // -- confirmed directly that moose.writeSBML doesn't preserve the
+  // legacy .g format's own /graphs plot tables at all).
+  const plots = useMemo(() => {
+    const result = {};
+    flowGraph.nodes.forEach((n) => {
+      if (n.type === 'pool' && n.data.plotWindow) result[n.id] = n.data.plotWindow;
+    });
+    return result;
+  }, [flowGraph.nodes]);
 
   const nodeTypeById = useMemo(() => {
     const map = {};
@@ -367,10 +668,27 @@ export default function App() {
             setStatus(`error: ${res.error}`);
             return;
           }
-          setFlowGraph((g) => ({
-            ...g,
-            edges: [...g.edges, toEdge(conn.source, conn.target, edgeType, g.edges.length)],
-          }));
+          setFlowGraph((g) => {
+            // Connecting an already-connected pair again is kkit's way of
+            // expressing stoichiometry > 1 (see add_edge) -- bump the
+            // existing edge's count rather than drawing a second, fully
+            // overlapping edge on top of it.
+            const existing = g.edges.find(
+              (e) => e.source === conn.source && e.target === conn.target && e.data.type === edgeType
+            );
+            if (existing) {
+              return {
+                ...g,
+                edges: g.edges.map((e) =>
+                  e.id === existing.id ? { ...e, data: { ...e.data, stoich: res.stoich } } : e
+                ),
+              };
+            }
+            return {
+              ...g,
+              edges: [...g.edges, toEdge(conn.source, conn.target, edgeType, g.edges.length, res.stoich)],
+            };
+          });
         })
         .catch((err) => setStatus(`error: ${err}`));
     },
@@ -379,23 +697,49 @@ export default function App() {
 
   const onEdgesChange = useCallback(
     (changes) => {
-      changes
-        .filter((change) => change.type === 'remove')
-        .forEach((change) => {
-          const edge = flowGraph.edges.find((e) => e.id === change.id);
-          if (!edge) return;
-          fetch(`${API_BASE}/api/remove_edge`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ from: edge.source, to: edge.target, type: edge.data.type }),
+      // A 'remove' change on a stoichiometry > 1 edge decrements it instead
+      // of deleting the edge outright -- remove_edge only ever deletes one
+      // underlying message per call, matching "one drag = one message,
+      // click+delete removes one at a time" -- so that change is excluded
+      // from what reaches applyEdgeChanges, and the edge's count is updated
+      // once the backend confirms how many messages are left.
+      const passThrough = [];
+      changes.forEach((change) => {
+        if (change.type !== 'remove') {
+          passThrough.push(change);
+          return;
+        }
+        const edge = flowGraph.edges.find((e) => e.id === change.id);
+        if (!edge) {
+          passThrough.push(change);
+          return;
+        }
+        const decrementOnly = (edge.data.stoich ?? 1) > 1;
+        if (!decrementOnly) passThrough.push(change);
+
+        fetch(`${API_BASE}/api/remove_edge`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: edge.source, to: edge.target, type: edge.data.type }),
+        })
+          .then((r) => r.json())
+          .then((res) => {
+            if (res.error) {
+              setStatus(`error: ${res.error}`);
+              return;
+            }
+            if (decrementOnly) {
+              setFlowGraph((g) => ({
+                ...g,
+                edges: g.edges.map((e) =>
+                  e.id === edge.id ? { ...e, data: { ...e.data, stoich: res.stoich } } : e
+                ),
+              }));
+            }
           })
-            .then((r) => r.json())
-            .then((res) => {
-              if (res.error) setStatus(`error: ${res.error}`);
-            })
-            .catch((err) => setStatus(`error: ${err}`));
-        });
-      setFlowGraph((g) => ({ ...g, edges: applyEdgeChanges(changes, g.edges) }));
+          .catch((err) => setStatus(`error: ${err}`));
+      });
+      setFlowGraph((g) => ({ ...g, edges: applyEdgeChanges(passThrough, g.edges) }));
     },
     [flowGraph.edges]
   );
@@ -424,7 +768,7 @@ export default function App() {
       // about it) would wipe it out when merged into node data.
       const { flipped, ...backendFields } = fields;
       const node = flowGraph.nodes.find((n) => n.id === nodeId);
-      const endpoint = EDITABLE_ENDPOINTS[node.type];
+      const endpoint = EDITABLE_ENDPOINTS[node.data.type];
       fetch(`${API_BASE}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -441,6 +785,19 @@ export default function App() {
           // id (the node itself, any edges, and the current selection) has
           // to be repointed at the new one.
           const renamed = updated.previousId && updated.previousId !== updated.id;
+          if (renamed && (node.data.type === 'group' || node.data.type === 'compartment')) {
+            // A group/compartment's own path is a *prefix* of every
+            // descendant's path (that's what "children in the MOOSE
+            // hierarchy" means) -- renaming it silently changes every
+            // descendant's id and parentId too, not just this node's own
+            // id. Recomputing that cascade correctly on the frontend would
+            // mean replicating MOOSE's own path-string quirks; a full
+            // refetch just gets the already-correct new ids from the
+            // backend directly instead.
+            refreshGraphRef.current?.();
+            if (selectedNodeId === nodeId) setSelectedNodeId(updated.id);
+            return;
+          }
           setFlowGraph((g) => ({
             nodes: g.nodes.map((n) =>
               n.id === nodeId ? { ...n, id: updated.id, data: { ...updated, flipped } } : n
@@ -465,17 +822,12 @@ export default function App() {
   // Re-fetches the whole graph rather than patching state locally -- used
   // after operations whose effect on the node/edge set isn't a single known
   // delta (creating an enzyme also creates a hidden complex pool; deleting a
-  // pool cascades to remove its enzyme children in MOOSE). Existing nodes'
-  // `flipped` state is preserved by id rather than recomputed, since the
-  // heuristic is only meant to run once per node, not on every refresh.
-  // Scale IS recomputed here, same as on load -- the node set just changed,
-  // so re-fitting the spacing to whatever remains is the point, unlike drag
-  // or single-add which intentionally keep the current scale untouched.
-  // Deliberately does NOT recompute scale (unlike the initial load/reset
-  // path) -- this runs after incremental structural edits (delete, enzyme
-  // creation), and rescaling would shift every other node's pixel position
-  // out from under the user mid-edit, which reads as the view jumping
-  // around for no reason. Keeps the current scale, same as drag/single-add.
+  // pool cascades to remove its enzyme children in MOOSE). Frontend-only
+  // state (flipped/color/plotWindow) is preserved by id rather than
+  // recomputed. Deliberately does NOT recompute scale (unlike the initial
+  // load/reset path) -- rescaling here would shift every node's pixel
+  // position out from under the user mid-edit, reading as the view jumping
+  // around for no reason; keeps the current scale, same as drag/single-add.
   const refreshGraph = useCallback(() => {
     fetch(`${API_BASE}/api/graph`)
       .then((r) => r.json())
@@ -495,25 +847,11 @@ export default function App() {
               existingPlotWindow[n.id] = n.data.plotWindow;
             }
           });
-          const freshFlips = computeInitialFlips(graph);
-          let nextPoolIndex = Object.keys(existingColor).length;
-          const nodes = graph.nodes.map((n) => {
-            const color =
-              n.type === 'pool' ? existingColor[n.id] ?? RAINBOW_16[nextPoolIndex++ % 16] : n.color;
-            return {
-              id: n.id,
-              type: n.type,
-              position: { x: n.x * scale, y: -n.y * scale },
-              data: {
-                ...n,
-                color,
-                flipped: existingFlipped[n.id] ?? freshFlips[n.id] ?? false,
-                plotWindow: existingPlotWindow[n.id] ?? null,
-              },
-            };
+          return buildFlowNodes(graph, scale, {
+            flipped: existingFlipped,
+            color: existingColor,
+            plotWindow: existingPlotWindow,
           });
-          const edges = graph.edges.map((e, i) => toEdge(e.from, e.to, e.type, i));
-          return { nodes, edges };
         });
       })
       .catch((err) => setStatus(`error: ${err}`));
@@ -557,14 +895,19 @@ export default function App() {
 
   // x/y default to a spread-out placeholder spot (the old click-to-add
   // behavior) when not given -- drag-and-drop passes the actual drop
-  // position instead.
+  // position instead. When placed inside a group/compartment (parentId
+  // set), the fast local addNodeToGraph path is skipped in favor of a full
+  // refreshGraph -- computing that container's own effective on-screen box
+  // (see effectiveContainerBox) is exactly what buildFlowNodes already does
+  // for a full graph, and duplicating it here for a single new node isn't
+  // worth the risk of the two falling out of sync.
   const handleAddPool = useCallback(
-    (x, y) => {
+    (x, y, parentId) => {
       const n = ++creationCounter.current;
       fetch(`${API_BASE}/api/create_pool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: `pool${n}`, x: x ?? n * 1.5, y: y ?? -2 }),
+        body: JSON.stringify({ name: `pool${n}`, x: x ?? n * 1.5, y: y ?? -2, parentId }),
       })
         .then((r) => r.json())
         .then((res) => {
@@ -572,20 +915,26 @@ export default function App() {
             setStatus(`error: ${res.error}`);
             return;
           }
-          addNodeToGraph(res);
+          if (parentId) {
+            refreshGraph();
+            setSelectedNodeId(res.id);
+            setActiveMenu('Properties');
+          } else {
+            addNodeToGraph(res);
+          }
         })
         .catch((err) => setStatus(`error: ${err}`));
     },
-    [addNodeToGraph]
+    [addNodeToGraph, refreshGraph]
   );
 
   const handleAddReac = useCallback(
-    (x, y) => {
+    (x, y, parentId) => {
       const n = ++creationCounter.current;
       fetch(`${API_BASE}/api/create_reac`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: `reac${n}`, x: x ?? n * 1.5, y: y ?? -3 }),
+        body: JSON.stringify({ name: `reac${n}`, x: x ?? n * 1.5, y: y ?? -3, parentId }),
       })
         .then((r) => r.json())
         .then((res) => {
@@ -593,11 +942,67 @@ export default function App() {
             setStatus(`error: ${res.error}`);
             return;
           }
-          addNodeToGraph(res);
+          if (parentId) {
+            refreshGraph();
+            setSelectedNodeId(res.id);
+            setActiveMenu('Properties');
+          } else {
+            addNodeToGraph(res);
+          }
         })
         .catch((err) => setStatus(`error: ${err}`));
     },
-    [addNodeToGraph]
+    [addNodeToGraph, refreshGraph]
+  );
+
+  // Always routed through refreshGraph (never the fast addNodeToGraph path)
+  // -- a group/compartment is itself a container, and its own rendering
+  // needs the same effective-box computation buildFlowNodes already does.
+  const handleAddGroup = useCallback(
+    (x, y, parentId) => {
+      const n = ++creationCounter.current;
+      fetch(`${API_BASE}/api/create_group`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: `group${n}`, x, y, parentId }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.error) {
+            setStatus(`error: ${res.error}`);
+            return;
+          }
+          refreshGraph();
+          setSelectedNodeId(res.id);
+          setActiveMenu('Properties');
+        })
+        .catch((err) => setStatus(`error: ${err}`));
+    },
+    [refreshGraph]
+  );
+
+  // Compartments never nest, so unlike groups this never takes a parentId.
+  const handleAddCompartment = useCallback(
+    (x, y) => {
+      const n = ++creationCounter.current;
+      fetch(`${API_BASE}/api/create_compartment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: `compartment${n}`, x, y }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.error) {
+            setStatus(`error: ${res.error}`);
+            return;
+          }
+          refreshGraph();
+          setSelectedNodeId(res.id);
+          setActiveMenu('Properties');
+        })
+        .catch((err) => setStatus(`error: ${err}`));
+    },
+    [refreshGraph]
   );
 
   // Shared by the click-to-add flow (parent = whatever's selected) and the
@@ -648,9 +1053,19 @@ export default function App() {
       const kx = flowPosition.x / scale;
       const ky = -flowPosition.y / scale;
       if (type === 'pool') {
-        handleAddPool(kx, ky);
+        handleAddPool(kx, ky, findContainerAt(kx, ky, flowGraph.nodes));
       } else if (type === 'reac') {
-        handleAddReac(kx, ky);
+        handleAddReac(kx, ky, findContainerAt(kx, ky, flowGraph.nodes));
+      } else if (type === 'group') {
+        const parentId = findContainerAt(kx, ky, flowGraph.nodes);
+        if (!parentId) {
+          setStatus('drop the group icon inside an existing compartment (or group)');
+          return;
+        }
+        handleAddGroup(kx, ky, parentId);
+      } else if (type === 'compartment') {
+        // Compartments never nest -- no container hit-test needed.
+        handleAddCompartment(kx, ky);
       } else if (type === 'enz') {
         const hitNode = flowGraph.nodes.find((n) => n.id === hitNodeId);
         if (!hitNode || hitNode.type !== 'pool') {
@@ -678,7 +1093,7 @@ export default function App() {
         }));
       }
     },
-    [scale, flowGraph.nodes, handleAddPool, handleAddReac, createEnzOnPool]
+    [scale, flowGraph.nodes, handleAddPool, handleAddReac, handleAddGroup, handleAddCompartment, createEnzOnPool]
   );
 
   // Un-plotting by dragging the on-canvas plot badge to the trash icon --
@@ -693,7 +1108,8 @@ export default function App() {
   }, []);
 
   const handleDeleteSelected = useCallback(() => {
-    if (!selectedNodeId) return;
+    if (!selectedNodeId || !selectedNode) return;
+    if (!confirmContainerDelete(selectedNode, flowGraph.nodes)) return;
     fetch(`${API_BASE}/api/delete_node`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -709,7 +1125,7 @@ export default function App() {
         refreshGraph();
       })
       .catch((err) => setStatus(`error: ${err}`));
-  }, [selectedNodeId, refreshGraph]);
+  }, [selectedNodeId, selectedNode, flowGraph.nodes, refreshGraph]);
 
   const handleStartRun = useCallback((runtime, plotDt) => {
     setIsRunning(true);
@@ -727,6 +1143,7 @@ export default function App() {
         }
         setPlotData(res);
         setLastRuntime(runtime);
+        setDisplayTab(1);
       })
       .catch((err) => setRunError(String(err)))
       .finally(() => setIsRunning(false));
@@ -754,6 +1171,7 @@ export default function App() {
       setActiveMenu={setActiveMenu}
       status={status}
       onGraphLoaded={handleGraphResult}
+      plots={plots}
       selectedNode={selectedNode}
       onSaveNode={onSaveNode}
       onToggleFlip={onToggleFlip}
@@ -770,8 +1188,11 @@ export default function App() {
       runError={runError}
       lastRuntime={lastRuntime}
       plotData={plotData}
+      displayTab={displayTab}
+      setDisplayTab={setDisplayTab}
       flowGraph={flowGraph}
       edgeActions={edgeActions}
+      nodeActions={nodeActions}
       onNodeClick={onNodeClick}
       onPaneClick={onPaneClick}
       onNodesChange={onNodesChange}

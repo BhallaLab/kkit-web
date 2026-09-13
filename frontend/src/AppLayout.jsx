@@ -34,10 +34,11 @@ export default function AppLayout({
   runError,
   lastRuntime,
   plotData,
+  plots,
   ...canvasProps
 }) {
   const menuComponents = {
-    File: <FileMenuBox onGraphLoaded={onGraphLoaded} status={status} />,
+    File: <FileMenuBox onGraphLoaded={onGraphLoaded} status={status} plots={plots} />,
     Add: <AddMenuBox onDeleteSelected={onDeleteSelected} selectedNode={selectedNode} />,
     Properties: (
       <PropertiesMenuBox node={selectedNode} onSave={onSaveNode} onToggleFlip={onToggleFlip} />

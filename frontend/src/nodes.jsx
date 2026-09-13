@@ -1,6 +1,8 @@
-import { Handle, Position } from '@xyflow/react';
+import { useContext } from 'react';
+import { Handle, NodeResizer, Position } from '@xyflow/react';
 import { getContrastTextColor, PLOT_WINDOW_COLORS } from './colorUtils';
 import PlotSquiggleIcon from './PlotSquiggleIcon';
+import { NodeActionsContext } from './NodeActionsContext';
 
 const baseStyle = {
   padding: '4px 10px',
@@ -253,4 +255,77 @@ export function EnzNode({ data, selected }) {
   );
 }
 
-export const nodeTypes = { pool: PoolNode, reac: ReacNode, enz: EnzNode, concchan: PoolNode };
+// Groups and compartments are containers, not molecules -- rendered as a
+// box behind their contents (see App.jsx's zIndex/parentId wiring) with a
+// name label and a manual resize handle. Compartment gets a second inset
+// border (a "double-walled box") to read as visually distinct from a plain
+// organizational group.
+function ContainerNode({ id, data, selected, doubleWalled }) {
+  const { onContainerResize } = useContext(NodeActionsContext);
+  const handleResizeEnd = (event, params) => {
+    onContainerResize(id, { x: params.x, y: params.y, width: params.width, height: params.height });
+  };
+
+  return (
+    <div
+      style={{
+        width: '100%',
+        height: '100%',
+        position: 'relative',
+        boxSizing: 'border-box',
+        // A group is a single dashed line (purely organizational, no
+        // volume); a compartment is a solid double-walled box -- distinct
+        // enough at a glance that they don't read as the same kind of box.
+        border: doubleWalled ? '2px solid #333' : '3px dashed #333',
+        borderRadius: 4,
+        background: data.color && data.color !== 'white' ? data.color : 'rgba(0,0,0,0.03)',
+      }}
+    >
+      {doubleWalled && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 5,
+            border: '2px solid #333',
+            borderRadius: 2,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+      <div
+        style={{
+          position: 'absolute',
+          top: -22,
+          left: 2,
+          fontSize: 14,
+          fontWeight: 'bold',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {data.name}
+      </div>
+      <NodeResizer nodeId={id} isVisible={selected} minWidth={60} minHeight={40} onResizeEnd={handleResizeEnd} />
+    </div>
+  );
+}
+
+export function GroupNode(props) {
+  return <ContainerNode {...props} doubleWalled={false} />;
+}
+
+export function CompartmentNode(props) {
+  return <ContainerNode {...props} doubleWalled />;
+}
+
+export const nodeTypes = {
+  pool: PoolNode,
+  reac: ReacNode,
+  enz: EnzNode,
+  concchan: PoolNode,
+  // Registered as "kkitGroup", not "group" -- React Flow reserves the
+  // literal type "group" for its own built-in group-node feature and
+  // auto-applies a default CSS border to it (see App.jsx's
+  // REACT_FLOW_NODE_TYPE remap, which is what actually produces this key).
+  kkitGroup: GroupNode,
+  compartment: CompartmentNode,
+};

@@ -4,12 +4,25 @@ This is NOT a persisted file format -- it's just the API response shape used
 to draw the React Flow canvas. Persistence goes through moose.loadModel
 (legacy .g import) and moose.writeSBML/readSBML (native save/load).
 """
+import math
+
 import moose
+
+# CubeMesh has no native "diameter" -- kkit's classic convention treats a
+# compartment's size as a sphere-equivalent diameter for display/editing
+# purposes even though it's cube-shaped, so this is a derived, invertible
+# convenience rather than a real geometric property of the mesh.
+def volume_to_diameter(volume):
+    return (6.0 * volume / math.pi) ** (1.0 / 3.0)
+
+
+def diameter_to_volume(diameter):
+    return (math.pi / 6.0) * diameter ** 3
 
 
 def _info(path):
     if not moose.exists(path + "/info"):
-        return {"x": 0.0, "y": 0.0, "color": "white", "textColor": "black", "notes": ""}
+        return {"x": 0.0, "y": 0.0, "color": "white", "textColor": "black", "notes": "", "width": 0.0, "height": 0.0}
     info = moose.element(path + "/info")
     return {
         "x": info.x,
@@ -17,16 +30,23 @@ def _info(path):
         "color": info.color,
         "textColor": info.textColor,
         "notes": info.notes,
+        # Annotator's own native width/height fields ("typically display
+        # width/height") -- only meaningful for group/compartment nodes, but
+        # harmless (just unused) on everything else.
+        "width": info.width,
+        "height": info.height,
     }
 
 
-def create_info(path, x, y, color="white", notes=""):
+def create_info(path, x, y, color="white", notes="", width=0.0, height=0.0):
     info = moose.Annotator(path + "/info")
     info.x = x
     info.y = y
     info.color = color
     info.textColor = "black"
     info.notes = notes
+    info.width = width
+    info.height = height
     return info
 
 
@@ -42,6 +62,53 @@ def _node(elem, node_type, extra=None):
     return node
 
 
+_CONTAINER_CLASSES = ("Neutral", "CubeMesh")
+
+
+def container_parent_id(path, model_path):
+    """Walks up from `path` to the nearest ancestor that's a recognized
+    container -- a plain Neutral "group", or a CubeMesh "compartment" --
+    stopping at the model root (never treated as a container itself, even
+    though it's technically also a bare Neutral) so a top-level compartment
+    correctly gets no parent at all (compartments never nest).
+
+    This is a node's own immediate parent in the ordinary case (a plain
+    pool/reac, or a group sitting directly in a compartment or another
+    group). It takes more than one hop for an enzyme (parented under its
+    substrate pool, not a container) and an enzyme's hidden complex pool
+    (parented under the enzyme itself) -- both walk past those non-container
+    ancestors to whatever group/compartment they conceptually belong to.
+    """
+    elem = moose.element(path).parent
+    while elem.path not in (model_path, "/"):
+        if elem.className in _CONTAINER_CLASSES:
+            return elem.path
+        elem = elem.parent
+    return None
+
+
+def detect_existing_plots(model_path):
+    """kkit's own .g format already tracks which pools are plotted, in two
+    fixed top-level folders alongside the compartment(s) -- "graphs" (plot
+    window 1) and "moregraphs" (window 2), each holding Table2 objects that
+    request a pool's concentration. Verified directly against several kkit11
+    example files (feedback.g, inhib_fb.g, pkc.g): a Table's own
+    requestOut neighbor is exactly the plotted pool. Read back here so a
+    freshly-loaded model shows the same molecules already marked as plotted
+    in the original file, instead of starting with nothing plotted."""
+    result = {}
+    for window, folder in ((1, "graphs"), (2, "moregraphs")):
+        base = f"{model_path}/{folder}"
+        if not moose.exists(base):
+            continue
+        for tab in moose.wildcardFind(base + "/##[ISA=Table2]"):
+            tab = moose.element(tab)
+            targets = tab.neighbors["requestOut"]
+            if len(targets) == 1:
+                result[moose.element(targets[0]).path] = window
+    return result
+
+
 def is_enz_complex(path):
     """The hidden "cplx" pool an explicit-complex enzyme owns (created
     alongside it in create_enz, or already present in a loaded .g/SBML file)
@@ -54,7 +121,51 @@ def is_enz_complex(path):
     return parent is not None and "Enz" in parent.className
 
 
-def describe_pool(path):
+def compartment_name(path, model_path):
+    """Name of the nearest enclosing CubeMesh, walking up from `path`."""
+    elem = moose.element(path).parent
+    while elem.path not in (model_path, "/"):
+        if elem.className == "CubeMesh":
+            return elem.name
+        elem = elem.parent
+    return None
+
+
+def name_path(path, model_path):
+    """A stable, session-independent identifier for `path`: a tuple of
+    names from the enclosing compartment down to this object. Used (instead
+    of MOOSE's own idValue, verified to be a global, ever-incrementing
+    counter that differs across sessions/reloads -- even reloading the same
+    file twice gives different idValues) to match a live object to its SBML
+    representation, or vice versa.
+
+    Deliberately mirrors exactly what's reconstructable from the *SBML*
+    side (see server.py's _SbmlNamePaths), not a naive "walk every
+    ancestor": an enzyme has no container of its own in kkit (it's
+    structurally parented under its substrate pool), so its path is that
+    pool's path plus its own name -- the only placement SBML can express
+    for it too, via the moose:enzyme annotation. An enzyme's complex pool
+    is neither an SBML group member nor does it carry any back-reference to
+    its enzyme, so it collapses to just (compartment, own name), same as
+    any other non-grouped pool -- matching it via its full live nesting
+    would have no SBML-side counterpart to agree with.
+    """
+    elem = moose.element(path)
+    if is_enz_complex(path):
+        return (compartment_name(path, model_path), elem.name)
+    if elem.className in ("Enz", "MMenz"):
+        return name_path(elem.parent.path, model_path) + (elem.name,)
+
+    names = [elem.name]
+    cur = elem.parent
+    while cur.path != model_path:
+        names.append(cur.name)
+        cur = cur.parent
+    names.reverse()
+    return tuple(names)
+
+
+def describe_pool(path, plot_window=None):
     p = moose.element(path)
     return _node(p, "pool", {
         "n": p.n,
@@ -66,6 +177,7 @@ def describe_pool(path):
         "volume": p.volume,
         "isBuffered": p.isBuffered,
         "isEnzComplex": is_enz_complex(path),
+        "plotWindow": plot_window,
     })
 
 
@@ -94,34 +206,91 @@ def describe_enz(path):
     return _node(e, "enz", extra)
 
 
-def build_graph(model_path):
-    nodes = []
-    edges = []
+def describe_group(path):
+    return _node(moose.element(path), "group", {})
 
+
+def describe_compartment(path):
+    c = moose.element(path)
+    return _node(c, "compartment", {"volume": c.volume, "diameter": volume_to_diameter(c.volume)})
+
+
+def build_graph(model_path, extra_plot_windows=None):
+    """`extra_plot_windows` (optional {live pool path: window}) is merged
+    in on top of whatever detect_existing_plots finds from a legacy .g
+    file's own /graphs folders -- used by load_sbml to report back
+    plotWindow assignments read from this app's own custom SBML annotation
+    (see server.py's _extract_plot_windows_from_sbml), since SBML has no
+    native equivalent of kkit's /graphs plot tables at all."""
+    nodes = []
+    # Keyed by (from, to, type) rather than appended one entry per
+    # moose.connect -- a stoichiometry > 1 reaction (e.g. "2A -> B") is
+    # represented in MOOSE as *multiple separate messages* between the same
+    # reac and pool (verified directly: neighbors["sub"] lists the same pool
+    # once per message), which would otherwise produce fully-overlapping,
+    # visually indistinguishable duplicate edges. Counting them here instead
+    # lets the frontend draw one line with a stoichiometry number on it.
+    edge_counts = {}
+
+    def add_edge(frm, to, typ):
+        key = (frm, to, typ)
+        edge_counts[key] = edge_counts.get(key, 0) + 1
+
+    # Compartments and groups go into `nodes` before anything else, and
+    # groups are depth-sorted among themselves, so every container precedes
+    # its children -- React Flow requires a parent node to appear earlier in
+    # the node array than any child referencing its id via parentId.
+    compartments = [moose.element(c) for c in moose.wildcardFind(model_path + "/##[CLASS=CubeMesh]")]
+    for compt in compartments:
+        nodes.append(describe_compartment(compt.path))
+
+    groups = []
+    for compt in compartments:
+        # Scoped to each compartment's own subtree, not the whole model --
+        # a legacy .g file's loader also creates plain Neutral folders like
+        # /graphs, /moregraphs, /geometry at the model root (verified
+        # directly against group_epi.g), which aren't chemistry groups and
+        # sit outside any compartment, so this naturally excludes them.
+        for g in moose.wildcardFind(compt.path + "/##[CLASS=Neutral]"):
+            groups.append(moose.element(g))
+    groups.sort(key=lambda g: g.path.count("/"))
+    for g in groups:
+        nodes.append(describe_group(g.path))
+
+    plot_windows = detect_existing_plots(model_path)
+    if extra_plot_windows:
+        plot_windows.update(extra_plot_windows)
     for p in moose.wildcardFind(model_path + "/##[ISA=PoolBase]"):
         p = moose.element(p)
-        nodes.append(describe_pool(p.path))
+        nodes.append(describe_pool(p.path, plot_windows.get(p.path)))
 
     for r in moose.wildcardFind(model_path + "/##[ISA=Reac]"):
         r = moose.element(r)
         nodes.append(describe_reac(r.path))
         for sub in r.neighbors["sub"]:
-            edges.append({"from": sub.path, "to": r.path, "type": "substrate"})
+            add_edge(sub.path, r.path, "substrate")
         for prd in r.neighbors["prd"]:
-            edges.append({"from": r.path, "to": prd.path, "type": "product"})
+            add_edge(r.path, prd.path, "product")
 
     for e in moose.wildcardFind(model_path + "/##[ISA=EnzBase]"):
         e = moose.element(e)
         nodes.append(describe_enz(e.path))
         for enzParent in e.neighbors["enz"]:
-            edges.append({"from": enzParent.path, "to": e.path, "type": "enzyme"})
+            add_edge(enzParent.path, e.path, "enzyme")
         for sub in e.neighbors["sub"]:
-            edges.append({"from": sub.path, "to": e.path, "type": "substrate"})
+            add_edge(sub.path, e.path, "substrate")
         for prd in e.neighbors["prd"]:
-            edges.append({"from": e.path, "to": prd.path, "type": "product"})
+            add_edge(e.path, prd.path, "product")
 
     for c in moose.wildcardFind(model_path + "/##[ISA=ConcChan]"):
         c = moose.element(c)
         nodes.append(_node(c, "concchan"))
 
+    for node in nodes:
+        node["parentId"] = container_parent_id(node["id"], model_path)
+
+    edges = [
+        {"from": frm, "to": to, "type": typ, "stoich": count}
+        for (frm, to, typ), count in edge_counts.items()
+    ]
     return {"nodes": nodes, "edges": edges}

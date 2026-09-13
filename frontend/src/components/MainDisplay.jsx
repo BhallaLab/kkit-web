@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect } from 'react';
 import { Box, Tabs, Tab } from '@mui/material';
 import { ReactFlow, ReactFlowProvider, Background, Controls, useReactFlow } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { nodeTypes } from '../nodes';
 import BendableEdge from '../BendableEdge';
 import { EdgeActionsContext } from '../EdgeContext';
+import { NodeActionsContext } from '../NodeActionsContext';
 import PlotsPanel from './PlotsPanel';
 import EntityPalette from './EntityPalette';
 
@@ -30,6 +31,7 @@ function FitViewOnLoad({ generation }) {
 function Canvas({
   flowGraph,
   edgeActions,
+  nodeActions,
   onNodeClick,
   onPaneClick,
   onNodesChange,
@@ -66,36 +68,38 @@ function Canvas({
 
   return (
     <EdgeActionsContext.Provider value={edgeActions}>
-      <ReactFlow
-        nodes={flowGraph.nodes}
-        edges={flowGraph.edges}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        onNodeClick={onNodeClick}
-        onPaneClick={onPaneClick}
-        onNodesChange={onNodesChange}
-        onNodeDragStop={onNodeDragStop}
-        onConnect={onConnect}
-        isValidConnection={isValidConnection}
-        onEdgesChange={onEdgesChange}
-        onDrop={handleDrop}
-        onDragOver={handleDragOver}
-        deleteKeyCode={['Backspace', 'Delete']}
-        minZoom={0.05}
-        fitView
-        // Dragging a node up to the trash icon (which sits in the palette
-        // bar above the canvas, outside the pane) would otherwise trigger
-        // React Flow's default auto-pan-near-the-edge behavior, panning the
-        // whole view during the drag -- the trash drop itself is detected
-        // by a plain DOM hit-test (App.jsx's isOverTrash), not by the node
-        // needing to visually reach anything inside the pane, so autopan
-        // here only gets in the way.
-        autoPanOnNodeDrag={false}
-      >
-        <Background />
-        <Controls />
-        <FitViewOnLoad generation={loadGeneration} />
-      </ReactFlow>
+      <NodeActionsContext.Provider value={nodeActions}>
+        <ReactFlow
+          nodes={flowGraph.nodes}
+          edges={flowGraph.edges}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          onNodeClick={onNodeClick}
+          onPaneClick={onPaneClick}
+          onNodesChange={onNodesChange}
+          onNodeDragStop={onNodeDragStop}
+          onConnect={onConnect}
+          isValidConnection={isValidConnection}
+          onEdgesChange={onEdgesChange}
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          deleteKeyCode={['Backspace', 'Delete']}
+          minZoom={0.05}
+          fitView
+          // Dragging a node up to the trash icon (which sits in the palette
+          // bar above the canvas, outside the pane) would otherwise trigger
+          // React Flow's default auto-pan-near-the-edge behavior, panning the
+          // whole view during the drag -- the trash drop itself is detected
+          // by a plain DOM hit-test (App.jsx's isOverTrash), not by the node
+          // needing to visually reach anything inside the pane, so autopan
+          // here only gets in the way.
+          autoPanOnNodeDrag={false}
+        >
+          <Background />
+          <Controls />
+          <FitViewOnLoad generation={loadGeneration} />
+        </ReactFlow>
+      </NodeActionsContext.Provider>
     </EdgeActionsContext.Provider>
   );
 }
@@ -103,6 +107,7 @@ function Canvas({
 export default function MainDisplay({
   flowGraph,
   edgeActions,
+  nodeActions,
   onNodeClick,
   onPaneClick,
   onNodesChange,
@@ -118,8 +123,9 @@ export default function MainDisplay({
   onAddEnz,
   onUnplot,
   selectedNode,
+  displayTab,
+  setDisplayTab,
 }) {
-  const [tabIndex, setTabIndex] = useState(0);
   const canAddEnz = selectedNode?.type === 'pool';
 
   return (
@@ -134,7 +140,7 @@ export default function MainDisplay({
       }}
     >
       <Box sx={{ borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
-        <Tabs value={tabIndex} onChange={(e, v) => setTabIndex(v)}>
+        <Tabs value={displayTab} onChange={(e, v) => setDisplayTab(v)}>
           <Tab label="Reaction Layout" />
           <Tab label="Plots" />
         </Tabs>
@@ -143,7 +149,7 @@ export default function MainDisplay({
         sx={{
           flexGrow: 1,
           position: 'relative',
-          display: tabIndex === 0 ? 'flex' : 'none',
+          display: displayTab === 0 ? 'flex' : 'none',
           flexDirection: 'column',
         }}
       >
@@ -159,6 +165,7 @@ export default function MainDisplay({
             <Canvas
               flowGraph={flowGraph}
               edgeActions={edgeActions}
+              nodeActions={nodeActions}
               onNodeClick={onNodeClick}
               onPaneClick={onPaneClick}
               onNodesChange={onNodesChange}
@@ -172,7 +179,7 @@ export default function MainDisplay({
           </ReactFlowProvider>
         </Box>
       </Box>
-      <Box sx={{ flexGrow: 1, position: 'relative', display: tabIndex === 1 ? 'block' : 'none' }}>
+      <Box sx={{ flexGrow: 1, position: 'relative', display: displayTab === 1 ? 'block' : 'none' }}>
         <PlotsPanel plotData={plotData} nodes={flowGraph.nodes} />
       </Box>
     </Box>

@@ -47,7 +47,22 @@ function DragIcon({ type, onClick, clickDisabled, title, children }) {
 
 function PoolIcon() {
   return (
-    <Box sx={{ width: 48, height: 26, border: '1px solid #333', borderRadius: '2px', background: '#8ecae6' }} />
+    <Box
+      sx={{
+        width: 48,
+        height: 26,
+        border: '1px solid #333',
+        borderRadius: '2px',
+        background: '#8ecae6',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 11,
+        fontWeight: 'bold',
+      }}
+    >
+      Pool
+    </Box>
   );
 }
 
@@ -77,7 +92,69 @@ function ReacIcon() {
 function EnzIcon() {
   return (
     <Box sx={{ position: 'relative', width: 48, height: 32 }}>
-      <Box sx={{ position: 'absolute', inset: 0, background: '#fb8500', clipPath: ENZ_CLIP_PATH_RIGHT }} />
+      <Box
+        sx={{
+          position: 'absolute',
+          inset: 0,
+          background: '#fb8500',
+          clipPath: ENZ_CLIP_PATH_RIGHT,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 10,
+          fontWeight: 'bold',
+          pl: '2px',
+          pr: '14px',
+        }}
+      >
+        Enz
+      </Box>
+    </Box>
+  );
+}
+
+function GroupIcon() {
+  return (
+    <Box
+      sx={{
+        width: 44,
+        height: 32,
+        border: '3px dashed #333',
+        borderRadius: 1,
+        background: 'rgba(0,0,0,0.03)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 9,
+        fontWeight: 'bold',
+      }}
+    >
+      Group
+    </Box>
+  );
+}
+
+// Double-walled, matching the real CompartmentNode in the layout.
+function CompartmentIcon() {
+  return (
+    <Box sx={{ position: 'relative', width: 44, height: 32, border: '2px solid #333', borderRadius: 1 }}>
+      <Box
+        sx={{
+          position: 'absolute',
+          inset: 3,
+          border: '2px solid #333',
+          borderRadius: 0.5,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 8,
+          fontWeight: 'bold',
+          textAlign: 'center',
+          lineHeight: 1,
+        }}
+      >
+        Compt
+      </Box>
     </Box>
   );
 }
@@ -160,6 +237,12 @@ export default function EntityPalette({ onAddPool, onAddReac, onAddEnz, onUnplot
       </DragIcon>
       <DragIcon type="plot2" clickDisabled title="Drag onto a pool to plot it in Plot window 2">
         <PlotSquiggleIcon width={40} height={28} traceColor={PLOT_WINDOW_COLORS[2]} />
+      </DragIcon>
+      <DragIcon type="group" clickDisabled title="Drag inside a compartment (or group) to add an organizational group">
+        <GroupIcon />
+      </DragIcon>
+      <DragIcon type="compartment" clickDisabled title="Drag onto the diagram to add a new compartment">
+        <CompartmentIcon />
       </DragIcon>
 
       <Box sx={{ flexGrow: 1 }} />
