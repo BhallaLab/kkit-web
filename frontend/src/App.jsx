@@ -60,6 +60,10 @@ const EDGE_STYLE = {
   substrate: { stroke: 'green' },
   product: { stroke: '#333' },
   enzyme: { stroke: 'orange', strokeDasharray: '4 2' },
+  chanParent: { stroke: 'orange', strokeDasharray: '4 2' },
+  chanIn: { stroke: 'green' },
+  chanOut: { stroke: '#333' },
+  stimTarget: { stroke: '#e63946', strokeDasharray: '2 2' },
 };
 
 // Which named Handle (see nodes.jsx) each edge type terminates on, on the
@@ -69,6 +73,10 @@ const HANDLE_BY_TYPE = {
   substrate: { targetHandle: 'substrate' },
   product: { sourceHandle: 'product' },
   enzyme: { targetHandle: 'enzSite' },
+  chanParent: { targetHandle: 'chanParent' },
+  chanIn: { targetHandle: 'chanIn' },
+  chanOut: { sourceHandle: 'chanOut' },
+  stimTarget: { sourceHandle: 'stimTip' },
 };
 
 // Which backend endpoint updates each editable node type -- field rendering
@@ -79,6 +87,8 @@ const EDITABLE_ENDPOINTS = {
   enz: '/api/update_enz',
   group: '/api/update_group',
   compartment: '/api/update_compartment',
+  concchan: '/api/update_concchan',
+  stim: '/api/update_stim',
 };
 
 // Mirrors kkit's ADDMSGARROW pairing rules (xreac.g/xpool.g/xenz.g): which
@@ -101,6 +111,12 @@ function edgeTypeForConnection(conn, nodeTypeById) {
     targetType === 'pool'
   ) {
     return 'product';
+  }
+  if (sourceType === 'pool' && conn.targetHandle === 'chanIn' && targetType === 'concchan') {
+    return 'chanIn';
+  }
+  if (conn.sourceHandle === 'chanOut' && sourceType === 'concchan' && targetType === 'pool') {
+    return 'chanOut';
   }
   return null;
 }
@@ -138,8 +154,13 @@ function computeInitialFlips(graph) {
   // the ones it's a product of (attaches at its target/left handle).
   const poolSubXs = {};
   const poolProdXs = {};
+  // chanIn/chanOut play exactly the same structural role for a ConcChan
+  // that substrate/product play for a reac/enz (pool-into-object,
+  // object-into-pool) -- folded into the same collection so a ConcChan's
+  // own influx/efflux handles flip by the same rule as a reac/enz's
+  // substrate/product ones.
   graph.edges.forEach((e) => {
-    if (e.type === 'substrate') {
+    if (e.type === 'substrate' || e.type === 'chanIn') {
       if (poolX[e.from] !== undefined) {
         if (!subXs[e.to]) subXs[e.to] = [];
         subXs[e.to].push(poolX[e.from]);
@@ -148,7 +169,7 @@ function computeInitialFlips(graph) {
         if (!poolSubXs[e.from]) poolSubXs[e.from] = [];
         poolSubXs[e.from].push(otherX[e.to]);
       }
-    } else if (e.type === 'product') {
+    } else if (e.type === 'product' || e.type === 'chanOut') {
       if (poolX[e.to] !== undefined) {
         if (!prodXs[e.from]) prodXs[e.from] = [];
         prodXs[e.from].push(poolX[e.to]);
@@ -163,7 +184,7 @@ function computeInitialFlips(graph) {
   const avg = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
   const flips = {};
   graph.nodes.forEach((n) => {
-    if (n.type === 'reac' || n.type === 'enz') {
+    if (n.type === 'reac' || n.type === 'enz' || n.type === 'concchan') {
       const subs = subXs[n.id];
       const prods = prodXs[n.id];
       flips[n.id] = !!subs && !!prods && avg(subs) > avg(prods);
@@ -334,7 +355,7 @@ function buildFlowNodes(graph, scale, preserve = {}) {
       position: { x: relX * scale, y: -relY * scale },
       data: { ...n, color },
     };
-    if (n.type === 'pool' || n.type === 'reac' || n.type === 'enz') {
+    if (n.type === 'pool' || n.type === 'reac' || n.type === 'enz' || n.type === 'concchan') {
       node.data.flipped = preserve.flipped?.[n.id] ?? flips[n.id] ?? false;
     }
     if (n.type === 'pool') {
@@ -414,13 +435,19 @@ function absoluteFlowPosition(nodeId, flowNodes) {
 
 export default function App() {
   const [flowGraph, setFlowGraph] = useState({ nodes: [], edges: [] });
-  const [status, setStatus] = useState('loading feedback.g...');
+  const [status, setStatus] = useState('starting new model...');
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [activeMenu, setActiveMenu] = useState('File');
   const [plotData, setPlotData] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
   const [runError, setRunError] = useState(null);
   const [lastRuntime, setLastRuntime] = useState(null);
+  // Lifted out of RunMenuBox (rather than kept as its own local state) so a
+  // Stimulus's save-time negative-value check (see onSaveNode) can send the
+  // Run panel's *current* runtime value along with it, per the user's own
+  // choice of where that duration should come from.
+  const [runtime, setRuntime] = useState('3000');
+  const [plotDt, setPlotDt] = useState('1');
   // Which of MainDisplay's two tabs (0 = Reaction Layout, 1 = Plots) is
   // showing -- lifted up here (rather than local state in MainDisplay) so a
   // completed run can switch to it, not just the user clicking the tab.
@@ -447,27 +474,15 @@ export default function App() {
     setLoadGeneration((g) => g + 1);
   }, []);
 
-  const loadFile = useCallback(
-    (path) => {
-      setStatus(`loading ${path}...`);
-      fetch(`${API_BASE}/api/load_gfile`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path }),
-      })
-        .then((r) => r.json())
-        .then(handleGraphResult)
-        .catch((err) => setStatus(`error: ${err}`));
-    },
-    [handleGraphResult]
-  );
-
   const didInit = useRef(false);
   useEffect(() => {
     if (didInit.current) return;
     didInit.current = true;
-    loadFile('/home/bhalla/homework/KKIT/kkit11/examples/feedback.g');
-  }, [loadFile]);
+    fetch(`${API_BASE}/api/new_model`, { method: 'POST' })
+      .then((r) => r.json())
+      .then(handleGraphResult)
+      .catch((err) => setStatus(`error: ${err}`));
+  }, [handleGraphResult]);
 
   const selectedNode = useMemo(
     () => flowGraph.nodes.find((n) => n.id === selectedNodeId) ?? null,
@@ -769,15 +784,28 @@ export default function App() {
       const { flipped, ...backendFields } = fields;
       const node = flowGraph.nodes.find((n) => n.id === nodeId);
       const endpoint = EDITABLE_ENDPOINTS[node.data.type];
+      const body = { id: nodeId, fields: backendFields };
+      // A Stimulus's Save is gated on a negative-value check run against
+      // the Run panel's *current* runtime (see server.py's
+      // _check_stim_expr) -- sent along here rather than baked in at
+      // creation time, so editing later always checks against whatever
+      // duration is actually configured now.
+      if (node.data.type === 'stim') body.runtime = parseFloat(runtime) || 1;
       fetch(`${API_BASE}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: nodeId, fields: backendFields }),
+        body: JSON.stringify(body),
       })
         .then((r) => r.json())
         .then((updated) => {
           if (updated.error) {
             setStatus(`error: ${updated.error}`);
+            // The Properties panel doesn't stay visible if the user
+            // switches menus, so a rejected Stimulus save (most notably
+            // the negative-value check) needs a popup, not just the
+            // easy-to-miss status line -- Save simply does nothing else
+            // and the user's typed expression stays in the box to fix.
+            if (node.data.type === 'stim') window.alert(updated.error);
             return;
           }
           // Renaming an object changes its MOOSE path, which is what we use
@@ -816,7 +844,7 @@ export default function App() {
         })
         .catch((err) => setStatus(`error: ${err}`));
     },
-    [flowGraph.nodes, selectedNodeId]
+    [flowGraph.nodes, selectedNodeId, runtime]
   );
 
   // Re-fetches the whole graph rather than patching state locally -- used
@@ -1037,12 +1065,80 @@ export default function App() {
   );
 
   const handleAddEnz = useCallback(() => {
-    if (!selectedNode || selectedNode.type !== 'pool') {
-      setStatus('select a pool first to attach an enzyme to it');
+    if (!selectedNode || selectedNode.type !== 'pool' || selectedNode.data.isEnzComplex) {
+      setStatus('select a (non-complex) pool first to attach an enzyme to it');
       return;
     }
     createEnzOnPool(selectedNode);
   }, [selectedNode, createEnzOnPool]);
+
+  // A ConcChan is created with defaults (permeability only) attached to its
+  // parent pool -- its in/out exchange partners are wired afterward via
+  // ordinary drag-to-connect (see edgeTypeForConnection's chanIn/chanOut
+  // rules), not collectible from a single drop.
+  const createConcChanOnPool = useCallback(
+    (poolNode) => {
+      const n = ++creationCounter.current;
+      const x = poolNode.data.x;
+      const y = poolNode.data.y + (2 * POOL_HEIGHT_PX) / scale;
+      fetch(`${API_BASE}/api/create_concchan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parentPoolId: poolNode.id, name: `pore${n}`, x, y }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.error) {
+            setStatus(`error: ${res.error}`);
+            return;
+          }
+          refreshGraph();
+          setSelectedNodeId(res.id);
+          setActiveMenu('Properties');
+        })
+        .catch((err) => setStatus(`error: ${err}`));
+    },
+    [refreshGraph, scale]
+  );
+
+  // A Stimulus is created immediately wired to the pool it's dropped on
+  // (conc/concInit auto-picked from that pool's own isBuffered flag, see
+  // create_stim) -- its target isn't re-connectable afterward, same as an
+  // enzyme's structural parent link. Starts with a harmless "0" expression
+  // so creation itself never trips the negative-value check; the user
+  // edits it via Properties afterward.
+  const createStimOnPool = useCallback(
+    (poolNode) => {
+      const n = ++creationCounter.current;
+      const x = poolNode.data.x;
+      const y = poolNode.data.y + (2 * POOL_HEIGHT_PX) / scale;
+      fetch(`${API_BASE}/api/create_stim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetId: poolNode.id,
+          expr: '0',
+          runtime: parseFloat(runtime) || 1,
+          name: `stim${n}`,
+          x,
+          y,
+        }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.error) {
+            setStatus(`error: ${res.error}`);
+            window.alert(res.error);
+            return;
+          }
+          refreshGraph();
+          setSelectedNodeId(res.id);
+          setActiveMenu('Properties');
+        })
+        .catch((err) => setStatus(`error: ${err}`));
+    },
+    [refreshGraph, scale, runtime]
+  );
 
   // Drop target for the Add menu's drag-and-drop icons -- position arrives
   // in on-screen flow-pixel space (from React Flow's screenToFlowPosition),
@@ -1072,7 +1168,33 @@ export default function App() {
           setStatus('drop the enzyme icon onto an existing pool');
           return;
         }
+        if (hitNode.data.isEnzComplex) {
+          setStatus("an enzyme's complex pool can't be connected to anything");
+          return;
+        }
         createEnzOnPool(hitNode);
+      } else if (type === 'concchan') {
+        const hitNode = flowGraph.nodes.find((n) => n.id === hitNodeId);
+        if (!hitNode || hitNode.type !== 'pool') {
+          setStatus('drop the ConcChan icon onto an existing pool');
+          return;
+        }
+        if (hitNode.data.isEnzComplex) {
+          setStatus("an enzyme's complex pool can't be connected to anything");
+          return;
+        }
+        createConcChanOnPool(hitNode);
+      } else if (type === 'stim') {
+        const hitNode = flowGraph.nodes.find((n) => n.id === hitNodeId);
+        if (!hitNode || hitNode.type !== 'pool') {
+          setStatus('drop the Stimulus icon onto an existing pool');
+          return;
+        }
+        if (hitNode.data.isEnzComplex) {
+          setStatus("an enzyme's complex pool can't be connected to anything");
+          return;
+        }
+        createStimOnPool(hitNode);
       } else if (type === 'plot1' || type === 'plot2') {
         const window = type === 'plot1' ? 1 : 2;
         const hitNode = flowGraph.nodes.find((n) => n.id === hitNodeId);
@@ -1093,7 +1215,17 @@ export default function App() {
         }));
       }
     },
-    [scale, flowGraph.nodes, handleAddPool, handleAddReac, handleAddGroup, handleAddCompartment, createEnzOnPool]
+    [
+      scale,
+      flowGraph.nodes,
+      handleAddPool,
+      handleAddReac,
+      handleAddGroup,
+      handleAddCompartment,
+      createEnzOnPool,
+      createConcChanOnPool,
+      createStimOnPool,
+    ]
   );
 
   // Un-plotting by dragging the on-canvas plot badge to the trash icon --
@@ -1187,6 +1319,10 @@ export default function App() {
       isRunning={isRunning}
       runError={runError}
       lastRuntime={lastRuntime}
+      runtime={runtime}
+      setRuntime={setRuntime}
+      plotDt={plotDt}
+      setPlotDt={setPlotDt}
       plotData={plotData}
       displayTab={displayTab}
       setDisplayTab={setDisplayTab}

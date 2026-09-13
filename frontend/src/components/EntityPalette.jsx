@@ -1,6 +1,6 @@
 import { Box } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
-import { ENZ_CLIP_PATH_RIGHT } from '../nodes';
+import { ENZ_CLIP_PATH_RIGHT, STIM_CLIP_PATH } from '../nodes';
 import PlotSquiggleIcon from '../PlotSquiggleIcon';
 import { PLOT_WINDOW_COLORS } from '../colorUtils';
 
@@ -16,7 +16,7 @@ const ICON_SIZE = { width: 56, height: 40 };
 // fallback needs a pre-selected pool for the enzyme case, since a plain
 // click has no drop position to hit-test against. The plot icon has no
 // click fallback at all -- plotting nothing makes sense without a target.
-function DragIcon({ type, onClick, clickDisabled, title, children }) {
+function DragIcon({ type, onClick, clickDisabled, title, size, children }) {
   const handleDragStart = (event) => {
     event.dataTransfer.setData('application/kkit-node-type', type);
     event.dataTransfer.effectAllowed = 'move';
@@ -32,7 +32,7 @@ function DragIcon({ type, onClick, clickDisabled, title, children }) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        ...ICON_SIZE,
+        ...(size || ICON_SIZE),
         cursor: clickDisabled ? 'grab' : 'pointer',
         userSelect: 'none',
         flexShrink: 0,
@@ -108,6 +108,58 @@ function EnzIcon() {
         }}
       >
         Enz
+      </Box>
+    </Box>
+  );
+}
+
+// Matches the real ConcChanNode's hollow-cylinder shape, with its name
+// (here the palette's generic "Pore" label) inside the hollow.
+function ConcChanIcon() {
+  const width = 96;
+  const height = 52;
+  const capRx = 10;
+  const railY = 6;
+  return (
+    <Box sx={{ position: 'relative', width, height }}>
+      <svg width={width} height={height}>
+        <line x1={capRx} y1={railY} x2={width - capRx} y2={railY} stroke="#333" strokeWidth="2" />
+        <line x1={capRx} y1={height - railY} x2={width - capRx} y2={height - railY} stroke="#333" strokeWidth="2" />
+        <ellipse cx={capRx} cy={height / 2} rx={capRx - 1} ry={height / 2 - railY} fill="#8ecae6" stroke="#333" strokeWidth="2" />
+        <ellipse
+          cx={width - capRx}
+          cy={height / 2}
+          rx={capRx - 1}
+          ry={height / 2 - railY}
+          fill="#8ecae6"
+          stroke="#333"
+          strokeWidth="2"
+        />
+      </svg>
+      <Box
+        sx={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 12,
+          fontWeight: 'bold',
+        }}
+      >
+        Pore
+      </Box>
+    </Box>
+  );
+}
+
+// Same lightning-bolt clip-path as the real StimNode.
+function StimIcon() {
+  return (
+    <Box sx={{ position: 'relative', width: 36, height: 46 }}>
+      <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, height: 40, background: '#ffd60a', clipPath: STIM_CLIP_PATH }} />
+      <Box sx={{ position: 'absolute', bottom: 0, left: 0, right: 0, fontSize: 9, fontWeight: 'bold', textAlign: 'center' }}>
+        Stim
       </Box>
     </Box>
   );
@@ -237,6 +289,17 @@ export default function EntityPalette({ onAddPool, onAddReac, onAddEnz, onUnplot
       </DragIcon>
       <DragIcon type="plot2" clickDisabled title="Drag onto a pool to plot it in Plot window 2">
         <PlotSquiggleIcon width={40} height={28} traceColor={PLOT_WINDOW_COLORS[2]} />
+      </DragIcon>
+      <DragIcon
+        type="concchan"
+        clickDisabled
+        size={{ width: 96, height: 52 }}
+        title="Drag onto a pool to attach a concentration channel (wire its in/out pools afterward)"
+      >
+        <ConcChanIcon />
+      </DragIcon>
+      <DragIcon type="stim" clickDisabled title="Drag onto a pool to drive its conc/concInit with a stimulus expression">
+        <StimIcon />
       </DragIcon>
       <DragIcon type="group" clickDisabled title="Drag inside a compartment (or group) to add an organizational group">
         <GroupIcon />

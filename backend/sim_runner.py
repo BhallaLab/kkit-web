@@ -8,6 +8,7 @@ import moose
 
 _PLOTS_SUBPATH = "plots"
 _SOLVE_TICK = 4
+_FUNC_TICK = 6
 _DEFAULT_SIMDT = 0.01
 
 
@@ -57,6 +58,15 @@ def build_solver(model_path, plot_dt):
     moose.setClock(_SOLVE_TICK, simdt)
     moose.useClock(_SOLVE_TICK, ksolve.path, "process")
     moose.useClock(_SOLVE_TICK, dsolve.path, "process")
+
+    # A Stimulus's Function drives its target pool's conc/concInit every
+    # timestep, not just once at reinit -- explicit scheduling here (rather
+    # than relying on whatever default tick a freshly-created Function
+    # happens to fall on) matches how the solver itself is explicitly
+    # scheduled just above, and guarantees the expression is actually
+    # re-evaluated at simdt resolution throughout the run.
+    moose.setClock(_FUNC_TICK, simdt)
+    moose.useClock(_FUNC_TICK, compt_path + "/##[ISA=Function]", "process")
 
 
 def build_plot_tables(model_path):

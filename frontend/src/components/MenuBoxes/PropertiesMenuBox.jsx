@@ -38,6 +38,11 @@ const EDITABLE_ROWS = {
   // classic sphere-equivalent convention), not a real CubeMesh field --
   // editing either one updates the other.
   compartment: [['volume', 'diameter']],
+  concchan: [['permeability']],
+};
+
+const READONLY_ROWS = {
+  concchan: [['numChan', 'flux']],
 };
 
 const ENZ_EDITABLE_ROWS = {
@@ -59,7 +64,8 @@ function editableRowsFor(node) {
 }
 
 function readOnlyRowsFor(node) {
-  return node.type === 'enz' ? ENZ_READONLY_ROWS[node.data.mechanism] : [];
+  if (node.type === 'enz') return ENZ_READONLY_ROWS[node.data.mechanism];
+  return READONLY_ROWS[node.type] || [];
 }
 
 function initialFieldsFor(node) {
@@ -70,6 +76,10 @@ function initialFieldsFor(node) {
       fields[key] = formatNumber(node.data[key]);
     });
   if (node.type === 'pool') fields.isBuffered = !!node.data.isBuffered;
+  // expr is free text (a muParser-style expression, function of t), not a
+  // number -- kept as a plain string rather than run through
+  // formatNumber/parseFloat the way every other editable field is.
+  if (node.type === 'stim') fields.expr = node.data.expr ?? '';
   fields.flipped = !!node.data.flipped;
   return fields;
 }
@@ -79,6 +89,8 @@ function titleFor(node) {
   if (node.type === 'reac') return 'Reaction';
   if (node.data.type === 'group') return 'Group';
   if (node.type === 'compartment') return 'Compartment';
+  if (node.type === 'concchan') return 'Concentration Channel';
+  if (node.type === 'stim') return 'Stimulus';
   return `Enzyme (${node.data.mechanism})`;
 }
 
@@ -93,7 +105,7 @@ export default function PropertiesMenuBox({ node, onSave, onToggleFlip }) {
     return (
       <Box sx={{ p: 2, background: '#f5f5f5', borderRadius: 2, height: '100%' }}>
         <Typography color="text.secondary">
-          Click a pool, reaction, enzyme, group, or compartment in the diagram to edit its properties.
+          Click a pool, reaction, enzyme, channel, stimulus, group, or compartment in the diagram to edit its properties.
         </Typography>
       </Box>
     );
@@ -162,6 +174,34 @@ export default function PropertiesMenuBox({ node, onSave, onToggleFlip }) {
           </Grid>
         ))}
 
+        {node.type === 'stim' && (
+          <>
+            <Grid size={12}>
+              <TextField
+                fullWidth
+                label="Expression (function of t, in seconds)"
+                size="small"
+                multiline
+                minRows={2}
+                value={fields.expr}
+                onChange={(e) => setField('expr', e.target.value)}
+                helperText="Checked for negative values across the Run panel's runtime before it's saved."
+              />
+            </Grid>
+            <Grid size={12}>
+              <TextField
+                fullWidth
+                label="Drives"
+                size="small"
+                value={node.data.field || ''}
+                slotProps={{ input: { readOnly: true } }}
+                variant="filled"
+                helperText="conc for a regular pool, concInit for a buffered one -- set automatically from the target pool."
+              />
+            </Grid>
+          </>
+        )}
+
         {node.type === 'pool' && (
           <Grid size={12}>
             <FormControlLabel
@@ -210,7 +250,7 @@ export default function PropertiesMenuBox({ node, onSave, onToggleFlip }) {
           />
         </Grid>
 
-        {node.data.type !== 'group' && node.data.type !== 'compartment' && (
+        {!['group', 'compartment', 'stim'].includes(node.data.type) && (
           <Grid size={12}>
             <FormControlLabel
               control={
@@ -226,6 +266,8 @@ export default function PropertiesMenuBox({ node, onSave, onToggleFlip }) {
               label={
                 node.type === 'pool'
                   ? 'Flip orientation (swap left/right connection sides)'
+                  : node.type === 'concchan'
+                  ? 'Flip orientation (swap influx/efflux sides)'
                   : 'Flip orientation (swap substrate/product sides)'
               }
             />

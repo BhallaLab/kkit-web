@@ -1,7 +1,10 @@
 import html
 import itertools
+import json
 import os
 import re
+import subprocess
+import sys
 import tempfile
 
 import libsbml
@@ -16,11 +19,15 @@ from moose_graph import (
     describe_enz,
     describe_group,
     describe_compartment,
+    describe_concchan,
+    describe_stim,
     create_info,
     is_enz_complex,
     container_parent_id,
     diameter_to_volume,
     name_path,
+    normalize_color,
+    _stim_field,
 )
 from sim_runner import run_simulation
 
@@ -183,7 +190,7 @@ def _snapshot_positions(model_path):
     running session) and patch the written XML with the true values (see
     _fix_positions_in_sbml)."""
     snapshot = {}
-    for isa in ("PoolBase", "Reac", "EnzBase"):
+    for isa in ("PoolBase", "Reac", "EnzBase", "ConcChan"):
         for e in moose.wildcardFind(f"{model_path}/##[ISA={isa}]"):
             e = moose.element(e)
             if moose.exists(e.path + "/info"):
@@ -371,6 +378,127 @@ def _extract_plot_windows(content, model_path):
     return result
 
 
+_KKIT_STIM_TAG_RE = re.compile(
+    r'<kkit:stimulus[^>]*\bname="([^"]*)"[^>]*\bfield="([^"]*)"[^>]*\bx="([^"]*)"[^>]*\by="([^"]*)"[^>]*>'
+    r"(.*?)</kkit:stimulus>",
+    re.DOTALL,
+)
+_RULE_BLOCK_RE = re.compile(r"<listOfRules>.*?</listOfRules>", re.DOTALL)
+
+
+def _snapshot_stims(model_path):
+    """Function-based Stimulus objects: moose.writeSBML doesn't represent
+    them faithfully at all -- verified directly, it flattens the valueOut
+    connection into an *invalid* SBML assignmentRule referencing the bare
+    identifier 't' (not a valid reference to any species/compartment/
+    parameter/reaction, so any strict SBML consumer rejects it), and the
+    Function object's own identity, expr and position are lost from the
+    file entirely. Persisted instead via a custom annotation on the target
+    species (see _inject_stim_annotations), the same approach already used
+    for plot windows -- snapshotting here (rather than reading back
+    anything from the written file) since nothing about a Stimulus survives
+    the write in a usable form to read back from."""
+    stims = []
+    for f in moose.wildcardFind(f"{model_path}/##[ISA=Function]"):
+        f = moose.element(f)
+        target_path, dest_field = _stim_field(f)
+        if not target_path or not dest_field:
+            continue
+        info = moose.element(f.path + "/info") if moose.exists(f.path + "/info") else None
+        stims.append({
+            "name": f.name,
+            "expr": f.expr,
+            "field": dest_field[3].lower() + dest_field[4:],
+            "target_path": target_path,
+            "x": info.x if info else 0.0,
+            "y": info.y if info else 0.0,
+        })
+    return stims
+
+
+def _inject_stim_annotations(content, model_path, stims):
+    if not stims:
+        return content
+    # moose.writeSBML's Function->assignmentRule serialization is broken in
+    # more than one way: it references the bare identifier 't' (not a
+    # valid SBML variable reference at all), and -- verified directly, when
+    # the target pool is a group member -- sometimes references the
+    # *group's* own id instead of the pool's species id, an outright wrong
+    # target rather than just an invalid one. Since this app never writes
+    # a genuine SBML rule any other way, every <listOfRules> entry in a
+    # file it produces exists only as this same broken byproduct -- so the
+    # whole block is dropped unconditionally (rather than trying to
+    # surgically match rules to targets by variable id, which the second
+    # bug defeats) before our own replacement annotation goes in.
+    content = _RULE_BLOCK_RE.sub("", content)
+    doc = libsbml.readSBMLFromString(content)
+    model = doc.getModel()
+    if model is None:
+        return content
+    paths = _SbmlNamePaths(model)
+    name_path_to_species_id = {
+        paths.species_path(sp.getId()): sp.getId() for sp in model.getListOfSpecies()
+    }
+
+    by_species_id = {}
+    for stim in stims:
+        sid = name_path_to_species_id.get(name_path(stim["target_path"], model_path))
+        if sid is not None:
+            by_species_id.setdefault(sid, []).append(stim)
+    if not by_species_id:
+        return content
+
+    def _replace(m):
+        sid_match = _ID_ATTR_RE.search(m.group(0))
+        if not sid_match or sid_match.group(1) not in by_species_id:
+            return m.group(0)
+        block = m.group(0)
+        tags = "".join(
+            f'<kkit:stimulus xmlns:kkit="{_KKIT_NS}" name="{html.escape(s["name"])}" '
+            f'field="{s["field"]}" x="{s["x"]}" y="{s["y"]}">'
+            f'{html.escape(s["expr"])}</kkit:stimulus>'
+            for s in by_species_id[sid_match.group(1)]
+        )
+        if "</annotation>" in block:
+            return block.replace("</annotation>", tags + "</annotation>", 1)
+        return block.replace("</species>", f"<annotation>{tags}</annotation></species>", 1)
+
+    return _SPECIES_BLOCK_RE.sub(_replace, content)
+
+
+def _restore_stims(doc, model_path):
+    """Rebuilds each Stimulus's actual moose.Function object (expr, target
+    connection, position) from the custom annotation this app writes on
+    save (see _inject_stim_annotations) -- moose's own writeSBML+readSBML
+    round-trip loses a Stimulus entirely (see _snapshot_stims's docstring),
+    so this is the only path that recreates it at all, mirroring how
+    _restore_group_annotations recreates group boxes after the fact."""
+    model = doc.getModel()
+    if model is None:
+        return
+    paths = _SbmlNamePaths(model)
+    live_by_path = {}
+    for p in moose.wildcardFind(model_path + "/##[ISA=PoolBase]"):
+        p = moose.element(p)
+        live_by_path[name_path(p.path, model_path)] = p.path
+
+    for sp in model.getListOfSpecies():
+        target_path = live_by_path.get(paths.species_path(sp.getId()))
+        if target_path is None:
+            continue
+        for m in _KKIT_STIM_TAG_RE.finditer(sp.getAnnotationString() or ""):
+            name, field, x, y, expr = m.groups()
+            target = moose.element(target_path)
+            container = target.parent.path
+            stim_name = _unique_name(container, name or "stim")
+            func = moose.Function(f"{container}/{stim_name}")
+            func.expr = html.unescape(expr)
+            func.doEvalAtReinit = True
+            dest_field = "set" + field[0].upper() + field[1:] if field else "setConc"
+            moose.connect(func, "valueOut", target, dest_field)
+            create_info(func.path, float(x), float(y), color="red")
+
+
 _GROUP_BLOCK_RE = re.compile(r"<groups:group\b.*?</groups:group>", re.DOTALL)
 _GROUPS_ID_ATTR_RE = re.compile(r'groups:id="([^"]+)"')
 _GROUP_ANN_OPEN_RE = re.compile(r"(<moose:GroupAnnotation>)")
@@ -472,6 +600,67 @@ def _restore_group_annotations(doc, model_path):
         )
 
 
+_LIST_OF_REACTIONS_OPEN_RE = re.compile(r"<listOfReactions\b[^>]*>")
+_LIST_OF_REACTIONS_SELFCLOSE_RE = re.compile(r"<listOfReactions\s*/>")
+_DUMMY_REAC_ID = "__kkitweb_dummy_reac"
+_DUMMY_REAC_XML_TEMPLATE = (
+    f'<reaction id="{_DUMMY_REAC_ID}" reversible="false" fast="false">'
+    '<listOfReactants><speciesReference species="{sid}" stoichiometry="1" constant="false"/></listOfReactants>'
+    '<listOfProducts><speciesReference species="{sid}" stoichiometry="1" constant="false"/></listOfProducts>'
+    '<kineticLaw><math xmlns="http://www.w3.org/1998/Math/MathML"><cn>0</cn></math></kineticLaw>'
+    "</reaction>"
+)
+
+
+def _has_real_reaction(model):
+    """True if the model has at least one <reaction> that moose.readSBML
+    will actually turn into a Reac or EnzBase object -- a ConcChan is also
+    written as a plain SBML <reaction> (tagged moose:Channel, see
+    moose_graph.name_path's docstring) but becomes a moose.ConcChan on
+    reload instead, so it does NOT count toward the ISA=Reac/EnzBase check
+    _ensure_reaction_present is working around; model.getNumReactions()
+    alone can't tell the two apart."""
+    for i in range(model.getNumReactions()):
+        if "<moose:Channel>" not in (model.getReaction(i).getAnnotationString() or ""):
+            return True
+    return False
+
+
+def _ensure_reaction_present(content, model):
+    """moose.readSBML has a confirmed bug (verified directly): if the file
+    it's reading produces zero Reac/EnzBase objects -- true for *any*
+    reaction-free model, not just a ConcChan/Stimulus-only one, even a
+    single bare pool with no reactions at all -- it silently deletes the
+    ENTIRE freshly-loaded model and reports a generic "Atleast one
+    reaction should be present to display in the widget" message instead
+    of the real structural content. A harmless zero-rate self-reaction on
+    the file's own first species (reused, not a synthetic one -- SBML
+    allows the same species as both reactant and product) is injected here
+    before moose ever sees the file, whenever it has no such reaction of
+    its own -- stripped back out of the reloaded live model immediately
+    after (see _strip_dummy_reaction) -- invisible both for round-trips
+    through this app's own save and for a genuinely reaction-free foreign
+    file."""
+    if model is None or _has_real_reaction(model):
+        return content
+    species = model.getListOfSpecies()
+    if species.size() == 0:
+        return content
+    dummy = _DUMMY_REAC_XML_TEMPLATE.format(sid=species.get(0).getId())
+    if _LIST_OF_REACTIONS_SELFCLOSE_RE.search(content):
+        return _LIST_OF_REACTIONS_SELFCLOSE_RE.sub(f"<listOfReactions>{dummy}</listOfReactions>", content, count=1)
+    if _LIST_OF_REACTIONS_OPEN_RE.search(content):
+        return _LIST_OF_REACTIONS_OPEN_RE.sub(lambda m: m.group(0) + dummy, content, count=1)
+    return content.replace("</model>", f"<listOfReactions>{dummy}</listOfReactions></model>", 1)
+
+
+def _strip_dummy_reaction(model_path):
+    for e in moose.wildcardFind(f"{model_path}/##[ISA=Reac]"):
+        e = moose.element(e)
+        if e.name.startswith(_DUMMY_REAC_ID):
+            moose.delete(e.path)
+
+
 def _unwrap_notes(notes_xml):
     if not notes_xml:
         return ""
@@ -500,6 +689,20 @@ def _new_model_path():
 def handle_error(err):
     app.logger.exception("request failed")
     return jsonify({"error": str(err)}), 500
+
+
+@app.post("/api/new_model")
+def new_model():
+    """Starts a fresh, empty model -- just the default 'kinetics'
+    compartment, no pools/reactions -- rather than pre-loading any example
+    file. Used for the app's own initial load (see App.jsx) and for
+    File > New window."""
+    model_path = _new_model_path()
+    moose.Neutral(model_path)
+    c = moose.CubeMesh(f"{model_path}/kinetics")
+    c.volume = 1.6667e-21
+    create_info(c.path, 0.0, 0.0, width=8.0, height=6.0)
+    return jsonify(build_graph(model_path))
 
 
 @app.post("/api/load_gfile")
@@ -538,7 +741,7 @@ def get_graph():
     return jsonify(build_graph(_current_model_path))
 
 
-def _update_node(node_id, fields, numeric_fields, bool_fields, describe_fn):
+def _update_node(node_id, fields, numeric_fields, bool_fields, describe_fn, string_fields=()):
     if _current_model_path is None or not node_id or not node_id.startswith(_current_model_path):
         return jsonify({"error": "invalid or stale node id"}), 400
     if not moose.exists(node_id):
@@ -558,8 +761,12 @@ def _update_node(node_id, fields, numeric_fields, bool_fields, describe_fn):
             setattr(elem, key, float(value))
         elif key in bool_fields:
             setattr(elem, key, bool(value))
-        elif key in ("color", "notes"):
-            setattr(info, key, value)
+        elif key in string_fields:
+            setattr(elem, key, value)
+        elif key == "color":
+            info.color = normalize_color(value)
+        elif key == "notes":
+            info.notes = value
 
     result = describe_fn(elem.path)
     result["previousId"] = node_id
@@ -679,6 +886,8 @@ def add_edge():
     err = _validate_edge_ids(from_id, to_id)
     if err:
         return jsonify({"error": err}), 400
+    if is_enz_complex(from_id) or is_enz_complex(to_id):
+        return jsonify({"error": "an enzyme's complex pool can't be connected to anything"}), 400
 
     if edge_type == "substrate":
         moose.connect(moose.element(to_id), "sub", moose.element(from_id), "reac")
@@ -686,6 +895,16 @@ def add_edge():
     elif edge_type == "product":
         moose.connect(moose.element(from_id), "prd", moose.element(to_id), "reac")
         stoich = sum(1 for n in moose.element(from_id).neighbors["prd"] if n.path == to_id)
+    elif edge_type == "chanIn":
+        # A ConcChan's two exchange partners are wired after the fact via
+        # ordinary drag-to-connect, unlike its structural parent pool (set
+        # at creation, see create_concchan) -- mirrors substrate/product's
+        # own pool-to/from-reac shape exactly (chan plays the reac/enz role).
+        moose.connect(moose.element(to_id), "in", moose.element(from_id), "reac")
+        stoich = sum(1 for n in moose.element(to_id).neighbors["in"] if n.path == from_id)
+    elif edge_type == "chanOut":
+        moose.connect(moose.element(from_id), "out", moose.element(to_id), "reac")
+        stoich = sum(1 for n in moose.element(from_id).neighbors["out"] if n.path == to_id)
     else:
         return jsonify({"error": f"unsupported edge type: {edge_type}"}), 400
 
@@ -697,7 +916,10 @@ def add_edge():
     return jsonify({"ok": True, "stoich": stoich})
 
 
-_EDGE_SRC_FIELD = {"substrate": "subOut", "product": "prdOut"}
+_EDGE_SRC_FIELD = {
+    "substrate": "subOut", "product": "prdOut",
+    "chanIn": "inPoolOut", "chanOut": "outPoolOut",
+}
 
 
 @app.post("/api/remove_edge")
@@ -710,8 +932,8 @@ def remove_edge():
     if err:
         return jsonify({"error": err}), 400
 
-    reac_or_enz_id = to_id if edge_type == "substrate" else from_id
-    pool_id = from_id if edge_type == "substrate" else to_id
+    reac_or_enz_id = to_id if edge_type in ("substrate", "chanIn") else from_id
+    pool_id = from_id if edge_type in ("substrate", "chanIn") else to_id
     src_field = _EDGE_SRC_FIELD[edge_type]
 
     def _matches(msg):
@@ -861,6 +1083,8 @@ def create_enz():
         return jsonify({"error": "invalid or missing parent pool"}), 400
     if not moose.exists(parent_id):
         return jsonify({"error": f"parent pool not found: {parent_id}"}), 404
+    if is_enz_complex(parent_id):
+        return jsonify({"error": "an enzyme's complex pool can't be connected to anything"}), 400
 
     parent = moose.element(parent_id)
     name = _unique_name(parent_id, body.get("name") or "enz")
@@ -874,6 +1098,177 @@ def create_enz():
     create_info(e.path, x, y)
     create_info(cplx.path, x + 0.5, y - 0.5)
     return jsonify(describe_enz(e.path))
+
+
+@app.post("/api/create_concchan")
+def create_concchan():
+    """A ConcChan is structurally nested under its 'parent' pool -- the one
+    whose abundance drives the channel (see moose_graph.describe_concchan)
+    -- exactly like an enzyme is nested under its substrate. Its actual
+    exchange partners (in/out pools) are wired afterward via ordinary
+    drag-to-connect (see add_edge's chanIn/chanOut handling), not at
+    creation time -- a single drop can only designate one pool."""
+    body = request.json or {}
+    parent_id = body.get("parentPoolId")
+    if _current_model_path is None or not parent_id or not parent_id.startswith(_current_model_path):
+        return jsonify({"error": "invalid or missing parent pool"}), 400
+    if not moose.exists(parent_id):
+        return jsonify({"error": f"parent pool not found: {parent_id}"}), 404
+    if is_enz_complex(parent_id):
+        return jsonify({"error": "an enzyme's complex pool can't be connected to anything"}), 400
+
+    parent = moose.element(parent_id)
+    name = _unique_name(parent_id, body.get("name") or "pore")
+    c = moose.ConcChan(f"{parent_id}/{name}")
+    c.permeability = 1.0
+    moose.connect(parent, "nOut", c, "setNumChan")
+    create_info(c.path, float(body.get("x", 0)), float(body.get("y", 0)))
+    return jsonify(describe_concchan(c.path))
+
+
+@app.post("/api/update_concchan")
+def update_concchan():
+    body = request.json or {}
+    return _update_node(
+        body.get("id"), body.get("fields", {}), {"permeability"}, set(), describe_concchan
+    )
+
+
+_STIM_CHECK_SCRIPT = """
+import json, sys
+import moose
+
+expr = sys.argv[1]
+runtime = float(sys.argv[2])
+n_samples = 100
+dt = runtime / n_samples
+
+moose.Neutral("/check")
+func = moose.Function("/check/f")
+func.expr = expr
+func.mode = 1
+tab = moose.Table2("/check/t")
+moose.connect(tab, "requestOut", func, "getValue")
+moose.setClock(0, dt)
+moose.useClock(0, "/check/##", "process")
+moose.reinit()
+moose.start(runtime)
+print(json.dumps([float(v) for v in tab.vector]))
+"""
+
+
+def _check_stim_expr(expr, runtime):
+    """Evaluates `expr` (a Stimulus's muParser expression, a function of t)
+    at 100 samples across [0, runtime] and reports whether any sampled
+    value is negative -- an illegal concentration. Run as a completely
+    separate OS process (its own moose instance) rather than in-process:
+    moose.start() advances every object on every currently-scheduled clock
+    globally, not just a chosen subtree, so evaluating this in-process
+    would also silently re-advance the live model's own solver/plot tables
+    if they're still scheduled from a previous run (verified directly that
+    Ksolve/Table2 stay attached to their ticks after a run completes) --
+    corrupting the live session's actual concentrations as a side effect of
+    what's meant to be a read-only check."""
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", _STIM_CHECK_SCRIPT, expr, str(runtime)],
+            capture_output=True, text=True, timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        return "stimulus check timed out", None
+    if proc.returncode != 0:
+        last_line = proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else "invalid expression"
+        return f"invalid expression: {last_line}", None
+    try:
+        values = json.loads(proc.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return "could not evaluate expression", None
+    negative = [v for v in values if v < 0]
+    if negative:
+        return (
+            f"expression goes negative (e.g. {negative[0]:.4g}) somewhere between "
+            f"t=0 and t={runtime} -- concentrations can't be negative",
+            None,
+        )
+    return None, values
+
+
+@app.post("/api/check_stim")
+def check_stim():
+    body = request.json or {}
+    expr = body.get("expr", "")
+    try:
+        runtime = float(body.get("runtime", 1.0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "runtime must be a number"}), 400
+    if runtime <= 0:
+        return jsonify({"error": "runtime must be positive"}), 400
+    error, _ = _check_stim_expr(expr, runtime)
+    if error:
+        return jsonify({"error": error}), 400
+    return jsonify({"ok": True})
+
+
+_STIM_FIELD_BY_BUFFERED = {True: "setConcInit", False: "setConc"}
+
+
+@app.post("/api/create_stim")
+def create_stim():
+    """A Stimulus is a moose.Function whose valueOut drives a target pool's
+    conc (or concInit, if the pool is buffered) -- see jardesigner's
+    _buildOneStim, the same mechanism this mirrors. Created directly under
+    whatever container the target pool itself lives in (a plain sibling,
+    not nested under the pool), same as create_pool/create_reac."""
+    body = request.json or {}
+    target_id = body.get("targetId")
+    if _current_model_path is None or not target_id or not target_id.startswith(_current_model_path):
+        return jsonify({"error": "invalid or missing target pool"}), 400
+    if not moose.exists(target_id):
+        return jsonify({"error": f"target pool not found: {target_id}"}), 404
+    if is_enz_complex(target_id):
+        return jsonify({"error": "an enzyme's complex pool can't be connected to anything"}), 400
+
+    expr = body.get("expr") or "0"
+    try:
+        runtime = float(body.get("runtime", 1.0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "runtime must be a number"}), 400
+    error, _ = _check_stim_expr(expr, runtime)
+    if error:
+        return jsonify({"error": error}), 400
+
+    target = moose.element(target_id)
+    container = target.parent.path
+    name = _unique_name(container, body.get("name") or "stim")
+    func = moose.Function(f"{container}/{name}")
+    func.expr = expr
+    func.doEvalAtReinit = True
+    dest_field = _STIM_FIELD_BY_BUFFERED[bool(target.isBuffered)]
+    moose.connect(func, "valueOut", target, dest_field)
+    create_info(func.path, float(body.get("x", 0)), float(body.get("y", 0)), color="red")
+    return jsonify(describe_stim(func.path))
+
+
+@app.post("/api/update_stim")
+def update_stim():
+    body = request.json or {}
+    node_id = body.get("id")
+    fields = dict(body.get("fields", {}))
+    if _current_model_path is None or not node_id or not node_id.startswith(_current_model_path):
+        return jsonify({"error": "invalid or stale node id"}), 400
+    if not moose.exists(node_id):
+        return jsonify({"error": f"node not found: {node_id}"}), 404
+
+    if "expr" in fields:
+        try:
+            runtime = float(body.get("runtime", 1.0))
+        except (TypeError, ValueError):
+            return jsonify({"error": "runtime must be a number"}), 400
+        error, _ = _check_stim_expr(fields["expr"], runtime)
+        if error:
+            return jsonify({"error": error}), 400
+
+    return _update_node(node_id, fields, set(), set(), describe_stim, string_fields={"expr"})
 
 
 @app.post("/api/delete_node")
@@ -926,6 +1321,7 @@ def save_sbml():
     plots = body.get("plots") or {}
     snapshot = _snapshot_positions(_current_model_path)
     group_snapshot = _snapshot_group_boxes(_current_model_path)
+    stim_snapshot = _snapshot_stims(_current_model_path)
     fd, path = tempfile.mkstemp(suffix=".xml")
     os.close(fd)
     moose.writeSBML(_current_model_path, path)
@@ -937,6 +1333,7 @@ def save_sbml():
     content = _fix_group_positions_in_sbml(content, group_snapshot)
     content = _fix_missing_reaction_group_memberships(content)
     content = _inject_plot_annotations(content, _current_model_path, plots)
+    content = _inject_stim_annotations(content, _current_model_path, stim_snapshot)
     if notes:
         doc = libsbml.readSBMLFromString(content)
         doc.getModel().setNotes(_wrap_notes(notes))
@@ -954,13 +1351,18 @@ def load_sbml():
     model = doc.getModel()
     if model is not None:
         notes = _unwrap_notes(model.getNotesString())
+    content_for_moose = _ensure_reaction_present(content, model)
     fd, path = tempfile.mkstemp(suffix=".xml")
     with os.fdopen(fd, "w") as f:
-        f.write(content)
+        f.write(content_for_moose)
     model_path = _new_model_path()
-    moose.readSBML(path, model_path)
+    _, load_error = moose.readSBML(path, model_path)
     os.remove(path)
+    if load_error:
+        return jsonify({"error": f"could not load SBML: {load_error.strip()}"}), 400
+    _strip_dummy_reaction(model_path)
     _restore_group_annotations(doc, model_path)
+    _restore_stims(doc, model_path)
     extra_plot_windows = _extract_plot_windows(content, model_path)
     result = build_graph(model_path, extra_plot_windows)
     result["notes"] = notes

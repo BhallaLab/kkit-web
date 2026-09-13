@@ -126,7 +126,7 @@ export default function MainDisplay({
   displayTab,
   setDisplayTab,
 }) {
-  const canAddEnz = selectedNode?.type === 'pool';
+  const canAddEnz = selectedNode?.type === 'pool' && !selectedNode.data.isEnzComplex;
 
   return (
     <Box

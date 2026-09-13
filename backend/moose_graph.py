@@ -4,9 +4,34 @@ This is NOT a persisted file format -- it's just the API response shape used
 to draw the React Flow canvas. Persistence goes through moose.loadModel
 (legacy .g import) and moose.writeSBML/readSBML (native save/load).
 """
+import colorsys
 import math
+import re
 
 import moose
+
+_HSL_RE = re.compile(r"^hsl\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%\s*\)$", re.IGNORECASE)
+
+
+def normalize_color(value):
+    """The frontend's color picker offers CSS hsl(...) swatches (see
+    colorUtils.js's RAINBOW_16) -- moose.writeSBML's own color parser only
+    understands a #hex string, a plain color name, or a bare comma-
+    separated r,g,b tuple (verified directly: an hsl(...) string crashes
+    it -- colorCheck strips only bracket characters before splitting on
+    commas and calling int() on each piece, so "hsl(0, 70%, 50%)" becomes
+    "hsl0, 70%, 50%" -> int("hsl0") -> ValueError). Converting to #hex here,
+    at the single point every color is actually stored (create_info, and
+    server.py's update-field path), keeps every other color-consuming path
+    (SBML save foremost) working with a format moose can always handle."""
+    if not isinstance(value, str):
+        return value
+    m = _HSL_RE.match(value.strip())
+    if not m:
+        return value
+    h, s, l = (float(x) for x in m.groups())
+    r, g, b = colorsys.hls_to_rgb(h / 360.0, l / 100.0, s / 100.0)
+    return "#%02x%02x%02x" % (round(r * 255), round(g * 255), round(b * 255))
 
 # CubeMesh has no native "diameter" -- kkit's classic convention treats a
 # compartment's size as a sphere-equivalent diameter for display/editing
@@ -42,7 +67,7 @@ def create_info(path, x, y, color="white", notes="", width=0.0, height=0.0):
     info = moose.Annotator(path + "/info")
     info.x = x
     info.y = y
-    info.color = color
+    info.color = normalize_color(color)
     info.textColor = "black"
     info.notes = notes
     info.width = width
@@ -153,7 +178,13 @@ def name_path(path, model_path):
     elem = moose.element(path)
     if is_enz_complex(path):
         return (compartment_name(path, model_path), elem.name)
-    if elem.className in ("Enz", "MMenz"):
+    if elem.className in ("Enz", "MMenz", "ConcChan"):
+        # A ConcChan is structurally nested under its "parent" pool exactly
+        # like an enzyme is under its substrate -- and on the SBML side it
+        # round-trips the same way an MM enzyme does (as a <reaction> with a
+        # single modifier species, no dedicated moose:enzyme-style tag of
+        # its own -- verified directly), so it needs the same treatment
+        # here as Enz/MMenz for the two sides to agree.
         return name_path(elem.parent.path, model_path) + (elem.name,)
 
     names = [elem.name]
@@ -204,6 +235,49 @@ def describe_enz(path):
             "Km": e.Km, "kcat": e.kcat, "ratio": e.ratio,
         })
     return _node(e, "enz", extra)
+
+
+def describe_concchan(path):
+    c = moose.element(path)
+    in_pools = c.neighbors["in"]
+    out_pools = c.neighbors["out"]
+    return _node(c, "concchan", {
+        "permeability": c.permeability,
+        "numChan": c.numChan,
+        "flux": c.flux,
+        # The parent pool (like an enzyme's substrate) is structural --
+        # it's this element's own MOOSE parent, not a message neighbor.
+        "parentPoolId": c.parent.path,
+        "inPoolId": in_pools[0].path if in_pools else None,
+        "outPoolId": out_pools[0].path if out_pools else None,
+    })
+
+
+def _stim_field(func):
+    """Which pool field (setConc/setConcInit) a Stimulus Function's
+    valueOut is wired to -- read back from the live message itself (not
+    re-derived from the target's current isBuffered state), so a stimulus
+    keeps behaving the way it was actually built even if the target pool's
+    buffered flag is changed afterward."""
+    for m in func.msgOut:
+        msg = moose.element(m)
+        if "valueOut" in msg.srcFieldsOnE1:
+            dest = msg.destFieldsOnE2[0] if msg.destFieldsOnE2 else None
+            return moose.element(msg.e2).path, dest
+    return None, None
+
+
+def describe_stim(path):
+    f = moose.element(path)
+    target_id, dest_field = _stim_field(f)
+    return _node(f, "stim", {
+        "expr": f.expr,
+        "targetId": target_id,
+        # "conc" / "concInit" -- stripped of the "set" prefix moose's dest
+        # field names carry, to match the plain field names used elsewhere
+        # in this API (e.g. describe_pool's own "conc"/"concInit" keys).
+        "field": dest_field[3].lower() + dest_field[4:] if dest_field else None,
+    })
 
 
 def describe_group(path):
@@ -284,7 +358,19 @@ def build_graph(model_path, extra_plot_windows=None):
 
     for c in moose.wildcardFind(model_path + "/##[ISA=ConcChan]"):
         c = moose.element(c)
-        nodes.append(_node(c, "concchan"))
+        nodes.append(describe_concchan(c.path))
+        add_edge(c.parent.path, c.path, "chanParent")
+        for in_pool in c.neighbors["in"]:
+            add_edge(in_pool.path, c.path, "chanIn")
+        for out_pool in c.neighbors["out"]:
+            add_edge(c.path, out_pool.path, "chanOut")
+
+    for f in moose.wildcardFind(model_path + "/##[ISA=Function]"):
+        f = moose.element(f)
+        node = describe_stim(f.path)
+        nodes.append(node)
+        if node["targetId"]:
+            add_edge(f.path, node["targetId"], "stimTarget")
 
     for node in nodes:
         node["parentId"] = container_parent_id(node["id"], model_path)

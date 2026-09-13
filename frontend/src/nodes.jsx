@@ -152,8 +152,16 @@ export function PoolNode({ id, data, selected }) {
           borderRadius: 2,
         }}
       >
-        <Handle type="target" position={flipped ? Position.Right : Position.Left} />
-        <Handle type="source" position={flipped ? Position.Left : Position.Right} />
+        {/* An enzyme's hidden complex pool is never a connection endpoint
+            -- no substrate/product handles at all, so nothing can drag a
+            reaction/enzyme/channel edge onto it (it can still be plotted,
+            which isn't handle-based). */}
+        {!data.isEnzComplex && (
+          <>
+            <Handle type="target" position={flipped ? Position.Right : Position.Left} />
+            <Handle type="source" position={flipped ? Position.Left : Position.Right} />
+          </>
+        )}
         {data.name}
       </div>
       {data.plotWindow && (
@@ -255,6 +263,119 @@ export function EnzNode({ data, selected }) {
   );
 }
 
+// A ConcChan sits between its parent pool (structural link, like an
+// enzyme's substrate) and its in/out exchange pair -- drawn as a hollow
+// cylinder lying on its side (two rails plus open, colored end caps, with
+// nothing filling the middle) rather than a solid shape, to read as an
+// actual pore/tube things flow through. Three handles, arranged like an
+// enzyme's but rotated: a dot below for the structural parent link
+// (mirrors EnzNode's enzSite, but on the opposite edge), and left/right
+// arrow handles for influx/efflux that swap sides on flip exactly the way
+// SubstrateHandle/ProductHandle do, so the two arrows never cross.
+const CONC_CHAN_SIZE = { width: 128, height: 60 };
+
+function ChanInHandle({ flipped }) {
+  return <ArrowHandle type="target" id="chanIn" side={flipped ? 'right' : 'left'} pointsRight={!flipped} />;
+}
+
+function ChanOutHandle({ flipped }) {
+  return <ArrowHandle type="source" id="chanOut" side={flipped ? 'left' : 'right'} pointsRight={!flipped} />;
+}
+
+export function ConcChanNode({ data, selected }) {
+  const flipped = !!data.flipped;
+  const { width, height } = CONC_CHAN_SIZE;
+  const capRx = 10;
+  const railY = 6;
+  return (
+    <div style={{ position: 'relative', width, height }}>
+      <svg
+        width={width}
+        height={height}
+        style={{ position: 'absolute', inset: 0, overflow: 'visible', ...selectedGlow(selected) }}
+      >
+        <line x1={capRx} y1={railY} x2={width - capRx} y2={railY} stroke="#333" strokeWidth="2" />
+        <line x1={capRx} y1={height - railY} x2={width - capRx} y2={height - railY} stroke="#333" strokeWidth="2" />
+        <ellipse cx={capRx} cy={height / 2} rx={capRx - 1} ry={height / 2 - railY} fill={data.color} stroke="#333" strokeWidth="2" />
+        <ellipse
+          cx={width - capRx}
+          cy={height / 2}
+          rx={capRx - 1}
+          ry={height / 2 - railY}
+          fill={data.color}
+          stroke="#333"
+          strokeWidth="2"
+        />
+      </svg>
+      <Handle
+        type="target"
+        position={Position.Bottom}
+        id="chanParent"
+        style={{ ...dotHandleStyle, left: '50%', top: '100%', transform: 'translate(-50%, -50%)' }}
+      />
+      <ChanInHandle flipped={flipped} />
+      <ChanOutHandle flipped={flipped} />
+      {/* The name sits inside the hollow of the tube, between the two
+          rails, rather than floating above it. */}
+      <div
+        style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 12,
+          fontWeight: 'bold',
+          pointerEvents: 'none',
+        }}
+      >
+        {data.name}
+      </div>
+    </div>
+  );
+}
+
+// A Stimulus is a lightning bolt with a single handle at its tip, wired at
+// creation time to whichever pool it was dropped onto (see
+// App.jsx's handleAddStim) -- not itself re-connectable by dragging, same
+// as an enzyme's structural parent link.
+export const STIM_CLIP_PATH = 'polygon(55% 0%, 15% 55%, 45% 55%, 30% 100%, 85% 40%, 55% 40%)';
+
+export function StimNode({ data, selected }) {
+  return (
+    <div style={{ position: 'relative', width: 46, height: 56 }}>
+      <div
+        style={{
+          position: 'absolute',
+          inset: 0,
+          background: data.color,
+          clipPath: STIM_CLIP_PATH,
+          ...selectedGlow(selected),
+        }}
+      />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        id="stimTip"
+        style={{ ...dotHandleStyle, left: '38%', top: '95%', transform: 'translate(-50%, -50%)' }}
+      />
+      <div
+        style={{
+          position: 'absolute',
+          bottom: -16,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          fontSize: 11,
+          fontWeight: 'bold',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {data.name}
+      </div>
+    </div>
+  );
+}
+
 // Groups and compartments are containers, not molecules -- rendered as a
 // box behind their contents (see App.jsx's zIndex/parentId wiring) with a
 // name label and a manual resize handle. Compartment gets a second inset
@@ -321,7 +442,8 @@ export const nodeTypes = {
   pool: PoolNode,
   reac: ReacNode,
   enz: EnzNode,
-  concchan: PoolNode,
+  concchan: ConcChanNode,
+  stim: StimNode,
   // Registered as "kkitGroup", not "group" -- React Flow reserves the
   // literal type "group" for its own built-in group-node feature and
   // auto-applies a default CSS border to it (see App.jsx's

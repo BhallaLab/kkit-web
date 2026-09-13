@@ -1,12 +1,8 @@
-import { useState } from 'react';
 import { Box, Typography, TextField, Button, Grid, CircularProgress, Alert } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 
-export default function RunMenuBox({ onStart, onReset, isRunning, error, lastRuntime }) {
-  const [runtime, setRuntime] = useState('3000');
-  const [plotDt, setPlotDt] = useState('1');
-
+export default function RunMenuBox({ onStart, onReset, isRunning, error, lastRuntime, runtime, setRuntime, plotDt, setPlotDt }) {
   const runtimeNum = parseFloat(runtime);
   const plotDtNum = parseFloat(plotDt);
   const invalid = !(runtimeNum > 0) || !(plotDtNum > 0);

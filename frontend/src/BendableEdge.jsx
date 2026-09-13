@@ -9,15 +9,16 @@ const MAX_DEPARTURE_OFFSET = 60;
 // leave a handle before bending -- Left/Right handles get a horizontal
 // departure; the enzyme's Top site handle gets a vertical one.
 //
-// For the reac/enz substrate/product handles specifically (see nodes.jsx),
-// Position is chosen to make the anchor formula read whichever edge of the
-// triangle box holds the true touch point -- which, given how that box is
-// offset to protrude outside the node, always ends up being the edge
-// *opposite* the side the triangle actually protrudes toward. So for those
-// two handles only, the natural departure direction is the reverse of what
-// their Position would normally suggest; a plain pool handle (or the
-// enzyme's Top site handle) has no such inversion, since its Position
-// already matches its real side.
+// For the reac/enz substrate/product handles, and the ConcChan's
+// analogous chanIn/chanOut handles (see nodes.jsx's ArrowHandle, shared by
+// both), Position is chosen to make the anchor formula read whichever edge
+// of the triangle box holds the true touch point -- which, given how that
+// box is offset to protrude outside the node, always ends up being the
+// edge *opposite* the side the triangle actually protrudes toward. So for
+// those handles only, the natural departure direction is the reverse of
+// what their Position would normally suggest; a plain pool handle (or the
+// enzyme's/ConcChan's own structural parent-link handle) has no such
+// inversion, since its Position already matches its real side.
 function departureOffset(position, distance, invert) {
   const sign = invert ? -1 : 1;
   switch (position) {
@@ -89,8 +90,8 @@ export default function BendableEdge({
     { x: targetX, y: targetY },
     sourcePosition,
     targetPosition,
-    sourceHandleId === 'product',
-    targetHandleId === 'substrate'
+    sourceHandleId === 'product' || sourceHandleId === 'chanOut',
+    targetHandleId === 'substrate' || targetHandleId === 'chanIn'
   );
 
   const onPointerDown = useCallback((event) => {

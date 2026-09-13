@@ -33,6 +33,10 @@ export default function AppLayout({
   isRunning,
   runError,
   lastRuntime,
+  runtime,
+  setRuntime,
+  plotDt,
+  setPlotDt,
   plotData,
   plots,
   ...canvasProps
@@ -50,6 +54,10 @@ export default function AppLayout({
         isRunning={isRunning}
         error={runError}
         lastRuntime={lastRuntime}
+        runtime={runtime}
+        setRuntime={setRuntime}
+        plotDt={plotDt}
+        setPlotDt={setPlotDt}
       />
     ),
   };
