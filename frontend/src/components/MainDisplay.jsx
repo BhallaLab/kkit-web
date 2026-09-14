@@ -164,6 +164,7 @@ export default function MainDisplay({
   isValidConnection,
   onEdgesChange,
   plotData,
+  doseCurve,
   loadGeneration,
   onCanvasDrop,
   onAddPool,
@@ -228,7 +229,7 @@ export default function MainDisplay({
         </Box>
       </Box>
       <Box sx={{ flexGrow: 1, position: 'relative', display: displayTab === 1 ? 'block' : 'none' }}>
-        <PlotsPanel plotData={plotData} nodes={flowGraph.nodes} />
+        <PlotsPanel plotData={plotData} nodes={flowGraph.nodes} doseCurve={doseCurve} />
       </Box>
     </Box>
   );

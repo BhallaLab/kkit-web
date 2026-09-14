@@ -4,11 +4,13 @@ import TuneIcon from '@mui/icons-material/Tune';
 import AddCircleIcon from '@mui/icons-material/AddCircle';
 import PlayCircleIcon from '@mui/icons-material/PlayCircle';
 import BuildIcon from '@mui/icons-material/Build';
+import StairsIcon from '@mui/icons-material/Stairs';
 import FileMenuBox from './components/MenuBoxes/FileMenuBox';
 import PropertiesMenuBox from './components/MenuBoxes/PropertiesMenuBox';
 import AddMenuBox from './components/MenuBoxes/AddMenuBox';
 import RunMenuBox from './components/MenuBoxes/RunMenuBox';
 import ToolsMenuBox from './components/MenuBoxes/ToolsMenuBox';
+import DoseResponseMenuBox from './components/MenuBoxes/DoseResponseMenuBox';
 import MainDisplay from './components/MainDisplay';
 
 const MENU_ITEMS = [
@@ -17,6 +19,7 @@ const MENU_ITEMS = [
   { key: 'Properties', label: 'Properties', Icon: TuneIcon },
   { key: 'Add', label: 'Add', Icon: AddCircleIcon },
   { key: 'Tools', label: 'Tools', Icon: BuildIcon },
+  { key: 'DoseResponse', label: 'Dose Response', Icon: StairsIcon },
 ];
 
 export default function AppLayout({
@@ -42,6 +45,12 @@ export default function AppLayout({
   setPlotDt,
   plotData,
   plots,
+  doseParams,
+  setDoseParams,
+  doseRunning,
+  doseError,
+  onDoseStart,
+  onDoseHalt,
   ...canvasProps
 }) {
   const menuComponents = {
@@ -64,6 +73,17 @@ export default function AppLayout({
       />
     ),
     Tools: <ToolsMenuBox flowGraph={canvasProps.flowGraph} />,
+    DoseResponse: (
+      <DoseResponseMenuBox
+        flowGraph={canvasProps.flowGraph}
+        params={doseParams}
+        setParams={setDoseParams}
+        running={doseRunning}
+        error={doseError}
+        onStart={onDoseStart}
+        onHalt={onDoseHalt}
+      />
+    ),
   };
 
   return (

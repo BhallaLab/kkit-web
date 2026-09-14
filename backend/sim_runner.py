@@ -88,6 +88,103 @@ def build_plot_tables(model_path):
     return tables
 
 
+_COARSE_MULTIPLIERS = [1, 2, 5]
+_FINE_MULTIPLIERS = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8]
+
+# Ported from xdoser.g's own 8 concentration-range toggle buttons -- decade
+# 0 is 0.1 nM (1e-7 mM, matching this app's mM-valued concInit), each
+# subsequent decade x10.
+DOSE_DECADE_LABELS = ["0.1 nM", "1 nM", "10 nM", "100 nM", "1 µM", "10 µM", "100 µM", "1 mM"]
+
+
+def dose_concentrations(min_decade, max_decade, fine):
+    """Log-spaced concentrations (mM) spanning decades [min_decade,
+    max_decade] inclusive -- the same "1-2-5" (coarse, 3/decade) or
+    "1-1.2-1.5-2-2.5-3-4-5-6-8" (fine, 10/decade) per-decade spacing
+    xdoser.g's own hardcoded 22- and 72-entry tables used, generalized to
+    any decade range instead of a fixed table."""
+    multipliers = _FINE_MULTIPLIERS if fine else _COARSE_MULTIPLIERS
+    concs = []
+    for decade in range(min_decade, max_decade + 1):
+        base = 10.0 ** (decade - 7)
+        concs.extend(base * m for m in multipliers)
+    return concs
+
+
+def start_dose_response(model_path, input_id, output_id, concs, runtime, buffered, reset_each_level, plot_dt):
+    """Sets up one dose-response *session* -- ported from xdoser.g's
+    do_doser, but broken into a distinct step per dose level (see
+    step_dose_response) rather than one all-in-one blocking loop, so the
+    frontend can show progress and let the user halt between levels
+    (mirroring the original's own Halt button, which likewise only ever
+    took effect at the next do_run boundary, not mid-run).
+
+    Builds the solver once up front (this is one continuous series, not
+    independent runs) and snapshots the input pool's original concInit/
+    isBuffered so step_dose_response's caller can restore them via
+    finish_dose_response once the series ends or is halted."""
+    build_solver(model_path, plot_dt)
+    input_pool = moose.element(input_id)
+    moose.reinit()
+    return {
+        "model_path": model_path,
+        "input_id": input_id,
+        "output_id": output_id,
+        "concs": concs,
+        "index": 0,
+        "runtime": runtime,
+        "buffered": buffered,
+        "reset_each_level": reset_each_level,
+        "orig_conc_init": input_pool.concInit,
+        "orig_buffered": bool(input_pool.isBuffered),
+        "last_conc": 0.0,
+    }
+
+
+def step_dose_response(session):
+    """Runs exactly one dose level -- one distinct moose.start() call, as
+    many as concs -- and returns its (conc, response) result, or None once
+    every level has been run. "buffered" forces the input pool's concInit
+    and holds it fixed (isBuffered) at each level, exactly like a molecule
+    under experimental clamp; otherwise each level *adds* the level-to-
+    level concentration delta to the pool's live conc (an "incremented"/
+    injected dose) rather than resetting it outright. "reset_each_level"
+    reinits the whole model before this level (a fresh run from that
+    baseline) instead of letting the system evolve continuously from the
+    previous level's end state."""
+    index = session["index"]
+    concs = session["concs"]
+    if index >= len(concs):
+        return None
+    conc = concs[index]
+    input_pool = moose.element(session["input_id"])
+    output_pool = moose.element(session["output_id"])
+    if session["buffered"]:
+        input_pool.concInit = conc
+        input_pool.isBuffered = True
+        if session["reset_each_level"]:
+            moose.reinit()
+    elif session["reset_each_level"]:
+        input_pool.concInit = conc
+        moose.reinit()
+    else:
+        input_pool.conc = input_pool.conc + conc - session["last_conc"]
+    moose.start(session["runtime"])
+    session["last_conc"] = conc
+    session["index"] = index + 1
+    return {"conc": conc, "response": float(output_pool.conc)}
+
+
+def finish_dose_response(session):
+    """Restores the input pool's original concInit/isBuffered -- called
+    once the series completes (step_dose_response returns None) or the
+    user halts early, the same way the original tool put CoInit/
+    slave_enable back afterward."""
+    input_pool = moose.element(session["input_id"])
+    input_pool.concInit = session["orig_conc_init"]
+    input_pool.isBuffered = session["orig_buffered"]
+
+
 def run_simulation(model_path, runtime, plot_dt):
     build_solver(model_path, plot_dt)
     tables = build_plot_tables(model_path)

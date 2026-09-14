@@ -29,7 +29,14 @@ from moose_graph import (
     normalize_color,
     _stim_field,
 )
-from sim_runner import run_simulation
+from sim_runner import (
+    run_simulation,
+    start_dose_response,
+    step_dose_response,
+    finish_dose_response,
+    dose_concentrations,
+    DOSE_DECADE_LABELS,
+)
 from model_tools import model_size, find_dt, compare_groups, render_report
 
 _NOTES_BODY_RE = re.compile(r"<body[^>]*>\s*<p>(.*?)</p>\s*</body>", re.DOTALL)
@@ -1317,6 +1324,83 @@ def run_reset():
         return jsonify({"error": "no model loaded"}), 400
     moose.reinit()
     return jsonify(build_graph(_current_model_path))
+
+
+@app.get("/api/dose_response/decades")
+def dose_response_decades():
+    return jsonify({"labels": DOSE_DECADE_LABELS})
+
+
+# A single dose-response run in progress, one HTTP request per dose level
+# (see /step) rather than one all-in-one blocking request -- lets the
+# frontend show progress and halt between levels. Global/single-session,
+# matching _current_model_path's own single-active-model design.
+_dose_session = None
+
+
+@app.post("/api/dose_response/start")
+def dose_response_start():
+    global _dose_session
+    if _current_model_path is None or not moose.exists(_current_model_path):
+        return jsonify({"error": "no model loaded"}), 400
+    body = request.json or {}
+    input_id = body.get("inputId")
+    output_id = body.get("outputId")
+    if (
+        not input_id or not output_id
+        or not input_id.startswith(_current_model_path) or not output_id.startswith(_current_model_path)
+        or not moose.exists(input_id) or not moose.exists(output_id)
+    ):
+        return jsonify({"error": "pick both a variable pool and a monitored pool"}), 400
+    try:
+        min_decade = int(body.get("minDecade"))
+        max_decade = int(body.get("maxDecade"))
+        runtime = float(body.get("runtime", 100))
+        plot_dt = float(body.get("plotDt", 1))
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid numeric input"}), 400
+    if not (0 <= min_decade <= 7 and 0 <= max_decade <= 7):
+        return jsonify({"error": "concentration decade out of range"}), 400
+    if runtime <= 0 or plot_dt <= 0:
+        return jsonify({"error": "runtime and plotDt must be positive"}), 400
+    if min_decade > max_decade:
+        min_decade, max_decade = max_decade, min_decade
+
+    concs = dose_concentrations(min_decade, max_decade, bool(body.get("fine")))
+    if body.get("decreasing"):
+        concs = list(reversed(concs))
+
+    _dose_session = start_dose_response(
+        _current_model_path, input_id, output_id, concs, runtime,
+        bool(body.get("buffered")), bool(body.get("resetEachLevel")), plot_dt,
+    )
+    return jsonify({"total": len(concs)})
+
+
+@app.post("/api/dose_response/step")
+def dose_response_step():
+    global _dose_session
+    if _dose_session is None:
+        return jsonify({"error": "no dose-response run in progress"}), 400
+    result = step_dose_response(_dose_session)
+    if result is None:
+        finish_dose_response(_dose_session)
+        _dose_session = None
+        return jsonify({"done": True})
+    done = _dose_session["index"] >= len(_dose_session["concs"])
+    if done:
+        finish_dose_response(_dose_session)
+        _dose_session = None
+    return jsonify({"result": result, "done": done})
+
+
+@app.post("/api/dose_response/halt")
+def dose_response_halt():
+    global _dose_session
+    if _dose_session is not None:
+        finish_dose_response(_dose_session)
+        _dose_session = None
+    return jsonify({"ok": True})
 
 
 @app.post("/api/save_sbml")

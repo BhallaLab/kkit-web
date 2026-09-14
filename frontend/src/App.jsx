@@ -461,6 +461,30 @@ export default function App() {
   // `fitView` prop only ever runs once, on initial mount.
   const [loadGeneration, setLoadGeneration] = useState(0);
 
+  // Dose Response's whole panel state lives here (not as local state in
+  // DoseResponseMenuBox) so it survives switching to another menu tab and
+  // back -- only whichever menu is currently selected gets mounted (see
+  // AppLayout's menuComponents), so a plain local useState there would be
+  // thrown away on every tab switch.
+  const [doseParams, setDoseParams] = useState({
+    inputId: '',
+    outputId: '',
+    minDecade: 2,
+    maxDecade: 5,
+    fine: false,
+    buffered: true,
+    resetEachLevel: true,
+    decreasing: false,
+  });
+  const [doseRunning, setDoseRunning] = useState(false);
+  const [doseError, setDoseError] = useState(null);
+  // The completed/in-progress curve, shown in the Plots tab (not inline in
+  // DoseResponseMenuBox) -- `window` (1 or 2) is decided once at Start time
+  // per the user's own priority: an unused plot window first, otherwise
+  // plot2 even if that means displacing whatever it was already showing.
+  const [doseCurve, setDoseCurve] = useState(null);
+  const doseHaltRef = useRef(false);
+
   const handleGraphResult = useCallback((graph) => {
     if (graph.error) {
       setStatus(`error: ${graph.error}`);
@@ -471,6 +495,13 @@ export default function App() {
     setFlowGraph(toFlowGraph(graph, newScale));
     setSelectedNodeId(null);
     setStatus(`loaded ${graph.nodes.length} nodes, ${graph.edges.length} edges`);
+    // A dose-response curve/session refers to pool ids from whatever model
+    // was loaded when it ran -- meaningless (and its ids possibly stale or
+    // even reused by something else) once a new model replaces it.
+    doseHaltRef.current = true;
+    setDoseRunning(false);
+    setDoseError(null);
+    setDoseCurve(null);
     // Switching to Reaction Layout *before* bumping loadGeneration matters:
     // FitViewOnLoad's fitView call measures the canvas container, which
     // reports zero size while its tab is display:none -- if a load
@@ -1300,13 +1331,128 @@ export default function App() {
           setRunError(graph.error);
           return;
         }
-        handleGraphResult(graph);
+        // A reset is just moose.reinit() -- same pools/reacs/ids, only
+        // their values change -- so this rebuilds via the same preserve-
+        // by-id path refreshGraph uses for incremental edits, not
+        // handleGraphResult's full-load path, which would otherwise
+        // discard frontend-only state (flipped/color/plotWindow) that has
+        // no backend representation and so can't be recomputed from the
+        // reloaded graph alone. Also leaves dose-response state and the
+        // current display tab alone, since the model itself hasn't
+        // changed the way a fresh load would.
+        setFlowGraph((g) => {
+          const existingFlipped = {};
+          const existingColor = {};
+          const existingPlotWindow = {};
+          g.nodes.forEach((n) => {
+            existingFlipped[n.id] = n.data.flipped;
+            if (n.type === 'pool') {
+              existingColor[n.id] = n.data.color;
+              existingPlotWindow[n.id] = n.data.plotWindow;
+            }
+          });
+          return buildFlowNodes(graph, scale, {
+            flipped: existingFlipped,
+            color: existingColor,
+            plotWindow: existingPlotWindow,
+          });
+        });
+        setStatus(`reset ${graph.nodes.length} nodes to initial values`);
         setPlotData(null);
         setLastRuntime(null);
         setRunError(null);
       })
       .catch((err) => setRunError(String(err)));
-  }, [handleGraphResult]);
+  }, [scale]);
+
+  // One HTTP request per dose level (not one all-in-one blocking request)
+  // so progress can be shown and the user can halt between levels --
+  // mirrors xdoser.g's own Halt button, which likewise only ever took
+  // effect at the next do_run boundary, never truly mid-run.
+  const handleDoseStart = useCallback(() => {
+    const { inputId, outputId } = doseParams;
+    if (!inputId || !outputId) {
+      setDoseError('Pick both a variable pool and a monitored pool');
+      return;
+    }
+    doseHaltRef.current = false;
+    setDoseError(null);
+    setDoseRunning(true);
+    setDisplayTab(1);
+
+    // Which plot window slot the curve claims: an unused one first (plot1
+    // before plot2), otherwise plot2 regardless -- displacing whatever it
+    // was already showing, per the user's own priority order.
+    const plot1Used = flowGraph.nodes.some((n) => n.type === 'pool' && n.data.plotWindow === 1);
+    const targetWindow = plot1Used ? 2 : 1;
+    setDoseCurve({ window: targetWindow, inputId, outputId, points: [] });
+
+    // The dose-response plot itself (see PlotsPanel) updates after every
+    // step, which is the progress indicator -- no separate one needed.
+    const stepLoop = () => {
+      if (doseHaltRef.current) {
+        setDoseRunning(false);
+        return;
+      }
+      fetch(`${API_BASE}/api/dose_response/step`, { method: 'POST' })
+        .then((r) => r.json())
+        .then((step) => {
+          if (step.error) {
+            setDoseError(step.error);
+            setDoseRunning(false);
+            return;
+          }
+          if (step.result) {
+            setDoseCurve((c) => (c ? { ...c, points: [...c.points, step.result] } : c));
+          }
+          if (step.done || doseHaltRef.current) {
+            setDoseRunning(false);
+            return;
+          }
+          stepLoop();
+        })
+        .catch((err) => {
+          setDoseError(String(err));
+          setDoseRunning(false);
+        });
+    };
+
+    fetch(`${API_BASE}/api/dose_response/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        inputId,
+        outputId,
+        minDecade: doseParams.minDecade,
+        maxDecade: doseParams.maxDecade,
+        fine: doseParams.fine,
+        buffered: doseParams.buffered,
+        resetEachLevel: doseParams.resetEachLevel,
+        decreasing: doseParams.decreasing,
+        runtime: parseFloat(runtime) || 100,
+        plotDt: parseFloat(plotDt) || 1,
+      }),
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.error) {
+          setDoseError(res.error);
+          setDoseRunning(false);
+          return;
+        }
+        stepLoop();
+      })
+      .catch((err) => {
+        setDoseError(String(err));
+        setDoseRunning(false);
+      });
+  }, [doseParams, flowGraph.nodes, runtime, plotDt]);
+
+  const handleDoseHalt = useCallback(() => {
+    doseHaltRef.current = true;
+    setDoseRunning(false);
+    fetch(`${API_BASE}/api/dose_response/halt`, { method: 'POST' }).catch(() => {});
+  }, []);
 
   return (
     <AppLayout
@@ -1335,6 +1481,13 @@ export default function App() {
       plotDt={plotDt}
       setPlotDt={setPlotDt}
       plotData={plotData}
+      doseCurve={doseCurve}
+      doseParams={doseParams}
+      setDoseParams={setDoseParams}
+      doseRunning={doseRunning}
+      doseError={doseError}
+      onDoseStart={handleDoseStart}
+      onDoseHalt={handleDoseHalt}
       displayTab={displayTab}
       setDisplayTab={setDisplayTab}
       flowGraph={flowGraph}

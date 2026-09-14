@@ -3,7 +3,7 @@ import { Box, Typography } from '@mui/material';
 
 // Plotly's legend already toggles a trace's visibility on click (its
 // default itemclick behavior) -- no extra wiring needed for that.
-function PlotWindow({ traces, style }) {
+function PlotWindow({ traces, style, layout }) {
   return (
     <Box sx={{ height: '100%', width: '100%', ...style }}>
       <Plot
@@ -14,6 +14,7 @@ function PlotWindow({ traces, style }) {
           xaxis: { title: { text: 'Time (s)' } },
           yaxis: { title: { text: 'Conc (mM)' } },
           legend: { orientation: 'h' },
+          ...layout,
         }}
         style={{ width: '100%', height: '100%' }}
         useResizeHandler
@@ -23,17 +24,27 @@ function PlotWindow({ traces, style }) {
   );
 }
 
-export default function PlotsPanel({ plotData, nodes }) {
-  if (!plotData) {
-    return (
-      <Box sx={{ p: 2 }}>
-        <Typography color="text.secondary">
-          Run a simulation (see the Run panel) to see concentration traces here.
-        </Typography>
-      </Box>
-    );
-  }
+function doseWindowContent(doseCurve, nameById) {
+  const inputName = nameById[doseCurve.inputId] || 'dose';
+  const outputName = nameById[doseCurve.outputId] || 'response';
+  return {
+    traces: [
+      {
+        x: doseCurve.points.map((p) => p.conc),
+        y: doseCurve.points.map((p) => p.response),
+        type: 'scatter',
+        mode: 'lines+markers',
+        name: `${outputName} vs ${inputName}`,
+      },
+    ],
+    layout: {
+      xaxis: { title: { text: `${inputName} concInit (mM)` }, type: 'log' },
+      yaxis: { title: { text: `${outputName} conc (mM)` } },
+    },
+  };
+}
 
+export default function PlotsPanel({ plotData, nodes, doseCurve }) {
   const nameById = {};
   const colorById = {};
   const windowById = {};
@@ -52,16 +63,27 @@ export default function PlotsPanel({ plotData, nodes }) {
     line: { color: colorById[poolId] },
   });
 
-  const entries = Object.entries(plotData.series).filter(([poolId]) => windowById[poolId]);
+  const entries = plotData ? Object.entries(plotData.series).filter(([poolId]) => windowById[poolId]) : [];
   const traces1 = entries.filter(([poolId]) => windowById[poolId] === 1).map(toTrace);
   const traces2 = entries.filter(([poolId]) => windowById[poolId] === 2).map(toTrace);
 
-  if (traces1.length === 0 && traces2.length === 0) {
+  // A dose-response run claims one whole window slot (see App.jsx's
+  // handleDoseStart for how 1-vs-2 is decided) and displaces whatever
+  // that slot would otherwise have shown, rather than sharing it.
+  const window1 = doseCurve?.window === 1
+    ? doseWindowContent(doseCurve, nameById)
+    : traces1.length > 0 ? { traces: traces1 } : null;
+  const window2 = doseCurve?.window === 2
+    ? doseWindowContent(doseCurve, nameById)
+    : traces2.length > 0 ? { traces: traces2 } : null;
+
+  if (!window1 && !window2) {
     return (
       <Box sx={{ p: 2 }}>
         <Typography color="text.secondary">
-          No molecules are marked for plotting yet. Drag one of the two plot
-          icons (above the reaction layout) onto a molecule to plot it.
+          {plotData
+            ? "No molecules are marked for plotting yet. Drag one of the two plot icons (above the reaction layout) onto a molecule to plot it."
+            : 'Run a simulation (see the Run panel) or a Dose Response scan to see results here.'}
         </Typography>
       </Box>
     );
@@ -69,12 +91,12 @@ export default function PlotsPanel({ plotData, nodes }) {
 
   // Only one window in use -> it takes the full display; both in use ->
   // stacked one above the other, so an empty second window is never shown.
-  const showBoth = traces1.length > 0 && traces2.length > 0;
+  const showBoth = window1 && window2;
 
   return (
     <Box sx={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column' }}>
-      {traces1.length > 0 && <PlotWindow traces={traces1} style={{ height: showBoth ? '50%' : '100%' }} />}
-      {traces2.length > 0 && <PlotWindow traces={traces2} style={{ height: showBoth ? '50%' : '100%' }} />}
+      {window1 && <PlotWindow {...window1} style={{ height: showBoth ? '50%' : '100%' }} />}
+      {window2 && <PlotWindow {...window2} style={{ height: showBoth ? '50%' : '100%' }} />}
     </Box>
   );
 }
