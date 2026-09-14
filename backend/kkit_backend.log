@@ -8,19 +8,1179 @@ Press CTRL+C to quit
  * Restarting with stat
  * Debugger is active!
  * Debugger PIN: 941-952-772
-127.0.0.1 - - [14/Sep/2026 14:50:41] "POST /api/new_model HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 14:51:03] "POST /api/new_model HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 14:51:43] "POST /api/new_model HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 14:51:50] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 14:51:50] "POST /api/load_sbml HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 14:51:56] "OPTIONS /api/findsim/parse HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 14:51:56] "POST /api/findsim/parse HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 14:51:59] "OPTIONS /api/findsim/run HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 14:51:59] "POST /api/findsim/run HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 14:52:05] "POST /api/new_model HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 14:52:10] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 14:52:10] "POST /api/load_sbml HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 14:52:17] "OPTIONS /api/findsim/parse HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 14:52:17] "POST /api/findsim/parse HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 14:52:21] "OPTIONS /api/findsim/run HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 14:52:23] "POST /api/findsim/run HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:00:47] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:00:59] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:00:59] "POST /api/create_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:00:59] "POST /api/create_pool HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:00:59] "POST /api/create_reac HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:00:59] "POST /api/create_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:00:59] "POST /api/create_pool HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:01:07] "POST /api/add_edge HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:01:07] "POST /api/add_edge HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:01:07] "GET /api/graph HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:01:43] "POST /api/save_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:01:59] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:02:07] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:02:07] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:02:29] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:02:29] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:03:18] "GET /api/graph HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:04:20] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:04:20] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:05:06] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:05:06] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:06:06] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:06:08] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:06:15] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:06:15] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:06:23] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:06:23] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:08:31] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:08:43] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:08:45] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:08:52] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:08:52] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:13:35] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:13:37] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:13:44] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:13:44] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:14:29] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:14:37] "POST /api/save_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:14:43] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:14:44] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:14:59] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:15:00] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:15:33] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:15:34] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:15:54] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:15:54] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:15:56] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:15:56] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:18:19] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:18:20] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:18:31] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:18:31] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:18:33] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:18:33] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:18:58] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 17:18:58] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:18:33] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:18:38] "OPTIONS /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:18:38] "POST /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:19:33] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:19:33] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:19:36] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:19:37] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:19:38] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:19:39] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:19:39] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:19:40] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:19:43] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:19:47] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:19:47] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:19:50] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:19:50] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:19:53] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:20:04] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:20:04] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:20:08] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:20:08] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:20:11] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:20:11] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:20:15] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:20:18] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:20:18] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:20:35] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:20:45] "OPTIONS /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:20:45] "POST /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:32:43] "OPTIONS /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:32:43] "POST /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:33:08] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:33:08] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:33:12] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:33:15] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:33:15] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:36:36] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:36:36] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:36:47] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:36:47] "POST /api/update_position HTTP/1.1" 200 -
+[2026-09-14 19:52:25,567] ERROR in server: request failed
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/usr/lib/python3/dist-packages/flask/app.py", line 891, in dispatch_request
+    self.raise_routing_exception(req)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/usr/lib/python3/dist-packages/flask/app.py", line 500, in raise_routing_exception
+    raise request.routing_exception  # type: ignore[misc]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/flask/ctx.py", line 362, in match_request
+    result = self.url_adapter.match(return_rule=True)  # type: ignore
+  File "/usr/lib/python3/dist-packages/werkzeug/routing/map.py", line 629, in match
+    raise NotFound() from None
+werkzeug.exceptions.NotFound: 404 Not Found: The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.
+127.0.0.1 - - [14/Sep/2026 19:52:25] "GET /api/status HTTP/1.1" 500 -
+127.0.0.1 - - [14/Sep/2026 19:53:45] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:54:05] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:54:05] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:58:09] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:58:09] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:58:26] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:58:26] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 19:58:26] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:02:48] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:02:49] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:02:49] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:03:04] "OPTIONS /api/update_compartment HTTP/1.1" 200 -
+Warning: Neutral::getNeighbors: Id.Field '/model_24[0]/kinetics[0]/PLC_g[0]/Ca.PLC_g[0]/PIP2_hydrolysis.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_24[0]/kinetics[0]/PLC_g[0]/Ca.PLC_g_p[0]/PIP2_hydrolysis.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_24[0]/kinetics[0]/AC[0]/AC1_CaM[0]/kenz.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_24[0]/kinetics[0]/AC[0]/AC2_p[0]/kenz.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_24[0]/kinetics[0]/AC[0]/AC2_Gs[0]/kenz.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_24[0]/kinetics[0]/AC[0]/AC1_Gs[0]/kenz.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_24[0]/kinetics[0]/AC[0]/AC2_p_Gs[0]/kenz.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_26[0]/kinetics[0]/PLC_g[0]/Ca.PLC_g[0]/PIP2_hydrolysis.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_26[0]/kinetics[0]/PLC_g[0]/Ca.PLC_g_p[0]/PIP2_hydrolysis.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_26[0]/kinetics[0]/AC[0]/AC1_CaM[0]/kenz.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_26[0]/kinetics[0]/AC[0]/AC2_p[0]/kenz.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_26[0]/kinetics[0]/AC[0]/AC2_Gs[0]/kenz.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_26[0]/kinetics[0]/AC[0]/AC1_Gs[0]/kenz.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_26[0]/kinetics[0]/AC[0]/AC2_p_Gs[0]/kenz.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_27[0]/kinetics[0]/lac_gene[0]/l_op_2nd_bound_1_[0]/lac_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_27[0]/kinetics[0]/lac_gene[0]/l_op_1rst_bound[0]/lac_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_27[0]/kinetics[0]/lac_gene[0]/lac_operator[0]/lac_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_27[0]/kinetics[0]/lac_gene[0]/lac_mRNA[0]/lac_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_27[0]/kinetics[0]/TetR_gene[0]/l_op_2nd_bound_1_[0]/TetR_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_27[0]/kinetics[0]/TetR_gene[0]/l_op_1rst_bound[0]/TetR_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_27[0]/kinetics[0]/TetR_gene[0]/TetR_mRNA[0]/TetR_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_27[0]/kinetics[0]/TetR_gene[0]/TetR_operator[0]/TetR_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_27[0]/kinetics[0]/Lcl[0]/l_op_2nd_bound_1_[0]/Lcl_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_27[0]/kinetics[0]/Lcl[0]/l_op_1rst_bound[0]/Lcl_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_27[0]/kinetics[0]/Lcl[0]/Lcl_mRNA[0]/Lcl_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_27[0]/kinetics[0]/Lcl[0]/Lcl_operator[0]/Lcl_transcription2.enz' not found
+moose.element: /model_33[0]/kinetics/info does not exist!
+[2026-09-14 20:03:04,751] ERROR in server: request failed
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/usr/lib/python3/dist-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/home/bhalla/homework/KKIT/kkit-web/backend/server.py", line 978, in update_compartment
+    return _update_node(node_id, fields, {"volume"}, set(), describe_compartment)
+  File "/home/bhalla/homework/KKIT/kkit-web/backend/server.py", line 875, in _update_node
+    info.color = normalize_color(value)
+    ^^^^^^^^^^
+RuntimeError: setFieldGeneric::color is not found on path '/'.
+127.0.0.1 - - [14/Sep/2026 20:03:04] "POST /api/update_compartment HTTP/1.1" 500 -
+127.0.0.1 - - [14/Sep/2026 20:04:56] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:04:56] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:04:56] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:05:04] "OPTIONS /api/update_compartment HTTP/1.1" 200 -
+moose.element: /model_35[0]/kinetics/info does not exist!
+[2026-09-14 20:05:04,412] ERROR in server: request failed
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/usr/lib/python3/dist-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/home/bhalla/homework/KKIT/kkit-web/backend/server.py", line 978, in update_compartment
+    return _update_node(node_id, fields, {"volume"}, set(), describe_compartment)
+  File "/home/bhalla/homework/KKIT/kkit-web/backend/server.py", line 875, in _update_node
+    info.color = normalize_color(value)
+    ^^^^^^^^^^
+RuntimeError: setFieldGeneric::color is not found on path '/'.
+127.0.0.1 - - [14/Sep/2026 20:05:04] "POST /api/update_compartment HTTP/1.1" 500 -
+127.0.0.1 - - [14/Sep/2026 20:05:21] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:05:23] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:05:23] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:05:37] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:05:37] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:06:02] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:06:02] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:06:16] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:06:16] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:07:39] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:07:57] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:07:58] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:07:58] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:08:13] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:08:13] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:08:33] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:08:34] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:08:34] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:08:55] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:08:55] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:08:55] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:08:55] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:08:55] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:08:55] "GET /api/graph HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:30:51] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:30:56] "OPTIONS /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:30:56] "POST /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:31:17] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:31:17] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:31:26] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:31:26] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:31:31] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:31:31] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:31:38] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:31:38] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:31:40] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:31:48] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:31:48] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:32:45] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:32:45] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:33:09] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:33:09] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:33:10] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:33:11] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:33:12] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:33:12] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:33:13] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:33:13] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:33:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:33:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:34:06] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:34:06] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:34:09] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:34:09] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:34:10] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:34:11] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:34:11] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:34:26] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:34:26] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:34:41] "OPTIONS /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:34:41] "POST /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:34:59] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:34:59] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:35:09] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:35:09] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:36:17] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:36:21] "OPTIONS /api/upload_gfile HTTP/1.1" 200 -
+Warning: Neutral::getNeighbors: Id.Field '/model_44[0]/kinetics[0]/lac_gene[0]/l_op_2nd_bound_1_[0]/lac_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_44[0]/kinetics[0]/lac_gene[0]/l_op_1rst_bound[0]/lac_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_44[0]/kinetics[0]/lac_gene[0]/lac_operator[0]/lac_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_44[0]/kinetics[0]/lac_gene[0]/lac_mRNA[0]/lac_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_44[0]/kinetics[0]/TetR_gene[0]/l_op_2nd_bound_1_[0]/TetR_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_44[0]/kinetics[0]/TetR_gene[0]/l_op_1rst_bound[0]/TetR_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_44[0]/kinetics[0]/TetR_gene[0]/TetR_mRNA[0]/TetR_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_44[0]/kinetics[0]/TetR_gene[0]/TetR_operator[0]/TetR_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_44[0]/kinetics[0]/Lcl[0]/l_op_2nd_bound_1_[0]/Lcl_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_44[0]/kinetics[0]/Lcl[0]/l_op_1rst_bound[0]/Lcl_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_44[0]/kinetics[0]/Lcl[0]/Lcl_mRNA[0]/Lcl_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_44[0]/kinetics[0]/Lcl[0]/Lcl_operator[0]/Lcl_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_45[0]/kinetics[0]/lac_gene[0]/l_op_2nd_bound_1_[0]/lac_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_45[0]/kinetics[0]/lac_gene[0]/l_op_1rst_bound[0]/lac_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_45[0]/kinetics[0]/lac_gene[0]/lac_operator[0]/lac_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_45[0]/kinetics[0]/lac_gene[0]/lac_mRNA[0]/lac_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_45[0]/kinetics[0]/TetR_gene[0]/l_op_2nd_bound_1_[0]/TetR_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_45[0]/kinetics[0]/TetR_gene[0]/l_op_1rst_bound[0]/TetR_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_45[0]/kinetics[0]/TetR_gene[0]/TetR_mRNA[0]/TetR_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_45[0]/kinetics[0]/TetR_gene[0]/TetR_operator[0]/TetR_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_45[0]/kinetics[0]/Lcl[0]/l_op_2nd_bound_1_[0]/Lcl_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_45[0]/kinetics[0]/Lcl[0]/l_op_1rst_bound[0]/Lcl_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_45[0]/kinetics[0]/Lcl[0]/Lcl_mRNA[0]/Lcl_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_45[0]/kinetics[0]/Lcl[0]/Lcl_operator[0]/Lcl_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_47[0]/kinetics[0]/lac_gene[0]/l_op_2nd_bound_1_[0]/lac_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_47[0]/kinetics[0]/lac_gene[0]/l_op_1rst_bound[0]/lac_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_47[0]/kinetics[0]/lac_gene[0]/lac_operator[0]/lac_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_47[0]/kinetics[0]/lac_gene[0]/lac_mRNA[0]/lac_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_47[0]/kinetics[0]/TetR_gene[0]/l_op_2nd_bound_1_[0]/TetR_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_47[0]/kinetics[0]/TetR_gene[0]/l_op_1rst_bound[0]/TetR_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_47[0]/kinetics[0]/TetR_gene[0]/TetR_mRNA[0]/TetR_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_47[0]/kinetics[0]/TetR_gene[0]/TetR_operator[0]/TetR_transcri127.0.0.1 - - [14/Sep/2026 20:36:21] "POST /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:36:28] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:36:28] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:41:55] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:41:55] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:41:55] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:42:12] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:42:12] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:45:49] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:45:53] "OPTIONS /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:45:53] "POST /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:46:09] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:46:09] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:46:12] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:46:23] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:46:23] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:46:42] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:46:42] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:46:49] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:46:49] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:46:52] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:46:55] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:46:55] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:46:56] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:05] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:05] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:07] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:09] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:12] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:12] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:14] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:22] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:22] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:23] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:24] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:25] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:26] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:27] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:27] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:29] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:50] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:50] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:57] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:47:57] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:48:30] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:48:30] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:48:44] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:48:44] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:48:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:48:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:48:57] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:48:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:48:59] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:49:04] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:49:08] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:49:08] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:49:11] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:49:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:49:14] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:49:19] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:49:22] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:49:22] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:56:32] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:56:41] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:56:41] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:56:57] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:56:57] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:59:25] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:59:25] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:59:25] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:59:41] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 20:59:41] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:00:09] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:00:11] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:00:11] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:00:24] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:00:24] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:05:56] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:06:02] "OPTIONS /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:06:02] "POST /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:06:11] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:06:11] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:07:06] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:07:06] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:07:27] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:07:27] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:07:41] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:07:41] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:10:12] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:10:12] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:12:17] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:12:17] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:12:17] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:12:27] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:12:27] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:13:08] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:13:10] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:13:10] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:13:19] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:13:19] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:14:44] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:14:45] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:14:45] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:14:48] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:14:48] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:15:41] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:15:42] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:15:42] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:15:45] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:15:45] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:18:37] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:18:39] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:18:39] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:18:42] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:18:42] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:19:13] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:19:14] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:19:14] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:19:17] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:19:17] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:20:27] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:20:28] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:20:28] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:20:32] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:20:32] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:20:53] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:20:54] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:20:54] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:20:58] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:20:58] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:26:50] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:27:05] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:27:38] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:27:54] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:27:55] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:27:55] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:28:20] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:28:20] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:29:08] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:29:08] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:48:30] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:48:39] "OPTIONS /api/upload_gfile HTTP/1.1" 200 -
+ption2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_47[0]/kinetics[0]/Lcl[0]/l_op_2nd_bound_1_[0]/Lcl_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_47[0]/kinetics[0]/Lcl[0]/l_op_1rst_bound[0]/Lcl_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_47[0]/kinetics[0]/Lcl[0]/Lcl_mRNA[0]/Lcl_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_47[0]/kinetics[0]/Lcl[0]/Lcl_operator[0]/Lcl_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_51[0]/kinetics[0]/lac_gene[0]/l_op_2nd_bound_1_[0]/lac_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_51[0]/kinetics[0]/lac_gene[0]/l_op_1rst_bound[0]/lac_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_51[0]/kinetics[0]/lac_gene[0]/lac_operator[0]/lac_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_51[0]/kinetics[0]/lac_gene[0]/lac_mRNA[0]/lac_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_51[0]/kinetics[0]/TetR_gene[0]/l_op_2nd_bound_1_[0]/TetR_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_51[0]/kinetics[0]/TetR_gene[0]/l_op_1rst_bound[0]/TetR_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_51[0]/kinetics[0]/TetR_gene[0]/TetR_mRNA[0]/TetR_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_51[0]/kinetics[0]/TetR_gene[0]/TetR_operator[0]/TetR_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_51[0]/kinetics[0]/Lcl[0]/l_op_2nd_bound_1_[0]/Lcl_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_51[0]/kinetics[0]/Lcl[0]/l_op_1rst_bound[0]/Lcl_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_51[0]/kinetics[0]/Lcl[0]/Lcl_mRNA[0]/Lcl_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_51[0]/kinetics[0]/Lcl[0]/Lcl_operator[0]/Lcl_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_60[0]/kinetics[0]/lac_gene[0]/l_op_2nd_bound_1_[0]/lac_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_60[0]/kinetics[0]/lac_gene[0]/l_op_1rst_bound[0]/lac_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_60[0]/kinetics[0]/lac_gene[0]/lac_operator[0]/lac_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_60[0]/kinetics[0]/lac_gene[0]/lac_mRNA[0]/lac_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_60[0]/kinetics[0]/TetR_gene[0]/l_op_2nd_bound_1_[0]/TetR_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_60[0]/kinetics[0]/TetR_gene[0]/l_op_1rst_bound[0]/TetR_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_60[0]/kinetics[0]/TetR_gene[0]/TetR_mRNA[0]/TetR_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_60[0]/kinetics[0]/TetR_gene[0]/TetR_operator[0]/TetR_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_60[0]/kinetics[0]/Lcl[0]/l_op_2nd_bound_1_[0]/Lcl_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_60[0]/kinetics[0]/Lcl[0]/l_op_1rst_bound[0]/Lcl_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_60[0]/kinetics[0]/Lcl[0]/Lcl_mRNA[0]/Lcl_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_60[0]/kinetics[0]/Lcl[0]/Lcl_operator[0]/Lcl_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_83[0]/kinetics[0]/lac_gene[0]/l_op_2nd_bound_1_[0]/lac_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_83[0]/kinetics[0]/lac_gene[0]/l_op_1rst_bound[0]/lac_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_83[0]/kinetics[0]/lac_gene[0]/lac_operator[0]/lac_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_83[0]/kinetics[0]/lac_gene[0]/lac_mRNA[0]/lac_translation.e127.0.0.1 - - [14/Sep/2026 21:48:39] "POST /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:48:57] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:48:57] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:49:00] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:50:30] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:50:30] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:24] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:27] "OPTIONS /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:27] "POST /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:58] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:51:58] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:05] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:05] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:20] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:20] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:21] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 21:52:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:27] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:27] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:32] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:32] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:41] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:41] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:51] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:52:59] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:53:57] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:53:57] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:53:58] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:53:59] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:10] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:10] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:12] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:12] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:12] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:13] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:13] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 21:54:12] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:13] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:13] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:13] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:13] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:24] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:24] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:25] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:25] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:30] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:31] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:31] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:31] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:31] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:31] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:31] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 21:54:31] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:31] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:31] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:31] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:37] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:37] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:42] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:42] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:45] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:45] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:50] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:50] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:53] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:55] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:55] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:58] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:54:58] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:55:00] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:55:08] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:55:08] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:55:15] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:55:15] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:55:19] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:55:21] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:55:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:55:42] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:55:42] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:06] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:06] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:09] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:22] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:22] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:28] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:28] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:30] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 21:56:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:32] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:32] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:33] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:35] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:42] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:42] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:51] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:53] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:53] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:54] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 21:56:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:56:57] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:57:15] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:57:15] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:57:18] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:58:22] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:58:22] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 21:58:32] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:58:32] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 21:58:45] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:58:45] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:59:04] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:59:04] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 21:59:13] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:59:13] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:59:53] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 21:59:53] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:00:00] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:00:00] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:00:32] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:00:32] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:00:42] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:00:42] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:00:45] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:00:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:00:56] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:06] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:06] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:11] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:17] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:18] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:18] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:18] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:18] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:18] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:18] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:01:18] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:18] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:18] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:01:18] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:06:33] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:06:33] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:06:33] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:06:43] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:06:43] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:06:43] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:06:43] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:06:43] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:06:43] "GET /api/graph HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:07:08] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:07:10] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:07:10] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:07:22] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:07:22] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:07:34] "OPTIONS /api/update_compartment HTTP/1.1" 200 -
+nz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_83[0]/kinetics[0]/TetR_gene[0]/l_op_2nd_bound_1_[0]/TetR_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_83[0]/kinetics[0]/TetR_gene[0]/l_op_1rst_bound[0]/TetR_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_83[0]/kinetics[0]/TetR_gene[0]/TetR_mRNA[0]/TetR_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_83[0]/kinetics[0]/TetR_gene[0]/TetR_operator[0]/TetR_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_83[0]/kinetics[0]/Lcl[0]/l_op_2nd_bound_1_[0]/Lcl_transcription1.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_83[0]/kinetics[0]/Lcl[0]/l_op_1rst_bound[0]/Lcl_transcription.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_83[0]/kinetics[0]/Lcl[0]/Lcl_mRNA[0]/Lcl_translation.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_83[0]/kinetics[0]/Lcl[0]/Lcl_operator[0]/Lcl_transcription2.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_85[0]/kinetics[0]/PLC_g[0]/Ca.PLC_g[0]/PIP2_hydrolysis.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_85[0]/kinetics[0]/PLC_g[0]/Ca.PLC_g_p[0]/PIP2_hydrolysis.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_85[0]/kinetics[0]/AC[0]/AC1_CaM[0]/kenz.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_85[0]/kinetics[0]/AC[0]/AC2_p[0]/kenz.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_85[0]/kinetics[0]/AC[0]/AC2_Gs[0]/kenz.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_85[0]/kinetics[0]/AC[0]/AC1_Gs[0]/kenz.enz' not found
+Warning: Neutral::getNeighbors: Id.Field '/model_85[0]/kinetics[0]/AC[0]/AC2_p_Gs[0]/kenz.enz' not found
+moose.element: /model_89[0]/kinetics/info does not exist!
+[2026-09-14 22:07:34,742] ERROR in server: request failed
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/usr/lib/python3/dist-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/home/bhalla/homework/KKIT/kkit-web/backend/server.py", line 978, in update_compartment
+    return _update_node(node_id, fields, {"volume"}, set(), describe_compartment)
+  File "/home/bhalla/homework/KKIT/kkit-web/backend/server.py", line 875, in _update_node
+    info.color = normalize_color(value)
+    ^^^^^^^^^^
+RuntimeError: setFieldGeneric::color is not found on path '/'.
+127.0.0.1 - - [14/Sep/2026 22:07:34] "POST /api/update_compartment HTTP/1.1" 500 -
+127.0.0.1 - - [14/Sep/2026 22:10:59] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:03] "OPTIONS /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:03] "POST /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:21] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:25] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:25] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:34] "GET /api/graph HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:41] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:11:41] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:13:20] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:13:25] "OPTIONS /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:13:25] "POST /api/upload_gfile HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:27] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:27] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:30] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:49] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:49] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:14:59] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:12] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:12] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:15:18] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:18] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:20] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:20] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:15:20] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:20] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:20] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:20] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:20] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:20] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:20] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:20] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:20] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:20] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:20] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:20] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:20] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:31] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:31] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:15:34] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:16:00] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:16:00] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:16:06] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:16:06] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:16:16] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:16:16] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:16:24] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:16:24] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:36] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:36] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:45] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:45] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:49] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:53] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:53] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:56] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:57] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:57] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:57] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:57] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:57] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:17:57] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:17:57] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:57] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:57] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:17:57] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:17:57] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:57] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:57] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:57] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:57] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:17:57] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:14] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:18:51] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:19:02] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:19:02] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:19:07] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:19:19] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:19:19] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:19:31] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:19:31] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:19:38] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:19:38] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:22:36] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:22:36] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:22:36] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:22:47] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:22:47] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:23:38] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:23:38] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:23:43] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:23:46] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:23:46] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:23:49] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:23:51] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:23:51] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:23:57] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:23:57] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:24:18] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:24:18] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:24:31] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:24:31] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:24:36] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:24:36] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:24:36] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:24:36] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:24:36] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:24:36] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:24:36] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:24:36] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:24:36] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:24:36] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:24:41] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:24:41] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:24:47] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:24:47] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:25:05] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:25:05] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:25:16] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:25:16] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:25:21] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:25:21] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:25:23] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:25:23] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:25:38] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:25:38] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:25:41] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:25:46] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:25:46] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:26:00] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:26:00] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:26:08] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:26:08] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:26:12] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:26:15] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:26:15] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:26:22] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:26:22] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:26:29] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:26:29] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:26:41] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:26:41] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:26:53] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:26:53] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:27:03] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:27:03] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:27:05] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:27:05] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:27:14] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:27:14] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:27:19] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:27:29] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:27:29] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:27:36] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:27:36] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:27:45] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:27:45] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:27:50] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:27:54] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:27:54] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:28:05] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:28:05] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:28:07] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:28:10] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:28:10] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:28:26] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:28:26] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:28:36] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:28:36] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:28:40] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:28:40] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:28:50] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:28:50] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:28:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:28:58] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:28:58] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:29:04] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:29:04] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:29:21] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:29:21] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:29:26] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:29:33] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:29:33] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:29:40] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:29:40] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:29:44] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:29:54] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:29:54] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:29:58] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:29:58] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:08] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:08] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:53] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:53] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "OPTIONS /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:55] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:57] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:58] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:58] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:30:59] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:31:00] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:31:00] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:31:00] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:31:00] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:31:00] "POST /api/update_position HTTP/1.1" 404 -
+127.0.0.1 - - [14/Sep/2026 22:31:00] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:31:00] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:31:00] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:31:00] "POST /api/update_position HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:31:01] "POST /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:31:04] "OPTIONS /api/update_group HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 22:31:04] "POST /api/update_group HTTP/1.1" 200 -

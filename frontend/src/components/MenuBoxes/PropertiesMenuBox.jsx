@@ -85,6 +85,9 @@ function initialFieldsFor(node) {
   // formatNumber/parseFloat the way every other editable field is.
   if (node.type === 'stim') fields.expr = node.data.expr ?? '';
   fields.flipped = !!node.data.flipped;
+  if (node.data.type === 'group' || node.data.type === 'compartment') {
+    fields.collapsed = !!node.data.collapsed;
+  }
   return fields;
 }
 
@@ -123,7 +126,7 @@ function titleFor(node) {
   return `Enzyme (${node.data.mechanism})`;
 }
 
-export default function PropertiesMenuBox({ node, onSave, onToggleFlip }) {
+export default function PropertiesMenuBox({ node, onSave, onToggleFlip, onToggleCollapse, onAutoLayoutGroup }) {
   const [fields, setFields] = useState(null);
   // Tracks whether `fields` has any edit not yet sent to the backend --
   // set by setField, cleared on every explicit Save and whenever a fresh
@@ -308,6 +311,37 @@ export default function PropertiesMenuBox({ node, onSave, onToggleFlip }) {
             onChange={(e) => setField('notes', e.target.value)}
           />
         </Grid>
+
+        {(node.data.type === 'group' || node.data.type === 'compartment') && (
+          <Grid size={12}>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={fields.collapsed}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setField('collapsed', checked);
+                    onToggleCollapse(node.id, checked);
+                  }}
+                />
+              }
+              label="Collapsed (hide contents, show as a single icon)"
+            />
+          </Grid>
+        )}
+
+        {(node.data.type === 'group' || node.data.type === 'compartment') && (
+          <Grid size={12}>
+            <Button
+              fullWidth
+              size="small"
+              variant="outlined"
+              onClick={() => onAutoLayoutGroup(node.id)}
+            >
+              Auto-layout direct children
+            </Button>
+          </Grid>
+        )}
 
         {!['group', 'compartment', 'stim'].includes(node.data.type) && (
           <Grid size={12}>

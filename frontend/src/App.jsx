@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { applyNodeChanges, applyEdgeChanges } from '@xyflow/react';
 import AppLayout from './AppLayout';
 import { RAINBOW_16 } from './colorUtils';
+import { computeCollapsedView, computeIsolateView } from './collapseView';
 
 const API_BASE = `http://${window.location.hostname}:5001`;
 
@@ -35,14 +36,49 @@ function computeAutoScale(graph) {
     .map((n) => ({ x: n.x, y: n.y }));
   if (points.length < 2) return DEFAULT_SCALE;
 
+  // Grid-bucketed nearest-neighbor search rather than an all-pairs scan --
+  // the latter is O(n^2), which turned into real, measurable seconds of
+  // pure JS work on a several-hundred-pool model (and only gets worse from
+  // there). Cell size is a rough guess from the point cloud's own bounding
+  // box, sized for a handful of points per cell on average; checking only
+  // a point's own cell and its 8 neighbors finds the true nearest neighbor
+  // for any reasonably-spread layout -- this is a heuristic for picking a
+  // *display scale*, not a value anything downstream depends on being
+  // exact, so an unusual clustering giving a slightly-off candidate isn't
+  // a correctness concern.
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  points.forEach((p) => {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  });
+  const cellSize = Math.max(Math.sqrt(((maxX - minX || 1) * (maxY - minY || 1)) / points.length), 1e-6);
+  const cellOf = (p) => [Math.floor((p.x - minX) / cellSize), Math.floor((p.y - minY) / cellSize)];
+
+  const grid = new Map();
+  points.forEach((p) => {
+    const [cx, cy] = cellOf(p);
+    const key = `${cx},${cy}`;
+    if (!grid.has(key)) grid.set(key, []);
+    grid.get(key).push(p);
+  });
+
   const nearestDistances = points
-    .map((p, i) => {
+    .map((p) => {
+      const [cx, cy] = cellOf(p);
       let min = Infinity;
-      points.forEach((q, j) => {
-        if (i === j) return;
-        const d = Math.hypot(p.x - q.x, p.y - q.y);
-        if (d > 0 && d < min) min = d;
-      });
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const bucket = grid.get(`${cx + dx},${cy + dy}`);
+          if (!bucket) continue;
+          bucket.forEach((q) => {
+            if (q === p) return;
+            const d = Math.hypot(p.x - q.x, p.y - q.y);
+            if (d > 0 && d < min) min = d;
+          });
+        }
+      }
       return min;
     })
     .filter(Number.isFinite)
@@ -240,6 +276,13 @@ const DEFAULT_CONTAINER_SIZE = {
   group: { width: 4, height: 3 },
   compartment: { width: 8, height: 6 },
 };
+// Uniform grid step (kkit units) a group's own "auto-layout children"
+// action packs its direct children into -- matches the tight org spacing
+// most .g files already use between an entity and its immediate neighbor
+// (see computeAutoScale's own comment: 1.4-3 units is typical), so a
+// freshly auto-laid-out group reads at roughly the same density as a
+// normal hand-laid-out one, not artificially sparse or cramped.
+const AUTO_LAYOUT_CELL = 3;
 const CONTAINER_PADDING = 1.5;
 // Extra breathing room specifically when a container's auto-fit box has to
 // wrap another container (rather than just plain pools/reacs) -- otherwise
@@ -275,6 +318,33 @@ function confirmContainerDelete(node, flowNodes) {
   );
 }
 
+// Precomputed once per build (O(n), one pass over every node) rather than
+// re-scanning the *entire* node list once per container inside
+// effectiveContainerBox -- that was O(containers * n), a real quadratic-ish
+// cost once a model has both many containers and many nodes. Each non-
+// container node walks its own (short) parentId chain exactly once and
+// registers itself under every ancestor container along the way -- the
+// same set effectiveContainerBox's old per-container isDescendantOf scan
+// would have found, just built from the other direction.
+function buildContainerIndex(rawNodes, rawById) {
+  const descendants = {};
+  const directContainerChildren = {};
+  rawNodes.forEach((n) => {
+    if (CONTAINER_TYPES.includes(n.type)) {
+      if (n.parentId && CONTAINER_TYPES.includes(rawById[n.parentId]?.type)) {
+        (directContainerChildren[n.parentId] ??= []).push(n);
+      }
+      return;
+    }
+    let cur = n.parentId ? rawById[n.parentId] : null;
+    while (cur) {
+      (descendants[cur.id] ??= []).push(n);
+      cur = cur.parentId ? rawById[cur.parentId] : null;
+    }
+  });
+  return { descendants, directContainerChildren };
+}
+
 // A container that's never been explicitly sized/positioned (width and
 // height both 0 -- true for every legacy .g file's default compartment,
 // which never stored these) gets its box auto-derived from whatever's
@@ -290,7 +360,7 @@ function confirmContainerDelete(node, flowNodes) {
 // `boxById` memoizes results across calls within one build (recursion, not
 // insertion order, resolves the "inner box needed before outer box"
 // dependency regardless of which order containers appear in graph.nodes).
-function effectiveContainerBox(n, rawNodes, rawById, boxById) {
+function effectiveContainerBox(n, index, boxById) {
   if (boxById[n.id]) return boxById[n.id];
   if (n.width > 0 || n.height > 0) {
     const box = { x: n.x, y: n.y, width: n.width, height: n.height };
@@ -300,22 +370,17 @@ function effectiveContainerBox(n, rawNodes, rawById, boxById) {
 
   const xs = [];
   const ys = [];
-  let touchesNestedContainer = false;
-  rawNodes.forEach((other) => {
-    if (other.id === n.id) return;
-    if (CONTAINER_TYPES.includes(other.type)) {
-      if (other.parentId !== n.id) return; // only direct container children
-      touchesNestedContainer = true;
-      const childBox = effectiveContainerBox(other, rawNodes, rawById, boxById);
-      xs.push(childBox.x, childBox.x + childBox.width);
-      ys.push(childBox.y, childBox.y - childBox.height);
-      return;
-    }
-    if (isDescendantOf(other.id, n.id, rawById)) {
-      xs.push(other.x);
-      ys.push(other.y);
-    }
+  const nestedContainers = index.directContainerChildren[n.id] ?? [];
+  nestedContainers.forEach((other) => {
+    const childBox = effectiveContainerBox(other, index, boxById);
+    xs.push(childBox.x, childBox.x + childBox.width);
+    ys.push(childBox.y, childBox.y - childBox.height);
   });
+  (index.descendants[n.id] ?? []).forEach((other) => {
+    xs.push(other.x);
+    ys.push(other.y);
+  });
+  const touchesNestedContainer = nestedContainers.length > 0;
 
   if (xs.length === 0) {
     const fallback = DEFAULT_CONTAINER_SIZE[n.type];
@@ -349,9 +414,10 @@ function buildFlowNodes(graph, scale, preserve = {}) {
   // both for its own rendering and as the reference point every child
   // (including a nested group) measures its relative position against.
   const boxById = {};
+  const containerIndex = buildContainerIndex(graph.nodes, rawById);
   graph.nodes.forEach((n) => {
     if (CONTAINER_TYPES.includes(n.type)) {
-      effectiveContainerBox(n, graph.nodes, rawById, boxById);
+      effectiveContainerBox(n, containerIndex, boxById);
     }
   });
 
@@ -386,13 +452,31 @@ function buildFlowNodes(graph, scale, preserve = {}) {
       // moose_graph.detect_existing_plots), not unconditionally null.
       node.data.plotWindow = preserve.plotWindow?.[n.id] ?? n.plotWindow ?? null;
     }
+    if (isContainer) {
+      // Same reasoning as plotWindow just above -- the live model has
+      // nowhere to actually store this (see moose_graph.describe_group's
+      // own docstring), so a plain refetch (not a save/reload) would
+      // otherwise silently return collapsed:false for everything every
+      // time. Falls back to whatever the backend *did* manage to read
+      // back from a saved SBML file's own custom annotation (see
+      // server.py's _extract_collapsed) on first load.
+      node.data.collapsed = preserve.collapsed?.[n.id] ?? n.collapsed ?? false;
+    }
     if (n.parentId) {
       node.parentId = n.parentId;
       node.extent = 'parent';
     }
     if (isContainer) {
-      const box = boxById[n.id];
-      node.style = { width: box.width * scale, height: box.height * scale };
+      // A collapsed container keeps its own real, stored/auto-fit box --
+      // only its *contents* hide (see computeCollapsedView), not its own
+      // on-screen footprint -- so reorganizing a big model by collapsing
+      // groups first doesn't also require re-guessing each one's size once
+      // it's expanded again. expandedStyle is still stashed on data (not
+      // just used inline) since onContainerResize needs somewhere to keep
+      // it in sync with a later manual resize, without needing to redo the
+      // box/scale computation above just to read the current size back.
+      node.data.expandedStyle = { width: boxById[n.id].width * scale, height: boxById[n.id].height * scale };
+      node.style = node.data.expandedStyle;
       node.zIndex = n.type === 'compartment' ? -2 : -1;
     }
     return node;
@@ -423,9 +507,10 @@ function findContainerAt(kx, ky, flowNodes) {
     rawById[n.id] = n;
   });
   const boxById = {};
+  const containerIndex = buildContainerIndex(rawNodes, rawById);
   const candidates = rawNodes
     .filter((n) => CONTAINER_TYPES.includes(n.type))
-    .map((n) => ({ id: n.id, box: effectiveContainerBox(n, rawNodes, rawById, boxById) }))
+    .map((n) => ({ id: n.id, box: effectiveContainerBox(n, containerIndex, boxById) }))
     .filter(({ box }) => kx >= box.x && kx <= box.x + box.width && ky <= box.y && ky >= box.y - box.height);
   if (candidates.length === 0) return null;
   candidates.sort((a, b) => a.box.width * a.box.height - b.box.width * b.box.height);
@@ -473,6 +558,24 @@ export default function App() {
   // showing -- lifted up here (rather than local state in MainDisplay) so a
   // completed run can switch to it, not just the user clicking the tab.
   const [displayTab, setDisplayTab] = useState(0);
+  // Design section 6's "isolate mode" -- an on/off toggle, separate from
+  // any individual group's own collapsed flag, that hides every collapsed
+  // group entirely (icon and all) and replaces whatever it connected to
+  // with per-entity proxy stand-ins (see collapseView.js's
+  // computeIsolateView). "The expanded group(s)" isolate mode shows is
+  // read directly off the same per-group collapsed flag every other view
+  // already uses -- there's no separate group-picker UI here.
+  const [isolateMode, setIsolateMode] = useState(false);
+  const onToggleIsolateMode = useCallback(() => setIsolateMode((v) => !v), []);
+  // Per-aggregate-edge bend point (see moveEdgeVia below) -- keyed by the
+  // synthetic `aggregate-<a>-<b>` id computeCollapsedView assigns each
+  // time it runs, not stored on any real flowGraph.edges entry, since an
+  // aggregate edge *has* no real backing edge to attach it to (it
+  // represents however many real connections collapsed down to one line).
+  // Orphaned entries (for a pair that's no longer both-collapsed) are
+  // harmless clutter, not a correctness issue -- left in place rather than
+  // pruned, since the same pair collapsing again later should remember it.
+  const [aggregateVia, setAggregateVia] = useState({});
   // Recomputed only on full graph reloads (load/reset/refresh), not on
   // incremental edits (drag, single add) -- so a drag or single new node
   // never rescales/shifts everything else already laid out.
@@ -572,7 +675,50 @@ export default function App() {
     [flowGraph.nodes, selectedNodeId]
   );
 
+  // The canvas renders this, not flowGraph directly -- everything else
+  // (Properties, Plots, Dose Response, FindSim, add/remove) keeps working
+  // against the full, uncollapsed flowGraph exactly as before; only the
+  // Reaction Layout's own <ReactFlow> nodes/edges props are swapped for
+  // this derived view. See collapseView.js for the actual rule (hide a
+  // collapsed group's descendants, redirect/aggregate their edges).
+  const collapsedIds = useMemo(() => {
+    const ids = new Set();
+    flowGraph.nodes.forEach((n) => {
+      if (CONTAINER_TYPES.includes(n.data.type) && n.data.collapsed) ids.add(n.id);
+    });
+    return ids;
+  }, [flowGraph.nodes]);
+  const displayGraph = useMemo(() => {
+    const view = isolateMode
+      ? computeIsolateView(flowGraph.nodes, flowGraph.edges, collapsedIds)
+      : computeCollapsedView(flowGraph.nodes, flowGraph.edges, collapsedIds);
+    if (Object.keys(aggregateVia).length === 0) return view;
+    // Aggregate edges have no backing entry in flowGraph.edges (see
+    // moveEdgeVia) -- their bend point is applied here instead, as a
+    // cheap post-process over whatever computeCollapsedView just
+    // synthesized, keyed by its own deterministic `aggregate-<a>-<b>` id.
+    // A no-op lookup under isolate mode, which never produces aggregate
+    // edges in the first place -- harmless, not worth special-casing out.
+    return {
+      ...view,
+      edges: view.edges.map((e) => (aggregateVia[e.id] ? { ...e, data: { ...e.data, via: aggregateVia[e.id] } } : e)),
+    };
+  }, [flowGraph.nodes, flowGraph.edges, collapsedIds, isolateMode, aggregateVia]);
+
   const onNodeClick = useCallback((event, node) => {
+    // A proxy (isolate mode -- see collapseView.js's computeIsolateView) is
+    // a synthetic stand-in for one specific hidden entity, not a real node
+    // of its own -- clicking it opens *that* entity's own Properties
+    // (still fully present in flowGraph.nodes, just not currently
+    // rendered), keyed by realId/realType rather than the proxy's own
+    // synthetic id/type.
+    if (node.data.type === 'proxy') {
+      if (EDITABLE_ENDPOINTS[node.data.realType]) {
+        setSelectedNodeId(node.data.realId);
+        setActiveMenu('Properties');
+      }
+      return;
+    }
     if (EDITABLE_ENDPOINTS[node.data.type]) {
       setSelectedNodeId(node.id);
       setActiveMenu('Properties');
@@ -711,7 +857,15 @@ export default function App() {
                     ...n,
                     position: { x: box.x, y: box.y },
                     style: { width: box.width, height: box.height },
-                    data: { ...n.data, x, y, width, height },
+                    // expandedStyle has to move in lockstep with the manual
+                    // resize, not just node.style -- it's the value
+                    // buildFlowNodes recomputes this container's own real
+                    // box from on every future refreshGraph, and until now
+                    // it was only ever set once, back at the last
+                    // buildFlowNodes call; left unsynced here, the next
+                    // refresh (or a save/reload round-trip) would silently
+                    // snap this container back to its pre-resize box.
+                    data: { ...n.data, x, y, width, height, expandedStyle: { width: box.width, height: box.height } },
                   }
                 : n
             ),
@@ -720,6 +874,101 @@ export default function App() {
         .catch((err) => setStatus(`error: ${err}`));
     },
     [flowGraph.nodes, scale]
+  );
+
+  // A group's own "auto-layout children" action (Properties panel) --
+  // packs its *direct* children only (nested sub-groups move as a single
+  // block, their own interior untouched) into a uniform grid anchored at
+  // the group's current top-left, then resizes the group itself to fit
+  // snugly around the result. Two rounds of /api/update_position (one per
+  // child, then one for the group) rather than a dedicated backend
+  // endpoint -- every position already flows through that one endpoint,
+  // and there's no other bulk-layout concept on the backend to hang a new
+  // one off of. Ends with a full refreshGraph (not a local patch) since
+  // it touches an unbounded number of nodes at once.
+  const onAutoLayoutGroup = useCallback(
+    (groupId) => {
+      const rawNodes = flowGraph.nodes.map((n) => n.data);
+      const rawById = {};
+      rawNodes.forEach((n) => {
+        rawById[n.id] = n;
+      });
+      const group = rawById[groupId];
+      if (!group) return;
+      const directChildren = rawNodes.filter((n) => n.parentId === groupId);
+      if (directChildren.length === 0) return;
+
+      const containerIndex = buildContainerIndex(rawNodes, rawById);
+      const boxById = {};
+      // A uniform cell size, sized to fit whichever direct child needs the
+      // most room -- a nested container's own effective box (it has to fit
+      // its own contents), or the flat AUTO_LAYOUT_CELL spacing for a plain
+      // entity. Uniform (not per-child) so the grid math below stays a
+      // plain row/column index, not a packing problem.
+      const cellSize = Math.max(
+        AUTO_LAYOUT_CELL,
+        ...directChildren.map((c) => {
+          if (!CONTAINER_TYPES.includes(c.type)) return AUTO_LAYOUT_CELL;
+          const box = effectiveContainerBox(c, containerIndex, boxById);
+          return Math.max(box.width, box.height) + CONTAINER_NESTING_PADDING;
+        })
+      );
+      const cols = Math.ceil(Math.sqrt(directChildren.length));
+      // Anchored at the group's own *effective* box (see effectiveContainerBox),
+      // not its raw x/y fields directly -- those only mean "top-left of the
+      // box" for a group that's actually been explicitly sized at some point
+      // (onContainerResize sets them together). A group still relying on
+      // auto-fit-from-contents (width/height never set -- the common case
+      // for any group a legacy .g file never had manually resized) can have
+      // a raw x/y that's just some arbitrary leftover coordinate, unrelated
+      // to where the box actually renders -- anchoring the new grid there
+      // was what sent children flying off to an unrelated spot on the
+      // canvas instead of rearranging them roughly where they already are
+      // (verified directly: children ended up scattered relative to their
+      // *old* positions, not the group's own visible box).
+      const groupBox = effectiveContainerBox(group, containerIndex, boxById);
+      const originX = groupBox.x + CONTAINER_PADDING;
+      const originY = groupBox.y - CONTAINER_PADDING;
+      const placements = directChildren.map((child, i) => ({
+        child,
+        x: originX + (i % cols) * cellSize,
+        y: originY - Math.floor(i / cols) * cellSize,
+      }));
+
+      Promise.all(
+        placements.map(({ child, x, y }) =>
+          fetch(`${API_BASE}/api/update_position`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: child.id, x, y }),
+          }).then((r) => r.json())
+        )
+      )
+        .then((results) => {
+          const failed = results.find((r) => r.error);
+          if (failed) throw new Error(failed.error);
+          const xs = placements.map((p) => p.x);
+          const ys = placements.map((p) => p.y);
+          const width = Math.max(...xs) - Math.min(...xs) + cellSize + CONTAINER_PADDING * 2;
+          const height = Math.max(...ys) - Math.min(...ys) + cellSize + CONTAINER_PADDING * 2;
+          const boxX = Math.min(...xs) - CONTAINER_PADDING;
+          const boxY = Math.max(...ys) + CONTAINER_PADDING;
+          return fetch(`${API_BASE}/api/update_position`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: groupId, x: boxX, y: boxY, width, height }),
+          }).then((r) => r.json());
+        })
+        .then((res) => {
+          if (res.error) {
+            setStatus(`error: ${res.error}`);
+            return;
+          }
+          refreshGraphRef.current?.();
+        })
+        .catch((err) => setStatus(`error: ${err}`));
+    },
+    [flowGraph.nodes]
   );
 
   const nodeActions = useMemo(() => ({ onContainerResize }), [onContainerResize]);
@@ -734,6 +983,22 @@ export default function App() {
     const result = {};
     flowGraph.nodes.forEach((n) => {
       if (n.type === 'pool' && n.data.plotWindow) result[n.id] = n.data.plotWindow;
+    });
+    return result;
+  }, [flowGraph.nodes]);
+
+  // Same reasoning as plots just above -- collapsed is frontend-only, sent
+  // along explicitly on save for server.py's _inject_collapsed_annotations
+  // to persist as its own small custom annotation. Every group/
+  // compartment is included (not just the collapsed ones) so an
+  // explicitly-expanded one still round-trips as expanded rather than
+  // just being silently absent (harmless either way today, since
+  // buildFlowNodes' own fallback is already false, but explicit is
+  // cheap and avoids relying on that default staying false forever).
+  const collapsedMap = useMemo(() => {
+    const result = {};
+    flowGraph.nodes.forEach((n) => {
+      if (CONTAINER_TYPES.includes(n.data.type)) result[n.id] = !!n.data.collapsed;
     });
     return result;
   }, [flowGraph.nodes]);
@@ -851,6 +1116,15 @@ export default function App() {
   }, []);
 
   const moveEdgeVia = useCallback((edgeId, pos) => {
+    // A synthetic aggregate edge (both endpoints collapsed -- see
+    // collapseView.js) isn't in flowGraph.edges at all, so the normal path
+    // below would be a silent no-op for it (nothing in the map matches its
+    // id); its bend point lives in the separate aggregateVia map instead,
+    // reapplied by displayGraph on every render.
+    if (edgeId.startsWith('aggregate-')) {
+      setAggregateVia((m) => ({ ...m, [edgeId]: pos }));
+      return;
+    }
     setFlowGraph((g) => ({
       ...g,
       edges: g.edges.map((e) => (e.id === edgeId ? { ...e, data: { ...e.data, via: pos } } : e)),
@@ -928,9 +1202,18 @@ export default function App() {
           // forward explicitly or a rename silently drops the pool's plot
           // tag.
           const plotWindow = node.data.plotWindow;
+          // collapsed is the same story, for a group/compartment -- the
+          // live model has nowhere to store it (see moose_graph.
+          // describe_group's own docstring), so describe_group/
+          // describe_compartment's response always reports collapsed:
+          // false, which would otherwise silently re-expand every
+          // container on its very next Properties save.
+          const collapsed = node.data.collapsed;
           setFlowGraph((g) => ({
             nodes: g.nodes.map((n) =>
-              n.id === nodeId ? { ...n, id: updated.id, data: { ...updated, color, flipped, plotWindow } } : n
+              n.id === nodeId
+                ? { ...n, id: updated.id, data: { ...updated, color, flipped, plotWindow, collapsed } }
+                : n
             ),
             edges: renamed
               ? g.edges.map((e) => ({
@@ -970,17 +1253,22 @@ export default function App() {
           const existingFlipped = {};
           const existingColor = {};
           const existingPlotWindow = {};
+          const existingCollapsed = {};
           g.nodes.forEach((n) => {
             existingFlipped[n.id] = n.data.flipped;
             if (n.type === 'pool') {
               existingColor[n.id] = n.data.color;
               existingPlotWindow[n.id] = n.data.plotWindow;
             }
+            if (CONTAINER_TYPES.includes(n.data.type)) {
+              existingCollapsed[n.id] = n.data.collapsed;
+            }
           });
           return buildFlowNodes(graph, scale, {
             flipped: existingFlipped,
             color: existingColor,
             plotWindow: existingPlotWindow,
+            collapsed: existingCollapsed,
           });
         });
       })
@@ -1018,6 +1306,44 @@ export default function App() {
     setFlowGraph((g) => ({
       ...g,
       nodes: g.nodes.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, flipped } } : n)),
+    }));
+  }, []);
+
+  // Same reasoning as onToggleFlip -- collapsed is frontend-only (see
+  // buildFlowNodes/computeCollapsedView), so it applies immediately.
+  // node.style is deliberately left untouched here -- a collapsed
+  // container keeps its own real on-screen box (see buildFlowNodes'
+  // own comment), only its *contents* stop rendering, which
+  // computeCollapsedView already handles purely off data.collapsed.
+  const onToggleCollapse = useCallback((nodeId, collapsed) => {
+    setFlowGraph((g) => ({
+      ...g,
+      nodes: g.nodes.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, collapsed } } : n)),
+    }));
+  }, []);
+
+  // Bulk-sets every group/compartment's own collapsed flag at once -- a
+  // one-time action, not a separate overriding mode, so each group's own
+  // toggle (Properties, or this same action run again later) remains
+  // independently adjustable afterward.
+  //
+  // Collapse All deliberately leaves each model's own top-level
+  // container(s) (no parentId -- e.g. the ever-present "kinetics"
+  // compartment) expanded: collapsing it too would hide *everything*
+  // inside it, icons and all, since computeCollapsedView resolves every
+  // descendant to its *outermost* collapsed ancestor -- there'd be nothing
+  // left on screen but that one root icon. Leaving the root expanded means
+  // its direct-child groups still collapse down to visible icons, which is
+  // the actual point of the action. Expand All has no such carve-out --
+  // every container (root included) goes back to fully expanded.
+  const onSetAllCollapsed = useCallback((collapsed) => {
+    setFlowGraph((g) => ({
+      ...g,
+      nodes: g.nodes.map((n) => {
+        if (!CONTAINER_TYPES.includes(n.data.type)) return n;
+        if (collapsed && !n.parentId) return n;
+        return { ...n, data: { ...n.data, collapsed } };
+      }),
     }));
   }, []);
 
@@ -1404,17 +1730,22 @@ export default function App() {
           const existingFlipped = {};
           const existingColor = {};
           const existingPlotWindow = {};
+          const existingCollapsed = {};
           g.nodes.forEach((n) => {
             existingFlipped[n.id] = n.data.flipped;
             if (n.type === 'pool') {
               existingColor[n.id] = n.data.color;
               existingPlotWindow[n.id] = n.data.plotWindow;
             }
+            if (CONTAINER_TYPES.includes(n.data.type)) {
+              existingCollapsed[n.id] = n.data.collapsed;
+            }
           });
           return buildFlowNodes(graph, scale, {
             flipped: existingFlipped,
             color: existingColor,
             plotWindow: existingPlotWindow,
+            collapsed: existingCollapsed,
           });
         });
         setStatus(`reset ${graph.nodes.length} nodes to initial values`);
@@ -1594,9 +1925,15 @@ export default function App() {
       status={status}
       onGraphLoaded={handleGraphResult}
       plots={plots}
+      collapsedMap={collapsedMap}
       selectedNode={selectedNode}
       onSaveNode={onSaveNode}
       onToggleFlip={onToggleFlip}
+      onToggleCollapse={onToggleCollapse}
+      onSetAllCollapsed={onSetAllCollapsed}
+      isolateMode={isolateMode}
+      onToggleIsolateMode={onToggleIsolateMode}
+      onAutoLayoutGroup={onAutoLayoutGroup}
       loadGeneration={loadGeneration}
       onCanvasDrop={handleCanvasDrop}
       onUnplot={handleUnplot}
@@ -1633,6 +1970,7 @@ export default function App() {
       displayTab={displayTab}
       setDisplayTab={setDisplayTab}
       flowGraph={flowGraph}
+      displayGraph={displayGraph}
       edgeActions={edgeActions}
       nodeActions={nodeActions}
       onNodeClick={onNodeClick}

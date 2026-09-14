@@ -61,6 +61,36 @@ body {
   box-sizing: border-box;
 }
 
+/* React Flow's own node wrapper sets `pointer-events: all` directly on
+   itself (see @xyflow/react/dist/style.css's .react-flow__node rule, and
+   -- at higher specificity again, since a container is draggable --
+   .react-flow__node.draggable), independent of whatever a custom node
+   component renders inside it -- so a group/compartment's own
+   pointerEvents:'none' interior (see nodes.jsx's ContainerNode) can't
+   stop the *wrapper* from still hit-testing across the node's full
+   bounding box on its own. Overridden here instead, specifically for
+   these two container types (!important to beat .draggable's higher
+   specificity regardless of stylesheet load order), so only their own
+   explicitly pointerEvents:'auto' descendants (the border hit-strips,
+   the label) stay clickable -- a large group/compartment (easily
+   spanning most of the canvas) would otherwise swallow every click meant
+   for something inside it once selected (React Flow elevates a selected
+   node's z-index above its un-nested siblings by default). */
+.react-flow__node-kkitGroup,
+.react-flow__node-compartment {
+  pointer-events: none !important;
+}
+
+/* NodeResizer's own resize-handle elements are plain descendants of that
+   same wrapper (its own stylesheet rule sets no pointer-events of its
+   own, see @xyflow/react/dist/style.css's .react-flow__resize-control),
+   so without this they'd silently inherit the !important none above too
+   and stop being draggable the moment a container is selected. */
+.react-flow__node-kkitGroup .react-flow__resize-control,
+.react-flow__node-compartment .react-flow__resize-control {
+  pointer-events: auto;
+}
+
 h1,
 h2 {
   font-family: var(--heading);

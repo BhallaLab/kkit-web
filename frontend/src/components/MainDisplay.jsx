@@ -11,6 +11,12 @@ import EntityPalette from './EntityPalette';
 
 const edgeTypes = { default: BendableEdge };
 
+// How long to wait for useNodesInitialized before fitting anyway -- see
+// the fallback-timeout note below. Comfortably longer than any real
+// measurement race takes to resolve, short enough that a genuinely-stuck
+// case (see below) doesn't read as broken.
+const FIT_VIEW_FALLBACK_MS = 600;
+
 // React Flow's own `fitView` prop only ever runs once, on initial mount --
 // re-centering on a later load (a new file, a reset) needs an imperative
 // call, triggered here off a generation counter rather than the node array
@@ -26,45 +32,68 @@ const edgeTypes = { default: BendableEdge };
 // true only once every node has actually been measured, so gating on it
 // (in addition to the generation change) waits out the race instead of
 // hoping to win it.
+//
+// With onlyRenderVisibleElements on (see <ReactFlow> below), a node that
+// starts outside the *default* viewport never mounts, so never measures,
+// so useNodesInitialized would never flip true at all for any model
+// bigger than the initial view -- exactly the large-model case this needs
+// to handle. The FIT_VIEW_FALLBACK_MS timer breaks that deadlock: if
+// nodesInitialized hasn't happened by then, fit anyway against whatever's
+// known so far (fitView's own bounds computation already falls back to a
+// zero-size point for anything unmeasured, per @xyflow/system's nodeToBox
+// -- position is always known even for a node that's never rendered, so
+// the result is still a reasonable, if very slightly conservative, fit).
 function FitViewOnLoad({ generation }) {
   const { fitView } = useReactFlow();
   const nodesInitialized = useNodesInitialized();
   const firedForGeneration = useRef(0);
   useEffect(() => {
     if (generation === 0) return;
-    if (!nodesInitialized) return;
     if (firedForGeneration.current === generation) return;
-    // nodesInitialized flipping true only means React Flow's own store has
-    // recorded a measurement for every node -- it doesn't guarantee the
-    // browser has actually finished a layout/paint pass reflecting *this*
-    // set of nodes yet (verified directly: gating on nodesInitialized alone
-    // still intermittently raced on a real ~20-node model). Two nested
-    // rAFs is the standard way to wait out "one full frame has actually
-    // been painted" rather than just "React has committed" -- the first
-    // rAF fires before the browser's next paint, the second fires after
-    // it, so by then layout is guaranteed settled.
+
+    let raf1 = 0;
     let raf2 = 0;
-    const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => {
-        // maxZoom matters as much as padding here: fitView's own zoom
-        // ceiling otherwise falls back to the pane's global maxZoom (2 by
-        // default, see <ReactFlow> below) -- for a small graph (a fresh
-        // model with just its one compartment, say) that means zooming in
-        // to 200% to fill the viewport, which reads as "vastly enlarged",
-        // not centered at a sane scale.
-        //
-        // Marked "fired" only now, not before scheduling -- if the effect
-        // re-runs (nodesInitialized flickering) before this callback gets
-        // here, the cleanup below cancels these rAFs, and the guard must
-        // still be false so the next run schedules a fresh pair instead of
-        // silently dropping the fit entirely.
-        firedForGeneration.current = generation;
-        fitView({ padding: 0.2, duration: 300, maxZoom: 1 });
+    let fallbackTimer = 0;
+    const runFit = () => {
+      // nodesInitialized flipping true (or the fallback timer firing)
+      // only means measurement has settled as far as it's going to --
+      // it doesn't guarantee the browser has actually finished a layout/
+      // paint pass reflecting *this* set of nodes yet (verified directly:
+      // gating on nodesInitialized alone still intermittently raced on a
+      // real ~20-node model). Two nested rAFs is the standard way to wait
+      // out "one full frame has actually been painted" rather than just
+      // "React has committed" -- the first rAF fires before the browser's
+      // next paint, the second fires after it, so by then layout is
+      // guaranteed settled.
+      raf1 = requestAnimationFrame(() => {
+        raf2 = requestAnimationFrame(() => {
+          // maxZoom matters as much as padding here: fitView's own zoom
+          // ceiling otherwise falls back to the pane's global maxZoom (2
+          // by default, see <ReactFlow> below) -- for a small graph (a
+          // fresh model with just its one compartment, say) that means
+          // zooming in to 200% to fill the viewport, which reads as
+          // "vastly enlarged", not centered at a sane scale.
+          //
+          // Marked "fired" only now, not before scheduling -- if the
+          // effect re-runs (nodesInitialized flickering) before this
+          // callback gets here, the cleanup below cancels everything, and
+          // the guard must still be false so the next run schedules a
+          // fresh attempt instead of silently dropping the fit entirely.
+          firedForGeneration.current = generation;
+          fitView({ padding: 0.2, duration: 300, maxZoom: 1 });
+        });
       });
-    });
+    };
+
+    if (nodesInitialized) {
+      runFit();
+    } else {
+      fallbackTimer = setTimeout(runFit, FIT_VIEW_FALLBACK_MS);
+    }
     return () => {
       cancelAnimationFrame(raf1);
       cancelAnimationFrame(raf2);
+      clearTimeout(fallbackTimer);
     };
   }, [generation, nodesInitialized, fitView]);
   return null;
@@ -134,6 +163,15 @@ function Canvas({
           maxZoom={2}
           fitView
           fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
+          // Off by default in React Flow -- without it, every node/edge
+          // stays mounted in the DOM regardless of the current pan/zoom,
+          // which is what made panning/zooming a large model (hundreds of
+          // nodes) sluggish even though the *visible* portion on screen at
+          // any moment is small. See FitViewOnLoad's own fallback-timeout
+          // handling above for the one thing this trades off (nodes
+          // outside the initial view never get measured until they
+          // actually scroll into it).
+          onlyRenderVisibleElements
           // Dragging a node up to the trash icon (which sits in the palette
           // bar above the canvas, outside the pane) would otherwise trigger
           // React Flow's default auto-pan-near-the-edge behavior, panning the
@@ -154,6 +192,7 @@ function Canvas({
 
 export default function MainDisplay({
   flowGraph,
+  displayGraph,
   edgeActions,
   nodeActions,
   onNodeClick,
@@ -172,6 +211,9 @@ export default function MainDisplay({
   onAddReac,
   onAddEnz,
   onUnplot,
+  onSetAllCollapsed,
+  isolateMode,
+  onToggleIsolateMode,
   selectedNode,
   displayTab,
   setDisplayTab,
@@ -209,11 +251,14 @@ export default function MainDisplay({
           onAddEnz={onAddEnz}
           onUnplot={onUnplot}
           canAddEnz={canAddEnz}
+          onSetAllCollapsed={onSetAllCollapsed}
+          isolateMode={isolateMode}
+          onToggleIsolateMode={onToggleIsolateMode}
         />
         <Box sx={{ flexGrow: 1, position: 'relative' }}>
           <ReactFlowProvider>
             <Canvas
-              flowGraph={flowGraph}
+              flowGraph={displayGraph}
               edgeActions={edgeActions}
               nodeActions={nodeActions}
               onNodeClick={onNodeClick}

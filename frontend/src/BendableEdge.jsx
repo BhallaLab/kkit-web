@@ -76,6 +76,7 @@ export default function BendableEdge({
   targetHandleId,
   style,
   markerEnd,
+  markerStart,
   data,
   selected,
 }) {
@@ -124,7 +125,14 @@ export default function BendableEdge({
 
   return (
     <>
-      <BaseEdge id={id} path={path} style={edgeStyle} markerEnd={markerEnd} interactionWidth={20} />
+      <BaseEdge
+        id={id}
+        path={path}
+        style={edgeStyle}
+        markerEnd={markerEnd}
+        markerStart={markerStart}
+        interactionWidth={20}
+      />
       <EdgeLabelRenderer>
         <div
           className="nodrag nopan"

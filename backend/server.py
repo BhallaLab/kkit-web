@@ -390,6 +390,96 @@ def _extract_plot_windows(content, model_path):
     return result
 
 
+_KKIT_COLLAPSED_TAG_RE = re.compile(r"<kkit:collapsed[^>]*>(true|false)</kkit:collapsed>")
+
+
+def _inject_collapsed_annotations(content, model_path, collapsed):
+    """`collapsed` ({live group/compartment path: bool}, from the
+    frontend's own per-group collapse toggle -- see App.jsx) has no native
+    SBML representation, same reasoning as _inject_plot_annotations -- a
+    small custom-namespaced annotation directly on each group's own SBML
+    "groups"-package element, or a compartment's native <compartment>
+    element (groups and compartments are treated identically for this
+    feature). Uses libsbml's own appendAnnotation (merges into whatever
+    annotation is already there rather than clobbering it) instead of the
+    regex text-splicing the position-fixing functions above need -- there's
+    no existing moose.writeSBML bug to work around here, so the plain
+    object API is enough."""
+    if not collapsed:
+        return content
+    doc = libsbml.readSBMLFromString(content)
+    model = doc.getModel()
+    if model is None:
+        return content
+    paths = _SbmlNamePaths(model)
+    # Keyed by live path (like every other per-node map the frontend sends,
+    # e.g. plots) -- converted once to the same name_path tuples the SBML
+    # side's own group_path/_compartment_name resolve to, matching
+    # _inject_plot_annotations' own name_path_to_species_id approach.
+    collapsed_by_name_path = {
+        name_path(live_path, model_path): value for live_path, value in collapsed.items()
+    }
+
+    def _tag(value):
+        return f'<kkit:collapsed xmlns:kkit="{_KKIT_NS}">{"true" if value else "false"}</kkit:collapsed>'
+
+    changed = False
+    plugin = model.getPlugin("groups")
+    if plugin is not None:
+        for i in range(plugin.getNumGroups()):
+            grp = plugin.getGroup(i)
+            value = collapsed_by_name_path.get(paths.group_path(grp.getId()))
+            if value is not None:
+                grp.appendAnnotation(_tag(value))
+                changed = True
+    for compt in model.getListOfCompartments():
+        value = collapsed_by_name_path.get((paths._compartment_name.get(compt.getId(), compt.getId()),))
+        if value is not None:
+            compt.appendAnnotation(_tag(value))
+            changed = True
+    return libsbml.writeSBMLToString(doc) if changed else content
+
+
+def _extract_collapsed(content, model_path):
+    """Reads back the kkit:collapsed annotation this app writes on save
+    (see _inject_collapsed_annotations), resolved to the freshly-reloaded
+    live group/compartment paths via name_path -- for build_graph's
+    extra_collapsed."""
+    doc = libsbml.readSBMLFromString(content)
+    model = doc.getModel()
+    if model is None:
+        return {}
+    paths = _SbmlNamePaths(model)
+
+    by_name_path = {}
+    plugin = model.getPlugin("groups")
+    if plugin is not None:
+        for i in range(plugin.getNumGroups()):
+            grp = plugin.getGroup(i)
+            m = _KKIT_COLLAPSED_TAG_RE.search(grp.getAnnotationString() or "")
+            if m:
+                by_name_path[paths.group_path(grp.getId())] = m.group(1) == "true"
+    for compt in model.getListOfCompartments():
+        m = _KKIT_COLLAPSED_TAG_RE.search(compt.getAnnotationString() or "")
+        if m:
+            by_name_path[(paths._compartment_name.get(compt.getId(), compt.getId()),)] = m.group(1) == "true"
+    if not by_name_path:
+        return {}
+
+    result = {}
+    for g in moose.wildcardFind(model_path + "/##[CLASS=Neutral]"):
+        g = moose.element(g)
+        val = by_name_path.get(name_path(g.path, model_path))
+        if val is not None:
+            result[g.path] = val
+    for c in moose.wildcardFind(model_path + "/##[CLASS=CubeMesh]"):
+        c = moose.element(c)
+        val = by_name_path.get(name_path(c.path, model_path))
+        if val is not None:
+            result[c.path] = val
+    return result
+
+
 _KKIT_STIM_TAG_RE = re.compile(
     r'<kkit:stimulus[^>]*\bname="([^"]*)"[^>]*\bfield="([^"]*)"[^>]*\bx="([^"]*)"[^>]*\by="([^"]*)"[^>]*>'
     r"(.*?)</kkit:stimulus>",
@@ -1528,6 +1618,7 @@ def save_sbml():
     plots = body.get("plots") or {}
     runtime = body.get("runtime")
     plot_dt = body.get("plotDt")
+    collapsed = body.get("collapsed") or {}
     snapshot = _snapshot_positions(_current_model_path)
     group_snapshot = _snapshot_group_boxes(_current_model_path)
     stim_snapshot = _snapshot_stims(_current_model_path)
@@ -1543,6 +1634,7 @@ def save_sbml():
     content = _fix_missing_reaction_group_memberships(content)
     content = _inject_plot_annotations(content, _current_model_path, plots)
     content = _inject_stim_annotations(content, _current_model_path, stim_snapshot)
+    content = _inject_collapsed_annotations(content, _current_model_path, collapsed)
     if notes or (runtime is not None and plot_dt is not None):
         doc = libsbml.readSBMLFromString(content)
         model = doc.getModel()
@@ -1590,7 +1682,8 @@ def load_sbml():
     _restore_group_annotations(doc, model_path)
     _restore_stims(doc, model_path)
     extra_plot_windows = _extract_plot_windows(content, model_path)
-    result = build_graph(model_path, extra_plot_windows)
+    extra_collapsed = _extract_collapsed(content, model_path)
+    result = build_graph(model_path, extra_plot_windows, extra_collapsed)
     result["notes"] = notes
     result["runSettings"] = run_settings
     return jsonify(result)

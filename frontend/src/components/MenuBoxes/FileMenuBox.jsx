@@ -3,7 +3,7 @@ import { Box, Typography, TextField, Button, Stack, Divider, Alert } from '@mui/
 
 const API_BASE = `http://${window.location.hostname}:5001`;
 
-export default function FileMenuBox({ onGraphLoaded, status, plots, runtime, setRuntime, plotDt, setPlotDt }) {
+export default function FileMenuBox({ onGraphLoaded, status, plots, collapsedMap, runtime, setRuntime, plotDt, setPlotDt }) {
   const [modelNotes, setModelNotes] = useState('');
 
   const handleLoadGFile = (event) => {
@@ -35,7 +35,7 @@ export default function FileMenuBox({ onGraphLoaded, status, plots, runtime, set
     const res = await fetch(`${API_BASE}/api/save_sbml`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notes: modelNotes, plots, runtime, plotDt }),
+      body: JSON.stringify({ notes: modelNotes, plots, collapsed: collapsedMap, runtime, plotDt }),
     }).then((r) => r.json());
     if (res.error) return;
     const blob = new Blob([res.sbml], { type: 'application/xml' });

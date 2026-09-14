@@ -276,7 +276,17 @@ def _kd_value(sub_order, prd_order, kf_display, kb_display):
     ratio = kb_display / kf_display
     if ratio < 0:
         return None
-    return ratio ** (1.0 / (sub_order - prd_order))
+    exponent = 1.0 / (sub_order - prd_order)
+    # An irreversible reaction (kb == 0, extremely common -- degradation,
+    # dephosphorylation, ...) with more products than substrates in its
+    # order gives ratio == 0 and a *negative* exponent here -- 0 raised to
+    # a negative power is undefined (Python raises ZeroDivisionError, not
+    # just returns inf), and physically Kd really would be infinite (the
+    # reaction never runs backward even a little), so there's no finite
+    # value to report.
+    if ratio == 0 and exponent < 0:
+        return None
+    return ratio ** exponent
 
 
 def describe_reac(path):
@@ -410,22 +420,32 @@ def describe_stim(path):
     })
 
 
-def describe_group(path):
-    return _node(moose.element(path), "group", {})
+def describe_group(path, collapsed=False):
+    return _node(moose.element(path), "group", {"collapsed": collapsed})
 
 
-def describe_compartment(path):
+def describe_compartment(path, collapsed=False):
     c = moose.element(path)
-    return _node(c, "compartment", {"volume": c.volume, "diameter": volume_to_diameter(c.volume)})
+    return _node(c, "compartment", {
+        "volume": c.volume, "diameter": volume_to_diameter(c.volume), "collapsed": collapsed,
+    })
 
 
-def build_graph(model_path, extra_plot_windows=None):
+def build_graph(model_path, extra_plot_windows=None, extra_collapsed=None):
     """`extra_plot_windows` (optional {live pool path: window}) is merged
     in on top of whatever detect_existing_plots finds from a legacy .g
     file's own /graphs folders -- used by load_sbml to report back
     plotWindow assignments read from this app's own custom SBML annotation
     (see server.py's _extract_plot_windows_from_sbml), since SBML has no
-    native equivalent of kkit's /graphs plot tables at all."""
+    native equivalent of kkit's /graphs plot tables at all.
+
+    `extra_collapsed` (optional {live group/compartment path: bool}) is the
+    same idea for a group's collapsed/expanded display state -- purely a
+    frontend rendering concern (see App.jsx), with no native SBML
+    representation either, read back via server.py's own
+    _extract_collapsed. Defaults to expanded (False) for anything not in
+    the map, which covers every legacy .g file (no such concept there) and
+    a freshly created group."""
     nodes = []
     # Keyed by (from, to, type) rather than appended one entry per
     # moose.connect -- a stoichiometry > 1 reaction (e.g. "2A -> B") is
@@ -444,9 +464,10 @@ def build_graph(model_path, extra_plot_windows=None):
     # groups are depth-sorted among themselves, so every container precedes
     # its children -- React Flow requires a parent node to appear earlier in
     # the node array than any child referencing its id via parentId.
+    extra_collapsed = extra_collapsed or {}
     compartments = [moose.element(c) for c in moose.wildcardFind(model_path + "/##[CLASS=CubeMesh]")]
     for compt in compartments:
-        nodes.append(describe_compartment(compt.path))
+        nodes.append(describe_compartment(compt.path, extra_collapsed.get(compt.path, False)))
 
     groups = []
     for compt in compartments:
@@ -459,7 +480,7 @@ def build_graph(model_path, extra_plot_windows=None):
             groups.append(moose.element(g))
     groups.sort(key=lambda g: g.path.count("/"))
     for g in groups:
-        nodes.append(describe_group(g.path))
+        nodes.append(describe_group(g.path, extra_collapsed.get(g.path, False)))
 
     plot_windows = detect_existing_plots(model_path)
     if extra_plot_windows:

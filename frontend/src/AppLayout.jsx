@@ -33,6 +33,8 @@ export default function AppLayout({
   selectedNode,
   onSaveNode,
   onToggleFlip,
+  onToggleCollapse,
+  onAutoLayoutGroup,
   onAddPool,
   onAddReac,
   onAddEnz,
@@ -48,6 +50,7 @@ export default function AppLayout({
   setPlotDt,
   plotData,
   plots,
+  collapsedMap,
   doseParams,
   setDoseParams,
   doseRunning,
@@ -71,6 +74,7 @@ export default function AppLayout({
         onGraphLoaded={onGraphLoaded}
         status={status}
         plots={plots}
+        collapsedMap={collapsedMap}
         runtime={runtime}
         setRuntime={setRuntime}
         plotDt={plotDt}
@@ -79,7 +83,13 @@ export default function AppLayout({
     ),
     Add: <AddMenuBox onDeleteSelected={onDeleteSelected} selectedNode={selectedNode} />,
     Properties: (
-      <PropertiesMenuBox node={selectedNode} onSave={onSaveNode} onToggleFlip={onToggleFlip} />
+      <PropertiesMenuBox
+        node={selectedNode}
+        onSave={onSaveNode}
+        onToggleFlip={onToggleFlip}
+        onToggleCollapse={onToggleCollapse}
+        onAutoLayoutGroup={onAutoLayoutGroup}
+      />
     ),
     Run: (
       <RunMenuBox

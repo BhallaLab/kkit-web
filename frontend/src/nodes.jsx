@@ -1,5 +1,5 @@
-import { useContext, useEffect } from 'react';
-import { Handle, NodeResizer, Position, useUpdateNodeInternals } from '@xyflow/react';
+import { Fragment, useContext, useEffect, useRef } from 'react';
+import { Handle, NodeResizer, Position, useStore, useUpdateNodeInternals } from '@xyflow/react';
 import { getContrastTextColor, PLOT_WINDOW_COLORS } from './colorUtils';
 import PlotSquiggleIcon from './PlotSquiggleIcon';
 import { NodeActionsContext } from './NodeActionsContext';
@@ -15,9 +15,27 @@ import { NodeActionsContext } from './NodeActionsContext';
 // (verified against its own doc comment: "When you... update a node's
 // handle position, you need to let React Flow know about it using this
 // hook"), called here whenever a node's own flipped flag changes.
+//
+// Skips the very first (mount) run -- a freshly-mounted node's handles
+// already render in the *correct* position for whatever `flipped` value
+// it mounted with, same as any other prop; there's nothing stale to fix
+// up yet, only an actual *change* on an already-mounted node (the user
+// toggling the Properties checkbox) needs a remeasure. Verified directly
+// that skipping it here was the fix for a large model (~600 nodes)
+// otherwise locking up the whole tab for 15+ seconds on load: every node
+// firing this unconditionally on mount means hundreds of
+// updateNodeInternals calls in the same commit, each forcing a
+// synchronous layout read against the (by then large) DOM -- real layout
+// thrashing, and the actual reason this got dramatically worse than
+// linearly with model size.
 function useFlipRemeasure(id, flipped) {
   const updateNodeInternals = useUpdateNodeInternals();
+  const mounted = useRef(false);
   useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
     updateNodeInternals(id);
   }, [id, flipped, updateNodeInternals]);
 }
@@ -403,52 +421,201 @@ export function StimNode({ data, selected }) {
 // name label and a manual resize handle. Compartment gets a second inset
 // border (a "double-walled box") to read as visually distinct from a plain
 // organizational group.
+//
+// Collapsing a container (data.collapsed) hides its *contents* only --
+// computeCollapsedView (collapseView.js) is what removes its descendants
+// from the rendered node list -- never its own on-screen box, which keeps
+// whatever real/auto-fit size buildFlowNodes gave it either way (see
+// App.jsx's own comment on that): reorganizing a big model by collapsing
+// groups first shouldn't mean re-guessing each one's footprint once it's
+// expanded again. So collapsed and expanded share this exact same
+// component and geometry, differing only in background fill (a diagonal
+// hatch stands in for "closed, nothing to see inside" -- otherwise an
+// empty collapsed box would be visually identical to a genuinely empty
+// expanded one).
+//
+// The whole box's interior is pointerEvents:'none' regardless of collapsed
+// state -- only the border itself (four hit-strips, each a bit more
+// generous than the drawn border's own thickness -- see HIT_MARGIN_PX --
+// so clicking near the line, not just exactly on it, still hits) and the
+// name handle opt back into pointerEvents:'auto'. Without this, a large
+// container (easily spanning most of the canvas for a big model) swallows
+// every click meant for something inside it the instant it's selected:
+// React Flow elevates a selected node's z-index above its siblings by
+// default (elevateNodesOnSelect), and every node here -- container or
+// molecule alike -- renders as a flat sibling positioned by its own
+// absolute coordinates, not truly nested in the DOM (verified directly
+// against @xyflow/react's own NodeRenderer), so an elevated container's
+// full bounding box ends up sitting visually *and* for pointer-events *on
+// top of* its own contents. Collapsed is no exception now that it keeps
+// its own real (potentially huge) box rather than a small fixed icon: an
+// earlier version made the whole interior clickable while collapsed on
+// the reasoning that there's nothing left underneath to protect, but that
+// missed the case of *other, unrelated* nodes just happening to sit
+// within the same screen region (verified directly: a collapsed group, or
+// even the ever-present top-level compartment collapsed via its own
+// Properties toggle, swallowed clicks meant for its surroundings across
+// its *entire* area) -- border-and-label-only is the one rule that stays
+// correct regardless of what else might be nearby.
+//
+// NodeResizer is a sibling of the interior div, not nested inside it --
+// its own resize handles are plain descendants with no pointer-events
+// override of their own (verified directly against @xyflow/react's
+// stylesheet), so nesting them inside the pointerEvents:'none' div would
+// have made them uninteractable too. Left available even while collapsed
+// (no early return skips it) -- since the box keeps its own real
+// footprint now, resizing it is just as meaningful collapsed as expanded.
+//
+// The border hit-strips alone still aren't enough on their own for a
+// *really* large container, though: both the drawn border and the
+// strips are sized in the same flow-space pixels as everything else, so
+// at the extreme zoom-out a huge container forces (verified directly
+// against a several-thousand-unit-wide group -- the fit-to-content scale
+// alone was under 0.06x), a border many times thicker than normal still
+// shrinks to a fraction of an actual screen pixel -- neither visible nor
+// hittable. The name handle below is the fix for *that*: countering the
+// ambient zoom with 1/zoom keeps it at a constant on-screen size (and
+// the border's own position as its anchor, not a size, needs no such
+// correction), so there's always at least one guaranteed-clickable spot
+// on every container regardless of how it's zoomed.
+const HIT_MARGIN_PX = 4;
+
+// A raw zoom-only store selector, not useViewport -- that also tracks
+// pan (x/y), which would re-render every container on every frame of an
+// ordinary pan gesture even though only zoom is ever used here.
+const zoomSelector = (s) => s.transform[2];
+
 function ContainerNode({ id, data, selected, doubleWalled }) {
   const { onContainerResize } = useContext(NodeActionsContext);
+  const zoom = useStore(zoomSelector);
   const handleResizeEnd = (event, params) => {
     onContainerResize(id, { x: params.x, y: params.y, width: params.width, height: params.height });
   };
+  const borderWidth = doubleWalled ? 4 : 6;
+  const hitWidth = borderWidth + HIT_MARGIN_PX;
+  const inverseZoom = 1 / zoom;
+  const collapsed = !!data.collapsed;
+  const baseFill = data.color && data.color !== 'white' ? data.color : 'rgba(0,0,0,0.03)';
 
   return (
-    <div
-      style={{
-        width: '100%',
-        height: '100%',
-        position: 'relative',
-        boxSizing: 'border-box',
-        // A group is a single dashed line (purely organizational, no
-        // volume); a compartment is a solid double-walled box -- distinct
-        // enough at a glance that they don't read as the same kind of box.
-        border: doubleWalled ? '2px solid #333' : '3px dashed #333',
-        borderRadius: 4,
-        background: data.color && data.color !== 'white' ? data.color : 'rgba(0,0,0,0.03)',
-      }}
-    >
-      {doubleWalled && (
+    <Fragment>
+      <div
+        style={{
+          width: '100%',
+          height: '100%',
+          position: 'relative',
+          boxSizing: 'border-box',
+          // A group is a single dashed line (purely organizational, no
+          // volume); a compartment is a solid double-walled box -- distinct
+          // enough at a glance that they don't read as the same kind of box.
+          border: doubleWalled ? `${borderWidth}px solid #333` : `${borderWidth}px dashed #333`,
+          borderRadius: 4,
+          background: baseFill,
+          // A diagonal hatch layered on top of the normal fill -- the one
+          // purely visual cue that this box's contents are hidden, not
+          // just genuinely empty, since collapsing no longer changes its
+          // size or interior chrome at all.
+          backgroundImage: collapsed
+            ? 'repeating-linear-gradient(45deg, rgba(0,0,0,0.12) 0, rgba(0,0,0,0.12) 6px, transparent 6px, transparent 16px)'
+            : 'none',
+          pointerEvents: 'none',
+        }}
+      >
+        {/* Plain, unnamed handles -- like a Pool's own -- so a collapsed-
+            view edge (see collapseView.js's aggregate/redirected edges,
+            which don't specify a handle id) has somewhere to attach; a
+            collapsed group is never itself a *real* substrate/product
+            endpoint, so there's no handle-side convention to honor here.
+            Harmless while expanded -- nothing ever targets them then. */}
+        <Handle type="target" position={Position.Left} />
+        <Handle type="source" position={Position.Right} />
+        {/* Offset outward by the parent's own border-box border (which an
+            absolutely-positioned child with top/bottom/left/right:0 would
+            otherwise anchor *inside*, at the padding edge, not the actual
+            outer edge -- verified directly: left uncorrected, the drawn
+            border itself sat in an unclickable gap between these strips
+            and the box's true edge) so each strip actually covers the
+            visible border line, not just an inset band next to it. */}
         <div
           style={{
             position: 'absolute',
-            inset: 5,
-            border: '2px solid #333',
-            borderRadius: 2,
-            pointerEvents: 'none',
+            top: -borderWidth,
+            left: -borderWidth,
+            right: -borderWidth,
+            height: hitWidth,
+            pointerEvents: 'auto',
           }}
         />
-      )}
-      <div
-        style={{
-          position: 'absolute',
-          top: -22,
-          left: 2,
-          fontSize: 14,
-          fontWeight: 'bold',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {data.name}
+        <div
+          style={{
+            position: 'absolute',
+            bottom: -borderWidth,
+            left: -borderWidth,
+            right: -borderWidth,
+            height: hitWidth,
+            pointerEvents: 'auto',
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            top: -borderWidth,
+            bottom: -borderWidth,
+            left: -borderWidth,
+            width: hitWidth,
+            pointerEvents: 'auto',
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            top: -borderWidth,
+            bottom: -borderWidth,
+            right: -borderWidth,
+            width: hitWidth,
+            pointerEvents: 'auto',
+          }}
+        />
+        {doubleWalled && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: borderWidth + 4,
+              border: '4px solid #333',
+              borderRadius: 2,
+              pointerEvents: 'none',
+            }}
+          />
+        )}
+        {/* A fixed *screen* size regardless of zoom (see the block comment
+            above) -- anchored at the box's own top-left corner, growing
+            up-and-right from it via transformOrigin so it reads as sitting
+            just above the border the way the old plain label did, without
+            needing a separate pixel offset that would itself need
+            counter-scaling. */}
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            transform: `scale(${inverseZoom})`,
+            transformOrigin: 'bottom left',
+            fontSize: 14,
+            fontWeight: 'bold',
+            whiteSpace: 'nowrap',
+            pointerEvents: 'auto',
+            cursor: 'pointer',
+            background: '#fff',
+            border: '1px solid #333',
+            borderRadius: 4,
+            padding: '1px 6px',
+          }}
+        >
+          {data.name}
+        </div>
       </div>
       <NodeResizer nodeId={id} isVisible={selected} minWidth={60} minHeight={40} onResizeEnd={handleResizeEnd} />
-    </div>
+    </Fragment>
   );
 }
 
@@ -458,6 +625,75 @@ export function GroupNode(props) {
 
 export function CompartmentNode(props) {
   return <ContainerNode {...props} doubleWalled />;
+}
+
+// Which real node component a proxy of each type dispatches to -- see
+// ProxyNode below. Deliberately not a lookup into the exported nodeTypes
+// map (which is keyed by React Flow's own remapped type strings, e.g.
+// "kkitGroup") -- groups/compartments are never proxy-able in the first
+// place (isolate mode already handles them at the group level), so this
+// only ever needs the five real entity types.
+const PROXY_REAL_COMPONENT = {
+  pool: PoolNode,
+  reac: ReacNode,
+  enz: EnzNode,
+  concchan: ConcChanNode,
+  stim: StimNode,
+};
+
+// A stand-in for one specific entity that isolate mode has hidden (see
+// collapseView.js's computeIsolateView) -- rendered as the *real* node
+// component it represents (same shape, same size, same color/flip/etc,
+// via data.realType and the rest of the real entity's own data that
+// computeIsolateView already carried over), not a generic placeholder, so
+// it reads as "the actual thing, just relocated" -- wrapped in a dashed
+// outline (decorative only -- an outline never participates in layout, so
+// it can't change the wrapped component's own measured size) plus a
+// slightly reduced opacity as the one visual cue that it's a stand-in, not
+// the real node living at this position.
+//
+// Fixed position and non-draggable (App.jsx has nothing to persist a drag
+// to -- this node is entirely recomputed from scratch on every render);
+// clicking it is handled by App.jsx's onNodeClick reading data.realId/
+// data.realType, not anything here.
+export function ProxyNode({ id, data, selected }) {
+  const RealComponent = PROXY_REAL_COMPONENT[data.realType];
+  return (
+    <div
+      title={`${data.name} -- hidden by isolate mode, click to view/edit`}
+      style={{
+        width: '100%',
+        height: '100%',
+        boxSizing: 'border-box',
+        outline: '2px dashed #888',
+        outlineOffset: 2,
+        opacity: 0.82,
+        cursor: 'pointer',
+      }}
+    >
+      {RealComponent ? (
+        <RealComponent id={id} data={data} selected={selected} />
+      ) : (
+        <div
+          style={{
+            width: '100%',
+            height: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: '1px dashed #888',
+            borderRadius: 4,
+            background: '#eee',
+            fontSize: 11,
+          }}
+        >
+          <Handle type="target" position={Position.Left} />
+          <Handle type="source" position={Position.Right} />
+          {data.name}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export const nodeTypes = {
@@ -472,4 +708,5 @@ export const nodeTypes = {
   // REACT_FLOW_NODE_TYPE remap, which is what actually produces this key).
   kkitGroup: GroupNode,
   compartment: CompartmentNode,
+  proxy: ProxyNode,
 };
