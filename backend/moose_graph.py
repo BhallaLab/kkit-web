@@ -196,13 +196,59 @@ def name_path(path, model_path):
     return tuple(names)
 
 
+_MICROMOLAR = "µM"
+
+
+def _reac_orders(elem):
+    """Number of substrate/product connections -- the reaction's forward/
+    backward "order" in kkit's own sense (xreac.g's find_reac_order),
+    used both for the Kd/Keq calculation and for picking the right
+    concentration-power unit label on Kf/Kb. Counts duplicates (a
+    stoichiometry > 1 connection is multiple separate messages, see
+    build_graph's own edge-counting), matching find_reac_order's own
+    plain message count."""
+    return len(elem.neighbors["sub"]), len(elem.neighbors["prd"])
+
+
+def _conc_scale(order):
+    """The mM<->uM conversion factor for a rate constant of this reaction
+    order -- one factor of 1000 per concentration power beyond the first
+    (order 0 or 1 has no concentration dependence at all, so no scaling
+    applies). Unlike a plain concentration (Pool.conc, Enz.Km: uM value =
+    mM value * 1000, a positive power of concentration), Reac.Kf/Kb carry
+    a *negative* power of concentration -- conc^-(order-1) (verified
+    directly: MOOSE's own Reac.Kf is the order-scaled, mM-based field
+    that numKf is derived *from*, not the other way around) -- so
+    converting mM -> uM divides by this factor, and uM -> mM (see
+    update_reac) multiplies by it; both are the inverse of what a plain
+    concentration's conversion does."""
+    return 1000.0 ** max(order - 1, 0)
+
+
+def _rate_unit_label(order, per_molecule):
+    """Matches xreac.g's dump_units/dump_num_units exactly: order 0 or 1
+    is a plain rate (s^-1, no concentration term); order >= 2 needs
+    (order-1) inverse powers of concentration alongside it -- in # units
+    for numKf/numKb, in uM for the concentration-based Kf/Kb."""
+    if order < 2:
+        return "s^-1"
+    conc = "#" if per_molecule else _MICROMOLAR
+    return f"{conc}^-{order - 1}.s^-1"
+
+
 def describe_pool(path, plot_window=None):
     p = moose.element(path)
     return _node(p, "pool", {
         "n": p.n,
         "nInit": p.nInit,
-        "conc": p.conc,
-        "concInit": p.concInit,
+        # MOOSE's own pool concentration fields are natively in mM
+        # (verified directly) -- converted here to this app's default
+        # display unit, uM (matching kkit's own DEFAULT_CONC_UNITS), so
+        # the raw mM value is never shown to or edited by the user.
+        "conc": p.conc * 1000.0,
+        "concInit": p.concInit * 1000.0,
+        "concUnit": _MICROMOLAR,
+        "concInitUnit": _MICROMOLAR,
         "diffConst": p.diffConst,
         "motorConst": p.motorConst,
         "volume": p.volume,
@@ -212,27 +258,111 @@ def describe_pool(path, plot_window=None):
     })
 
 
+def _kd_value(sub_order, prd_order, kf_display, kb_display):
+    """kd (or Keq, when sub_order == prd_order) for a reaction whose
+    already-uM-scaled forward/backward rates are kf_display/kb_display --
+    ported from xreac.g's do_update_reac_scaling. Same order both ways is
+    a dimensionless equilibrium constant (Keq = kf/kb, units cancel);
+    different orders is a real Kd with concentration units, taking the
+    (sub_order - prd_order)-th root of kb/kf so the units come out to a
+    single concentration power regardless of the reaction's order. None
+    when there isn't a meaningful ratio yet (a rate of exactly zero, or --
+    physically impossible for non-negative rates, but guarded anyway -- a
+    negative one)."""
+    if sub_order == prd_order:
+        return kf_display / kb_display if kb_display != 0 else None
+    if kf_display == 0:
+        return None
+    ratio = kb_display / kf_display
+    if ratio < 0:
+        return None
+    return ratio ** (1.0 / (sub_order - prd_order))
+
+
 def describe_reac(path):
     r = moose.element(path)
-    # Kf/Kb (concentration.time units) and numKf/numKb (number.time units)
-    # are both native MOOSE fields, kept in sync internally -- no manual
-    # unit-conversion math needed to show both.
-    return _node(r, "reac", {"Kf": r.Kf, "Kb": r.Kb, "numKf": r.numKf, "numKb": r.numKb})
+    sub_order, prd_order = _reac_orders(r)
+    # Kf/Kb (concentration.time units, mM-based) and numKf/numKb (number.
+    # time units) are both native MOOSE fields, kept in sync internally --
+    # Kf/Kb are converted to uM display units here per this app's default
+    # concentration unit (see _conc_scale); numKf/numKb are left as-is
+    # (never concentration-based, so uM doesn't apply to them).
+    kf_display = r.Kf / _conc_scale(sub_order)
+    kb_display = r.Kb / _conc_scale(prd_order)
+
+    kd = _kd_value(sub_order, prd_order, kf_display, kb_display)
+    kd_label, kd_unit = ("Keq", "") if sub_order == prd_order else ("Kd", _MICROMOLAR)
+
+    tau = 1.0 / (r.numKf + r.numKb) if (r.numKf + r.numKb) > 0 else None
+
+    return _node(r, "reac", {
+        "Kf": kf_display, "Kb": kb_display,
+        "KfUnit": _rate_unit_label(sub_order, False),
+        "KbUnit": _rate_unit_label(prd_order, False),
+        "numKf": r.numKf, "numKb": r.numKb,
+        "numKfUnit": _rate_unit_label(sub_order, True),
+        "numKbUnit": _rate_unit_label(prd_order, True),
+        "kd": kd, "kdLabel": kd_label, "kdUnit": kd_unit,
+        "tau": tau, "tauUnit": "s",
+    })
+
+
+def rescale_reac_for_order_change(elem, old_sub_order, old_prd_order, changed_side):
+    """Called right after a substrate/product edge add or remove has
+    changed a Reac's order (see server.py's add_edge/remove_edge) -- holds
+    the reaction's Kd/Keq fixed at whatever it was just before the edge
+    changed, by rescaling *only* the side whose order actually changed
+    (changed_side: "sub" or "prd"); the other side's raw Kf/Kb is left
+    untouched. Without this, MOOSE keeps the same raw number in the
+    changed field and silently reinterprets it under the new order's
+    different units (Reac.Kf's units depend on order -- see
+    _rate_unit_label) -- a wildly wrong jump in the reaction's actual
+    kinetics, not just a display issue. A no-op if there isn't a
+    meaningful Kd yet (see _kd_value) or the rescale hits a degenerate
+    power (e.g. a zero Kd raised to a negative exponent).
+    """
+    kf_old = elem.Kf / _conc_scale(old_sub_order)
+    kb_old = elem.Kb / _conc_scale(old_prd_order)
+    kd = _kd_value(old_sub_order, old_prd_order, kf_old, kb_old)
+    if kd is None:
+        return
+    new_sub_order, new_prd_order = _reac_orders(elem)
+    try:
+        if changed_side == "sub":
+            if new_sub_order == new_prd_order:
+                kf_new = kd * kb_old
+            else:
+                kf_new = kb_old / (kd ** (new_sub_order - new_prd_order))
+            elem.Kf = kf_new * _conc_scale(new_sub_order)
+        else:
+            if new_sub_order == new_prd_order:
+                kb_new = kf_old / kd if kd != 0 else None
+            else:
+                kb_new = kf_old * (kd ** (new_sub_order - new_prd_order))
+            if kb_new is not None:
+                elem.Kb = kb_new * _conc_scale(new_prd_order)
+    except (ZeroDivisionError, OverflowError, ValueError):
+        pass
 
 
 def describe_enz(path):
     e = moose.element(path)
     is_mm = "MMenz" in e.className
-    extra = {"mechanism": "michaelis-menten" if is_mm else "explicit-complex"}
+    # Km is a plain concentration (no reaction-order dependence the way
+    # Kf/Kb have) -- always a flat mM->uM conversion.
+    km_display = e.Km * 1000.0
+    extra = {"mechanism": "michaelis-menten" if is_mm else "explicit-complex", "KmUnit": _MICROMOLAR}
     if is_mm:
-        extra.update({"Km": e.Km, "kcat": e.kcat})
+        extra.update({"Km": km_display, "kcat": e.kcat})
     else:
         # Km/kcat/ratio exist on explicit-complex Enz too, but as derived
         # readouts of k1/k2/k3 (MOOSE recomputes them, not independently
         # settable) -- included for display, not meant to be edited here.
+        # k1 is explicitly documented (Enz.cpp) as being in # units, not
+        # concentration units, so it gets no uM conversion.
         extra.update({
             "k1": e.k1, "k2": e.k2, "k3": e.k3,
-            "Km": e.Km, "kcat": e.kcat, "ratio": e.ratio,
+            "Km": km_display, "kcat": e.kcat, "ratio": e.ratio,
         })
     return _node(e, "enz", extra)
 

@@ -28,6 +28,9 @@ from moose_graph import (
     name_path,
     normalize_color,
     _stim_field,
+    _reac_orders,
+    _conc_scale,
+    rescale_reac_for_order_change,
 )
 from sim_runner import (
     run_simulation,
@@ -793,9 +796,14 @@ _POOL_SIM_FIELDS = {"n", "nInit", "conc", "concInit", "diffConst", "motorConst"}
 @app.post("/api/update_pool")
 def update_pool():
     body = request.json or {}
-    return _update_node(
-        body.get("id"), body.get("fields", {}), _POOL_SIM_FIELDS, {"isBuffered"}, describe_pool
-    )
+    # conc/concInit are shown and edited in uM (see describe_pool) but
+    # stored in MOOSE natively as mM -- convert back at the one place a
+    # user's edit actually reaches the live model.
+    fields = dict(body.get("fields", {}))
+    for key in ("conc", "concInit"):
+        if key in fields:
+            fields[key] = float(fields[key]) / 1000.0
+    return _update_node(body.get("id"), fields, _POOL_SIM_FIELDS, {"isBuffered"}, describe_pool)
 
 
 _REAC_SIM_FIELDS = {"Kf", "Kb", "numKf", "numKb"}
@@ -804,9 +812,26 @@ _REAC_SIM_FIELDS = {"Kf", "Kb", "numKf", "numKb"}
 @app.post("/api/update_reac")
 def update_reac():
     body = request.json or {}
-    return _update_node(
-        body.get("id"), body.get("fields", {}), _REAC_SIM_FIELDS, set(), describe_reac
-    )
+    node_id = body.get("id")
+    if _current_model_path is None or not node_id or not node_id.startswith(_current_model_path):
+        return jsonify({"error": "invalid or stale node id"}), 400
+    if not moose.exists(node_id):
+        return jsonify({"error": f"node not found: {node_id}"}), 404
+
+    # Kf/Kb are shown and edited in uM (order-scaled, see describe_reac's
+    # _conc_scale) but stored in MOOSE natively as mM -- convert back
+    # using this same reaction's own order, computed before any of the
+    # requested fields are actually applied. Kf/Kb carry a *negative*
+    # power of concentration (see _conc_scale), so going display -> raw
+    # multiplies by the scale factor -- the inverse of describe_reac's own
+    # raw -> display division.
+    fields = dict(body.get("fields", {}))
+    sub_order, prd_order = _reac_orders(moose.element(node_id))
+    if "Kf" in fields:
+        fields["Kf"] = float(fields["Kf"]) * _conc_scale(sub_order)
+    if "Kb" in fields:
+        fields["Kb"] = float(fields["Kb"]) * _conc_scale(prd_order)
+    return _update_node(node_id, fields, _REAC_SIM_FIELDS, set(), describe_reac)
 
 
 _ENZ_SIM_FIELDS = {
@@ -825,7 +850,13 @@ def update_enz():
         return jsonify({"error": f"node not found: {node_id}"}), 404
 
     mechanism = "michaelis-menten" if "MMenz" in moose.element(node_id).className else "explicit-complex"
-    return _update_node(node_id, body.get("fields", {}), _ENZ_SIM_FIELDS[mechanism], set(), describe_enz)
+    fields = dict(body.get("fields", {}))
+    # Km (michaelis-menten only -- explicit-complex's own Km is a derived
+    # read-only field, never in the editable set) is shown/edited in uM
+    # but stored natively as mM.
+    if mechanism == "michaelis-menten" and "Km" in fields:
+        fields["Km"] = float(fields["Km"]) / 1000.0
+    return _update_node(node_id, fields, _ENZ_SIM_FIELDS[mechanism], set(), describe_enz)
 
 
 @app.post("/api/update_group")
@@ -903,6 +934,18 @@ def add_edge():
     if is_enz_complex(from_id) or is_enz_complex(to_id):
         return jsonify({"error": "an enzyme's complex pool can't be connected to anything"}), 400
 
+    # A substrate/product edge to an actual Reac (not an Enz -- Km/kcat
+    # aren't order-scaled the way Kf/Kb are, see describe_enz) changes that
+    # reaction's order, which silently reinterprets its raw Kf/Kb under new
+    # units unless rescaled -- snapshot the order *before* connecting so
+    # rescale_reac_for_order_change has something to hold fixed.
+    reac_elem, old_sub_order, old_prd_order = None, None, None
+    if edge_type in ("substrate", "product"):
+        candidate = moose.element(to_id if edge_type == "substrate" else from_id)
+        if candidate.className == "Reac":
+            reac_elem = candidate
+            old_sub_order, old_prd_order = _reac_orders(reac_elem)
+
     if edge_type == "substrate":
         moose.connect(moose.element(to_id), "sub", moose.element(from_id), "reac")
         stoich = sum(1 for n in moose.element(to_id).neighbors["sub"] if n.path == from_id)
@@ -922,12 +965,19 @@ def add_edge():
     else:
         return jsonify({"error": f"unsupported edge type: {edge_type}"}), 400
 
+    reac_update = None
+    if reac_elem is not None:
+        rescale_reac_for_order_change(
+            reac_elem, old_sub_order, old_prd_order, "sub" if edge_type == "substrate" else "prd"
+        )
+        reac_update = describe_reac(reac_elem.path)
+
     # Connecting an already-connected reac/enz-pool pair again (kkit's way of
     # expressing stoichiometry > 1, e.g. "2A -> B") adds another separate
     # message rather than erroring or being a no-op -- reporting the new
     # total lets the frontend update one edge's label instead of drawing a
     # second, fully-overlapping edge.
-    return jsonify({"ok": True, "stoich": stoich})
+    return jsonify({"ok": True, "stoich": stoich, "reacUpdate": reac_update})
 
 
 _EDGE_SRC_FIELD = {
@@ -950,6 +1000,13 @@ def remove_edge():
     pool_id = from_id if edge_type in ("substrate", "chanIn") else to_id
     src_field = _EDGE_SRC_FIELD[edge_type]
 
+    reac_elem, old_sub_order, old_prd_order = None, None, None
+    if edge_type in ("substrate", "product"):
+        candidate = moose.element(reac_or_enz_id)
+        if candidate.className == "Reac":
+            reac_elem = candidate
+            old_sub_order, old_prd_order = _reac_orders(reac_elem)
+
     def _matches(msg):
         return src_field in msg.srcFieldsOnE1 and moose.element(msg.e2).path == pool_id
 
@@ -964,13 +1021,20 @@ def remove_edge():
     if not deleted:
         return jsonify({"error": "connection not found"}), 404
 
+    reac_update = None
+    if reac_elem is not None:
+        rescale_reac_for_order_change(
+            reac_elem, old_sub_order, old_prd_order, "sub" if edge_type == "substrate" else "prd"
+        )
+        reac_update = describe_reac(reac_elem.path)
+
     # Only one message is ever deleted per call -- a stoichiometry > 1
     # connection is multiple separate messages between the same reac/enz and
     # pool (see build_graph's grouping), so this decrements by exactly one.
     # Reporting the remaining count lets the frontend update (or remove) the
     # edge's stoichiometry label without a full graph refetch.
     remaining = sum(1 for m in moose.element(reac_or_enz_id).msgOut if _matches(moose.element(m)))
-    return jsonify({"ok": True, "stoich": remaining})
+    return jsonify({"ok": True, "stoich": remaining, "reacUpdate": reac_update})
 
 
 def _container_path(parent_id=None):
@@ -1013,7 +1077,6 @@ def create_pool():
     container = _container_path(parent_id)
     name = _unique_name(container, body.get("name") or "pool")
     p = moose.Pool(f"{container}/{name}")
-    p.concInit = 0.001
     create_info(p.path, float(body.get("x", 0)), float(body.get("y", 0)))
     result = describe_pool(p.path)
     result["parentId"] = container_parent_id(p.path, _current_model_path)
@@ -1410,6 +1473,8 @@ def save_sbml():
     body = request.json or {}
     notes = body.get("notes", "") if request.is_json else ""
     plots = body.get("plots") or {}
+    runtime = body.get("runtime")
+    plot_dt = body.get("plotDt")
     snapshot = _snapshot_positions(_current_model_path)
     group_snapshot = _snapshot_group_boxes(_current_model_path)
     stim_snapshot = _snapshot_stims(_current_model_path)
@@ -1425,11 +1490,24 @@ def save_sbml():
     content = _fix_missing_reaction_group_memberships(content)
     content = _inject_plot_annotations(content, _current_model_path, plots)
     content = _inject_stim_annotations(content, _current_model_path, stim_snapshot)
-    if notes:
+    if notes or (runtime is not None and plot_dt is not None):
         doc = libsbml.readSBMLFromString(content)
-        doc.getModel().setNotes(_wrap_notes(notes))
+        model = doc.getModel()
+        if notes:
+            model.setNotes(_wrap_notes(notes))
+        if runtime is not None and plot_dt is not None:
+            # The user's preferred Run-panel settings -- not part of the
+            # model itself, so a plain custom model-level annotation
+            # (same mechanism as the per-species plotWindow/stimulus
+            # annotations) rather than any native SBML construct.
+            model.setAnnotation(
+                f'<kkit:runSettings xmlns:kkit="{_KKIT_NS}" runtime="{runtime}" plotDt="{plot_dt}"/>'
+            )
         content = libsbml.writeSBMLToString(doc)
     return jsonify({"sbml": content})
+
+
+_RUN_SETTINGS_RE = re.compile(r'<kkit:runSettings\b[^>]*\bruntime="([^"]*)"[^>]*\bplotDt="([^"]*)"')
 
 
 @app.post("/api/load_sbml")
@@ -1438,10 +1516,14 @@ def load_sbml():
     if not content:
         return jsonify({"error": "no sbml content provided"}), 400
     notes = ""
+    run_settings = None
     doc = libsbml.readSBMLFromString(content)
     model = doc.getModel()
     if model is not None:
         notes = _unwrap_notes(model.getNotesString())
+        m = _RUN_SETTINGS_RE.search(model.getAnnotationString() or "")
+        if m:
+            run_settings = {"runtime": m.group(1), "plotDt": m.group(2)}
     content_for_moose = _ensure_reaction_present(content, model)
     fd, path = tempfile.mkstemp(suffix=".xml")
     with os.fdopen(fd, "w") as f:
@@ -1457,6 +1539,7 @@ def load_sbml():
     extra_plot_windows = _extract_plot_windows(content, model_path)
     result = build_graph(model_path, extra_plot_windows)
     result["notes"] = notes
+    result["runSettings"] = run_settings
     return jsonify(result)
 
 

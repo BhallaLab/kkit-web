@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Box,
   Typography,
@@ -42,6 +42,10 @@ const EDITABLE_ROWS = {
 };
 
 const READONLY_ROWS = {
+  // kd's own displayed name switches between "Kd" and "Keq" depending on
+  // reaction order (see fieldLabel/describe_reac's kdLabel) -- ported
+  // from xreac.g's do_update_reac_scaling.
+  reac: [['kd', 'tau']],
   concchan: [['numChan', 'flux']],
 };
 
@@ -84,6 +88,31 @@ function initialFieldsFor(node) {
   return fields;
 }
 
+// A field's display label, including its unit where the backend provides
+// one (see moose_graph.py's describe_pool/describe_reac/describe_enz --
+// e.g. "concInit (µM)", "Kf (µM^-1.s^-1)"). A field can also
+// override its own displayed *name*, not just its unit, the way Reac's
+// own kd switches between "Kd" and "Keq" depending on reaction order.
+function fieldLabel(node, key) {
+  const name = node.data[`${key}Label`] || key;
+  const unit = node.data[`${key}Unit`];
+  return unit ? `${name} (${unit})` : name;
+}
+
+// Shared by the explicit Save button and the auto-flush-on-unmap effect
+// below -- the editable numeric rows are typed as plain strings (see
+// initialFieldsFor) and need parsing back to numbers; everything else in
+// `fields` (name, notes, isBuffered, expr, ...) already round-trips as-is.
+function buildPayload(node, fields) {
+  const parsed = { ...fields };
+  editableRowsFor(node)
+    .flat()
+    .forEach((key) => {
+      parsed[key] = parseFloat(fields[key]);
+    });
+  return parsed;
+}
+
 function titleFor(node) {
   if (node.type === 'pool') return 'Pool';
   if (node.type === 'reac') return 'Reaction';
@@ -96,9 +125,33 @@ function titleFor(node) {
 
 export default function PropertiesMenuBox({ node, onSave, onToggleFlip }) {
   const [fields, setFields] = useState(null);
+  // Tracks whether `fields` has any edit not yet sent to the backend --
+  // set by setField, cleared on every explicit Save and whenever a fresh
+  // node is selected. Read from a ref (not state) purely so the flush
+  // effect below can see its *latest* value from inside a cleanup closure
+  // without needing to depend on (and so re-run for) every keystroke.
+  const dirtyRef = useRef(false);
+  // Mirrors `fields`/`onSave` into refs for the same reason: the flush
+  // effect's cleanup only ever depends on `node`, so without this it
+  // would see the stale `fields`/`onSave` from whenever that node was
+  // first selected, not whatever was last typed.
+  const latestRef = useRef({ fields, onSave });
+  latestRef.current = { fields, onSave };
 
   useEffect(() => {
     setFields(node ? initialFieldsFor(node) : null);
+    dirtyRef.current = false;
+    // The dialog "unmapping" -- either a different node gets selected
+    // while Properties is showing, or the whole panel is left (switching
+    // to another menu tab unmounts it) -- flushes any edit still sitting
+    // in `fields` that never went through an explicit Save click, rather
+    // than silently discarding it. Runs for *this* node (the one about to
+    // stop being shown), captured directly from this effect's own closure.
+    return () => {
+      if (dirtyRef.current && node) {
+        latestRef.current.onSave(node.id, buildPayload(node, latestRef.current.fields));
+      }
+    };
   }, [node]);
 
   if (!node || !fields) {
@@ -111,16 +164,14 @@ export default function PropertiesMenuBox({ node, onSave, onToggleFlip }) {
     );
   }
 
-  const setField = (key, value) => setFields((f) => ({ ...f, [key]: value }));
+  const setField = (key, value) => {
+    dirtyRef.current = true;
+    setFields((f) => ({ ...f, [key]: value }));
+  };
 
   const handleSave = () => {
-    const parsed = { ...fields };
-    editableRowsFor(node)
-      .flat()
-      .forEach((key) => {
-        parsed[key] = parseFloat(fields[key]);
-      });
-    onSave(node.id, parsed);
+    dirtyRef.current = false;
+    onSave(node.id, buildPayload(node, fields));
   };
 
   return (
@@ -137,15 +188,6 @@ export default function PropertiesMenuBox({ node, onSave, onToggleFlip }) {
             size="small"
             value={fields.name}
             onChange={(e) => setField('name', e.target.value)}
-            // Commits (and so shows up on the canvas) as soon as the field
-            // is left, not per keystroke -- a rename changes the object's
-            // underlying MOOSE path, so firing it on every keystroke would
-            // mean constantly re-pathing it (and every edge/id referencing
-            // it) mid-type. Skipped entirely if nothing actually changed
-            // (e.g. just tabbing through without editing).
-            onBlur={() => {
-              if (fields.name && fields.name !== node.data.name) onSave(node.id, { name: fields.name });
-            }}
           />
         </Grid>
 
@@ -155,7 +197,7 @@ export default function PropertiesMenuBox({ node, onSave, onToggleFlip }) {
               <Grid key={key} size={12 / row.length}>
                 <TextField
                   fullWidth
-                  label={key}
+                  label={fieldLabel(node, key)}
                   type="number"
                   size="small"
                   value={fields[key]}
@@ -172,7 +214,7 @@ export default function PropertiesMenuBox({ node, onSave, onToggleFlip }) {
               <Grid key={key} size={12 / row.length}>
                 <TextField
                   fullWidth
-                  label={key}
+                  label={fieldLabel(node, key)}
                   size="small"
                   value={formatNumber(node.data[key])}
                   slotProps={{ input: { readOnly: true } }}

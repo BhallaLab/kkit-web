@@ -91,6 +91,27 @@ const EDITABLE_ENDPOINTS = {
   stim: '/api/update_stim',
 };
 
+// The order-dependent fields describe_reac recomputes whenever a
+// substrate/product edge changes a Reac's order (see rescale_reac_for_
+// order_change on the backend) -- merged from add_edge/remove_edge's own
+// "reacUpdate" response straight into the node's data, rather than a full
+// graph refetch, so the Properties panel (if open on that reac) and its
+// unit labels never go stale after a connect/disconnect elsewhere.
+const REAC_ORDER_FIELDS = [
+  'Kf', 'Kb', 'KfUnit', 'KbUnit',
+  'numKf', 'numKb', 'numKfUnit', 'numKbUnit',
+  'kd', 'kdLabel', 'kdUnit', 'tau', 'tauUnit',
+];
+
+function mergeReacUpdate(nodes, reacUpdate) {
+  if (!reacUpdate) return nodes;
+  const patch = {};
+  REAC_ORDER_FIELDS.forEach((key) => {
+    if (key in reacUpdate) patch[key] = reacUpdate[key];
+  });
+  return nodes.map((n) => (n.id === reacUpdate.id ? { ...n, data: { ...n.data, ...patch } } : n));
+}
+
 // Mirrors kkit's ADDMSGARROW pairing rules (xreac.g/xpool.g/xenz.g): which
 // node-type pairs may be connected, and what the resulting edge means. Only
 // the substrate/product handles are drag-connectable for now -- the enzyme
@@ -729,16 +750,17 @@ export default function App() {
             const existing = g.edges.find(
               (e) => e.source === conn.source && e.target === conn.target && e.data.type === edgeType
             );
+            const nodes = mergeReacUpdate(g.nodes, res.reacUpdate);
             if (existing) {
               return {
-                ...g,
+                nodes,
                 edges: g.edges.map((e) =>
                   e.id === existing.id ? { ...e, data: { ...e.data, stoich: res.stoich } } : e
                 ),
               };
             }
             return {
-              ...g,
+              nodes,
               edges: [...g.edges, toEdge(conn.source, conn.target, edgeType, g.edges.length, res.stoich)],
             };
           });
@@ -781,14 +803,14 @@ export default function App() {
               setStatus(`error: ${res.error}`);
               return;
             }
-            if (decrementOnly) {
-              setFlowGraph((g) => ({
-                ...g,
-                edges: g.edges.map((e) =>
-                  e.id === edge.id ? { ...e, data: { ...e.data, stoich: res.stoich } } : e
-                ),
-              }));
-            }
+            setFlowGraph((g) => ({
+              nodes: mergeReacUpdate(g.nodes, res.reacUpdate),
+              edges: decrementOnly
+                ? g.edges.map((e) =>
+                    e.id === edge.id ? { ...e, data: { ...e.data, stoich: res.stoich } } : e
+                  )
+                : g.edges,
+            }));
           })
           .catch((err) => setStatus(`error: ${err}`));
       });
@@ -868,9 +890,23 @@ export default function App() {
             if (selectedNodeId === nodeId) setSelectedNodeId(updated.id);
             return;
           }
+          // A pool's own displayed color is often only a client-side
+          // RAINBOW_16 assignment (see buildFlowNodes/addNodeToGraph) that
+          // was never actually saved to the backend -- so a save that
+          // isn't itself about color (a rename, say) gets back whatever
+          // color the backend actually has stored (its unset "white"
+          // default), which would otherwise silently clobber the color
+          // actually on screen. Only trust the response's color when this
+          // save explicitly included it.
+          const color = 'color' in backendFields ? updated.color : node.data.color;
+          // plotWindow (like flipped/color) is frontend-only -- the
+          // backend response never carries it, so it has to be carried
+          // forward explicitly or a rename silently drops the pool's plot
+          // tag.
+          const plotWindow = node.data.plotWindow;
           setFlowGraph((g) => ({
             nodes: g.nodes.map((n) =>
-              n.id === nodeId ? { ...n, id: updated.id, data: { ...updated, flipped } } : n
+              n.id === nodeId ? { ...n, id: updated.id, data: { ...updated, color, flipped, plotWindow } } : n
             ),
             edges: renamed
               ? g.edges.map((e) => ({

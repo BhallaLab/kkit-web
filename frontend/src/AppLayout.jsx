@@ -54,7 +54,17 @@ export default function AppLayout({
   ...canvasProps
 }) {
   const menuComponents = {
-    File: <FileMenuBox onGraphLoaded={onGraphLoaded} status={status} plots={plots} />,
+    File: (
+      <FileMenuBox
+        onGraphLoaded={onGraphLoaded}
+        status={status}
+        plots={plots}
+        runtime={runtime}
+        setRuntime={setRuntime}
+        plotDt={plotDt}
+        setPlotDt={setPlotDt}
+      />
+    ),
     Add: <AddMenuBox onDeleteSelected={onDeleteSelected} selectedNode={selectedNode} />,
     Properties: (
       <PropertiesMenuBox node={selectedNode} onSave={onSaveNode} onToggleFlip={onToggleFlip} />

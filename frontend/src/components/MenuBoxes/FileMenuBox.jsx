@@ -3,7 +3,7 @@ import { Box, Typography, TextField, Button, Stack, Divider, Alert } from '@mui/
 
 const API_BASE = `http://${window.location.hostname}:5001`;
 
-export default function FileMenuBox({ onGraphLoaded, status, plots }) {
+export default function FileMenuBox({ onGraphLoaded, status, plots, runtime, setRuntime, plotDt, setPlotDt }) {
   const [modelNotes, setModelNotes] = useState('');
 
   const handleLoadGFile = (event) => {
@@ -35,7 +35,7 @@ export default function FileMenuBox({ onGraphLoaded, status, plots }) {
     const res = await fetch(`${API_BASE}/api/save_sbml`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notes: modelNotes, plots }),
+      body: JSON.stringify({ notes: modelNotes, plots, runtime, plotDt }),
     }).then((r) => r.json());
     if (res.error) return;
     const blob = new Blob([res.sbml], { type: 'application/xml' });
@@ -80,6 +80,13 @@ export default function FileMenuBox({ onGraphLoaded, status, plots }) {
         .then((r) => r.json())
         .then((res) => {
           setModelNotes(res.notes || '');
+          // Older files (or ones saved before this existed) simply have
+          // no runSettings -- leave whatever's currently configured alone
+          // rather than resetting it to something arbitrary.
+          if (res.runSettings) {
+            setRuntime(res.runSettings.runtime);
+            setPlotDt(res.runSettings.plotDt);
+          }
           onGraphLoaded(res);
         });
     };
