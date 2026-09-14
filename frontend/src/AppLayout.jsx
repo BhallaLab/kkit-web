@@ -3,10 +3,12 @@ import FolderIcon from '@mui/icons-material/Folder';
 import TuneIcon from '@mui/icons-material/Tune';
 import AddCircleIcon from '@mui/icons-material/AddCircle';
 import PlayCircleIcon from '@mui/icons-material/PlayCircle';
+import BuildIcon from '@mui/icons-material/Build';
 import FileMenuBox from './components/MenuBoxes/FileMenuBox';
 import PropertiesMenuBox from './components/MenuBoxes/PropertiesMenuBox';
 import AddMenuBox from './components/MenuBoxes/AddMenuBox';
 import RunMenuBox from './components/MenuBoxes/RunMenuBox';
+import ToolsMenuBox from './components/MenuBoxes/ToolsMenuBox';
 import MainDisplay from './components/MainDisplay';
 
 const MENU_ITEMS = [
@@ -14,6 +16,7 @@ const MENU_ITEMS = [
   { key: 'Run', label: 'Run', Icon: PlayCircleIcon },
   { key: 'Properties', label: 'Properties', Icon: TuneIcon },
   { key: 'Add', label: 'Add', Icon: AddCircleIcon },
+  { key: 'Tools', label: 'Tools', Icon: BuildIcon },
 ];
 
 export default function AppLayout({
@@ -60,6 +63,7 @@ export default function AppLayout({
         setPlotDt={setPlotDt}
       />
     ),
+    Tools: <ToolsMenuBox flowGraph={canvasProps.flowGraph} />,
   };
 
   return (

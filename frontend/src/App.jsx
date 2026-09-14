@@ -471,6 +471,13 @@ export default function App() {
     setFlowGraph(toFlowGraph(graph, newScale));
     setSelectedNodeId(null);
     setStatus(`loaded ${graph.nodes.length} nodes, ${graph.edges.length} edges`);
+    // Switching to Reaction Layout *before* bumping loadGeneration matters:
+    // FitViewOnLoad's fitView call measures the canvas container, which
+    // reports zero size while its tab is display:none -- if a load
+    // happened while the Plots tab was showing (e.g. loading a second
+    // file after a run), the fit would silently compute against that
+    // zero-size box instead of actually centering the new graph.
+    setDisplayTab(0);
     setLoadGeneration((g) => g + 1);
   }, []);
 

@@ -30,6 +30,7 @@ from moose_graph import (
     _stim_field,
 )
 from sim_runner import run_simulation
+from model_tools import model_size, find_dt, compare_groups, render_report
 
 _NOTES_BODY_RE = re.compile(r"<body[^>]*>\s*<p>(.*?)</p>\s*</body>", re.DOTALL)
 
@@ -756,7 +757,13 @@ def _update_node(node_id, fields, numeric_fields, bool_fields, describe_fn, stri
     if new_name and new_name != elem.name:
         elem.name = new_name
 
-    for key, value in fields.items():
+    # An explicit-complex Enz's k1 is subordinate to Km (see Enz.cpp's own
+    # field doc for k1): setting k2 or k3 holds Km fixed and recomputes
+    # k1 to match, so k1 must be applied *last* when several of an
+    # enzyme's rate fields are edited together -- a stable sort moving
+    # only "k1" to the end leaves every other field's relative order
+    # untouched.
+    for key, value in sorted(fields.items(), key=lambda kv: kv[0] == "k1"):
         if key in numeric_fields:
             setattr(elem, key, float(value))
         elif key in bool_fields:
@@ -1367,6 +1374,103 @@ def load_sbml():
     result = build_graph(model_path, extra_plot_windows)
     result["notes"] = notes
     return jsonify(result)
+
+
+@app.get("/api/tools/model_size")
+def tools_model_size():
+    if _current_model_path is None or not moose.exists(_current_model_path):
+        return jsonify({"error": "no model loaded"}), 400
+    return jsonify(model_size(_current_model_path))
+
+
+@app.post("/api/tools/find_dt")
+def tools_find_dt():
+    if _current_model_path is None or not moose.exists(_current_model_path):
+        return jsonify({"error": "no model loaded"}), 400
+    body = request.json or {}
+    try:
+        err = float(body.get("err", 0.01))
+    except (TypeError, ValueError):
+        return jsonify({"error": "err must be a number"}), 400
+    return jsonify(find_dt(_current_model_path, err))
+
+
+@app.post("/api/tools/compare_groups")
+def tools_compare_groups():
+    if _current_model_path is None or not moose.exists(_current_model_path):
+        return jsonify({"error": "no model loaded"}), 400
+    body = request.json or {}
+    root_a, root_b = body.get("rootA"), body.get("rootB")
+    if (
+        not root_a or not root_b
+        or not root_a.startswith(_current_model_path) or not root_b.startswith(_current_model_path)
+        or not moose.exists(root_a) or not moose.exists(root_b)
+    ):
+        return jsonify({"error": "invalid comparison groups"}), 400
+    return jsonify(compare_groups(root_a, root_b))
+
+
+@app.post("/api/tools/compare_file")
+def tools_compare_file():
+    """Loads a second .g/SBML file into a hidden side model purely to
+    diff against the current one (see model_tools.compare_groups) --
+    never added to the canvas, deleted again as soon as the comparison is
+    done, mirroring the original xcomparemodel.g's "compare against a
+    file" mode without needing Genesis's own re-entrant-parsing
+    workaround."""
+    if _current_model_path is None or not moose.exists(_current_model_path):
+        return jsonify({"error": "no model loaded"}), 400
+    body = request.json or {}
+    content = body.get("content")
+    filetype = body.get("fileType")
+    root_a = body.get("rootA") or _current_model_path
+    if not content:
+        return jsonify({"error": "no file content provided"}), 400
+    if not root_a.startswith(_current_model_path) or not moose.exists(root_a):
+        return jsonify({"error": "invalid comparison root"}), 400
+
+    side_path = f"/__compare_side_{next(_path_counter)}"
+    if filetype == "g":
+        fd, path = tempfile.mkstemp(suffix=".g")
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        moose.loadModel(path, side_path, "ee")
+        os.remove(path)
+    else:
+        doc = libsbml.readSBMLFromString(content)
+        content_for_moose = _ensure_reaction_present(content, doc.getModel())
+        fd, path = tempfile.mkstemp(suffix=".xml")
+        with os.fdopen(fd, "w") as f:
+            f.write(content_for_moose)
+        _, load_error = moose.readSBML(path, side_path)
+        os.remove(path)
+        if load_error:
+            if moose.exists(side_path):
+                moose.delete(side_path)
+            return jsonify({"error": f"could not load comparison file: {load_error.strip()}"}), 400
+        _strip_dummy_reaction(side_path)
+
+    if not moose.exists(side_path):
+        return jsonify({"error": "could not load comparison file"}), 400
+    try:
+        result = compare_groups(root_a, side_path)
+    finally:
+        if moose.exists(side_path):
+            moose.delete(side_path)
+    return jsonify(result)
+
+
+@app.post("/api/tools/report")
+def tools_report():
+    if _current_model_path is None or not moose.exists(_current_model_path):
+        return jsonify({"error": "no model loaded"}), 400
+    body = request.json or {}
+    fmt = body.get("format", "markdown")
+    try:
+        content = render_report(_current_model_path, fmt)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"content": content})
 
 
 if __name__ == "__main__":

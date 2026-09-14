@@ -1,6 +1,6 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Box, Tabs, Tab } from '@mui/material';
-import { ReactFlow, ReactFlowProvider, Background, Controls, useReactFlow } from '@xyflow/react';
+import { ReactFlow, ReactFlowProvider, Background, Controls, useReactFlow, useNodesInitialized } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { nodeTypes } from '../nodes';
 import BendableEdge from '../BendableEdge';
@@ -15,12 +15,58 @@ const edgeTypes = { default: BendableEdge };
 // re-centering on a later load (a new file, a reset) needs an imperative
 // call, triggered here off a generation counter rather than the node array
 // itself so normal edits (drag, single add) never yank the user's own pan/zoom.
+//
+// Firing that call as soon as `generation` changes races React Flow's own
+// node measurement (each node's actual on-screen width/height is only
+// known after its own ResizeObserver callback fires, asynchronously w.r.t.
+// React's render/commit) -- verified directly: for a small graph the race
+// usually resolves in time by sheer luck, but a real ~20-node model
+// reliably lost it, computing fitView's bounds against not-yet-measured
+// nodes and landing on a wildly wrong pan/zoom. useNodesInitialized flips
+// true only once every node has actually been measured, so gating on it
+// (in addition to the generation change) waits out the race instead of
+// hoping to win it.
 function FitViewOnLoad({ generation }) {
   const { fitView } = useReactFlow();
+  const nodesInitialized = useNodesInitialized();
+  const firedForGeneration = useRef(0);
   useEffect(() => {
     if (generation === 0) return;
-    fitView({ padding: 0.2, duration: 300 });
-  }, [generation, fitView]);
+    if (!nodesInitialized) return;
+    if (firedForGeneration.current === generation) return;
+    // nodesInitialized flipping true only means React Flow's own store has
+    // recorded a measurement for every node -- it doesn't guarantee the
+    // browser has actually finished a layout/paint pass reflecting *this*
+    // set of nodes yet (verified directly: gating on nodesInitialized alone
+    // still intermittently raced on a real ~20-node model). Two nested
+    // rAFs is the standard way to wait out "one full frame has actually
+    // been painted" rather than just "React has committed" -- the first
+    // rAF fires before the browser's next paint, the second fires after
+    // it, so by then layout is guaranteed settled.
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        // maxZoom matters as much as padding here: fitView's own zoom
+        // ceiling otherwise falls back to the pane's global maxZoom (2 by
+        // default, see <ReactFlow> below) -- for a small graph (a fresh
+        // model with just its one compartment, say) that means zooming in
+        // to 200% to fill the viewport, which reads as "vastly enlarged",
+        // not centered at a sane scale.
+        //
+        // Marked "fired" only now, not before scheduling -- if the effect
+        // re-runs (nodesInitialized flickering) before this callback gets
+        // here, the cleanup below cancels these rAFs, and the guard must
+        // still be false so the next run schedules a fresh pair instead of
+        // silently dropping the fit entirely.
+        firedForGeneration.current = generation;
+        fitView({ padding: 0.2, duration: 300, maxZoom: 1 });
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [generation, nodesInitialized, fitView]);
   return null;
 }
 
@@ -85,7 +131,9 @@ function Canvas({
           onDragOver={handleDragOver}
           deleteKeyCode={['Backspace', 'Delete']}
           minZoom={0.05}
+          maxZoom={2}
           fitView
+          fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
           // Dragging a node up to the trash icon (which sits in the palette
           // bar above the canvas, outside the pane) would otherwise trigger
           // React Flow's default auto-pan-near-the-edge behavior, panning the
