@@ -5,12 +5,14 @@ import AddCircleIcon from '@mui/icons-material/AddCircle';
 import PlayCircleIcon from '@mui/icons-material/PlayCircle';
 import BuildIcon from '@mui/icons-material/Build';
 import StairsIcon from '@mui/icons-material/Stairs';
+import ScienceIcon from '@mui/icons-material/Science';
 import FileMenuBox from './components/MenuBoxes/FileMenuBox';
 import PropertiesMenuBox from './components/MenuBoxes/PropertiesMenuBox';
 import AddMenuBox from './components/MenuBoxes/AddMenuBox';
 import RunMenuBox from './components/MenuBoxes/RunMenuBox';
 import ToolsMenuBox from './components/MenuBoxes/ToolsMenuBox';
 import DoseResponseMenuBox from './components/MenuBoxes/DoseResponseMenuBox';
+import FindSimMenuBox from './components/MenuBoxes/FindSimMenuBox';
 import MainDisplay from './components/MainDisplay';
 
 const MENU_ITEMS = [
@@ -20,6 +22,7 @@ const MENU_ITEMS = [
   { key: 'Add', label: 'Add', Icon: AddCircleIcon },
   { key: 'Tools', label: 'Tools', Icon: BuildIcon },
   { key: 'DoseResponse', label: 'Dose Response', Icon: StairsIcon },
+  { key: 'FindSim', label: 'FindSim', Icon: ScienceIcon },
 ];
 
 export default function AppLayout({
@@ -51,6 +54,15 @@ export default function AppLayout({
   doseError,
   onDoseStart,
   onDoseHalt,
+  findSimParsed,
+  findSimEntityMap,
+  findSimFileName,
+  findSimRunning,
+  findSimError,
+  findSimResult,
+  onFindSimFile,
+  onFindSimEntityChange,
+  onFindSimRun,
   ...canvasProps
 }) {
   const menuComponents = {
@@ -94,6 +106,19 @@ export default function AppLayout({
         onHalt={onDoseHalt}
       />
     ),
+    FindSim: (
+      <FindSimMenuBox
+        parsed={findSimParsed}
+        entityMap={findSimEntityMap}
+        fileName={findSimFileName}
+        running={findSimRunning}
+        error={findSimError}
+        result={findSimResult}
+        onFile={onFindSimFile}
+        onEntityChange={onFindSimEntityChange}
+        onRun={onFindSimRun}
+      />
+    ),
   };
 
   return (
@@ -119,6 +144,7 @@ export default function AppLayout({
           <MainDisplay
             {...canvasProps}
             plotData={plotData}
+            findSimCurve={findSimResult}
             selectedNode={selectedNode}
             onAddPool={onAddPool}
             onAddReac={onAddReac}

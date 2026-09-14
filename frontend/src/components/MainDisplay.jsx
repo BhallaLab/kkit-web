@@ -165,6 +165,7 @@ export default function MainDisplay({
   onEdgesChange,
   plotData,
   doseCurve,
+  findSimCurve,
   loadGeneration,
   onCanvasDrop,
   onAddPool,
@@ -229,7 +230,7 @@ export default function MainDisplay({
         </Box>
       </Box>
       <Box sx={{ flexGrow: 1, position: 'relative', display: displayTab === 1 ? 'block' : 'none' }}>
-        <PlotsPanel plotData={plotData} nodes={flowGraph.nodes} doseCurve={doseCurve} />
+        <PlotsPanel plotData={plotData} nodes={flowGraph.nodes} doseCurve={doseCurve} findSimCurve={findSimCurve} />
       </Box>
     </Box>
   );

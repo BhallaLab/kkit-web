@@ -42,7 +42,7 @@ export default function DoseResponseMenuBox({ flowGraph, params, setParams, runn
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
         Steps the variable pool's concentration through a log-spaced range and
         records the monitored pool's steady-state response at each level,
-        using the Run panel's runtime/plot dt to let the system settle. The
+        using the Run panel's runtime to let the system settle. The
         resulting curve appears in the Plots tab.
       </Typography>
 

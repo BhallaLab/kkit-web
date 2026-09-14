@@ -41,6 +41,7 @@ from sim_runner import (
     DOSE_DECADE_LABELS,
 )
 from model_tools import model_size, find_dt, compare_groups, render_report
+from findsim_runner import FindSimError, parse_findsim_spec, resolve_entities, run_findsim
 
 _NOTES_BODY_RE = re.compile(r"<body[^>]*>\s*<p>(.*?)</p>\s*</body>", re.DOTALL)
 
@@ -1419,13 +1420,12 @@ def dose_response_start():
         min_decade = int(body.get("minDecade"))
         max_decade = int(body.get("maxDecade"))
         runtime = float(body.get("runtime", 100))
-        plot_dt = float(body.get("plotDt", 1))
     except (TypeError, ValueError):
         return jsonify({"error": "invalid numeric input"}), 400
     if not (0 <= min_decade <= 7 and 0 <= max_decade <= 7):
         return jsonify({"error": "concentration decade out of range"}), 400
-    if runtime <= 0 or plot_dt <= 0:
-        return jsonify({"error": "runtime and plotDt must be positive"}), 400
+    if runtime <= 0:
+        return jsonify({"error": "runtime must be positive"}), 400
     if min_decade > max_decade:
         min_decade, max_decade = max_decade, min_decade
 
@@ -1435,7 +1435,7 @@ def dose_response_start():
 
     _dose_session = start_dose_response(
         _current_model_path, input_id, output_id, concs, runtime,
-        bool(body.get("buffered")), bool(body.get("resetEachLevel")), plot_dt,
+        bool(body.get("buffered")), bool(body.get("resetEachLevel")),
     )
     return jsonify({"total": len(concs)})
 
@@ -1464,6 +1464,59 @@ def dose_response_halt():
         finish_dose_response(_dose_session)
         _dose_session = None
     return jsonify({"ok": True})
+
+
+@app.post("/api/findsim/parse")
+def findsim_parse():
+    """Validates+normalizes an uploaded FindSim experiment file (see
+    findsim_runner.py's own module docstring for scope) and auto-matches
+    its Stimuli/Readouts entities against the currently loaded model's
+    pools by exact name/alias, so the frontend can show a summary and let
+    the user fill in any unmatched entity from a dropdown before running."""
+    if _current_model_path is None or not moose.exists(_current_model_path):
+        return jsonify({"error": "no model loaded"}), 400
+    content = (request.json or {}).get("content")
+    if not content:
+        return jsonify({"error": "no file content provided"}), 400
+    try:
+        spec = json.loads(content)
+    except json.JSONDecodeError as e:
+        return jsonify({"error": f"not valid JSON: {e}"}), 400
+    try:
+        parsed = parse_findsim_spec(spec)
+        matched, pool_options = resolve_entities(parsed, _current_model_path)
+    except FindSimError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({
+        "design": parsed["design"],
+        "stimuli": [{"id": s["id"], "entityName": s["entityName"], "alias": s["alias"]} for s in parsed["stimuli"]],
+        "readout": {
+            "id": parsed["readout"]["id"],
+            "entityName": parsed["readout"]["entityName"],
+            "alias": parsed["readout"]["alias"],
+        },
+        "matched": matched,
+        "poolOptions": pool_options,
+        "spec": spec,
+    })
+
+
+@app.post("/api/findsim/run")
+def findsim_run():
+    """Runs a previously-parsed FindSim spec (re-sent verbatim, along with
+    the entity->pool mapping the frontend collected/confirmed) against the
+    currently loaded model."""
+    if _current_model_path is None or not moose.exists(_current_model_path):
+        return jsonify({"error": "no model loaded"}), 400
+    body = request.json or {}
+    spec = body.get("spec")
+    entity_map = body.get("entityMap") or {}
+    try:
+        parsed = parse_findsim_spec(spec)
+        result = run_findsim(_current_model_path, parsed, entity_map)
+    except FindSimError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(result)
 
 
 @app.post("/api/save_sbml")

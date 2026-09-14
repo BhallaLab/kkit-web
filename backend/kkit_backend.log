@@ -8,54 +8,19 @@ Press CTRL+C to quit
  * Restarting with stat
  * Debugger is active!
  * Debugger PIN: 941-952-772
-[2026-09-14 13:27:17,765] ERROR in server: request failed
-Traceback (most recent call last):
-  File "/usr/lib/python3/dist-packages/flask/app.py", line 917, in full_dispatch_request
-    rv = self.dispatch_request()
-  File "/usr/lib/python3/dist-packages/flask/app.py", line 891, in dispatch_request
-    self.raise_routing_exception(req)
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
-  File "/usr/lib/python3/dist-packages/flask/app.py", line 500, in raise_routing_exception
-    raise request.routing_exception  # type: ignore[misc]
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3/dist-packages/flask/ctx.py", line 362, in match_request
-    result = self.url_adapter.match(return_rule=True)  # type: ignore
-  File "/usr/lib/python3/dist-packages/werkzeug/routing/map.py", line 624, in match
-    raise MethodNotAllowed(valid_methods=list(e.have_match_for)) from None
-werkzeug.exceptions.MethodNotAllowed: 405 Method Not Allowed: The method is not allowed for the requested URL.
-127.0.0.1 - - [14/Sep/2026 13:27:17] "GET /api/new_model HTTP/1.1" 500 -
-127.0.0.1 - - [14/Sep/2026 13:27:23] "POST /api/new_model HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:27:23] "POST /api/create_pool HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:27:23] "POST /api/create_pool HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:27:23] "POST /api/create_pool HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:27:23] "POST /api/create_reac HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:27:31] "POST /api/add_edge HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:27:31] "POST /api/add_edge HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:27:31] "POST /api/update_reac HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:27:39] "POST /api/add_edge HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:27:45] "POST /api/remove_edge HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:27:56] "POST /api/new_model HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:28:57] "POST /api/new_model HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:28:59] "OPTIONS /api/create_pool HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:28:59] "POST /api/create_pool HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:29:00] "OPTIONS /api/update_pool HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:29:00] "POST /api/update_pool HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:29:09] "POST /api/new_model HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:30:26] "POST /api/new_model HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:30:30] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:30:30] "POST /api/load_sbml HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:30:40] "OPTIONS /api/update_pool HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:30:40] "POST /api/update_pool HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:30:43] "OPTIONS /api/run/start HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:30:43] "POST /api/run/start HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:31:02] "OPTIONS /api/remove_edge HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:31:02] "POST /api/remove_edge HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:31:12] "OPTIONS /api/run/start HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:31:12] "POST /api/run/start HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:31:32] "OPTIONS /api/update_position HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:31:32] "POST /api/update_position HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:31:36] "POST /api/update_position HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:32:23] "OPTIONS /api/add_edge HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:32:23] "POST /api/add_edge HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:32:28] "OPTIONS /api/run/start HTTP/1.1" 200 -
-127.0.0.1 - - [14/Sep/2026 13:32:28] "POST /api/run/start HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 14:50:41] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 14:51:03] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 14:51:43] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 14:51:50] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 14:51:50] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 14:51:56] "OPTIONS /api/findsim/parse HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 14:51:56] "POST /api/findsim/parse HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 14:51:59] "OPTIONS /api/findsim/run HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 14:51:59] "POST /api/findsim/run HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 14:52:05] "POST /api/new_model HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 14:52:10] "OPTIONS /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 14:52:10] "POST /api/load_sbml HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 14:52:17] "OPTIONS /api/findsim/parse HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 14:52:17] "POST /api/findsim/parse HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 14:52:21] "OPTIONS /api/findsim/run HTTP/1.1" 200 -
+127.0.0.1 - - [14/Sep/2026 14:52:23] "POST /api/findsim/run HTTP/1.1" 200 -

@@ -506,6 +506,21 @@ export default function App() {
   const [doseCurve, setDoseCurve] = useState(null);
   const doseHaltRef = useRef(false);
 
+  // FindSim experiment-playback state -- same "lives in App.jsx" reasoning
+  // as Dose Response just above (survives switching menu tabs). `parsed`
+  // is /api/findsim/parse's own response (design, stimuli/readout entity
+  // names, the auto-matched pool ids, every pool available for a manual
+  // override, and the original spec echoed back for the run call);
+  // `entityMap` is the (possibly user-edited) block-id -> pool-id mapping
+  // FindSimMenuBox collects before Run is enabled. `result`, like
+  // doseCurve, is what the Plots tab actually renders.
+  const [findSimParsed, setFindSimParsed] = useState(null);
+  const [findSimEntityMap, setFindSimEntityMap] = useState({});
+  const [findSimFileName, setFindSimFileName] = useState('');
+  const [findSimRunning, setFindSimRunning] = useState(false);
+  const [findSimError, setFindSimError] = useState(null);
+  const [findSimResult, setFindSimResult] = useState(null);
+
   const handleGraphResult = useCallback((graph) => {
     if (graph.error) {
       setStatus(`error: ${graph.error}`);
@@ -523,6 +538,15 @@ export default function App() {
     setDoseRunning(false);
     setDoseError(null);
     setDoseCurve(null);
+    // A parsed FindSim spec's entity map and any run result refer to pool
+    // ids from whatever model was loaded when it was parsed -- same
+    // staleness concern as the dose-response curve just above.
+    setFindSimParsed(null);
+    setFindSimEntityMap({});
+    setFindSimFileName('');
+    setFindSimRunning(false);
+    setFindSimError(null);
+    setFindSimResult(null);
     // Switching to Reaction Layout *before* bumping loadGeneration matters:
     // FitViewOnLoad's fitView call measures the canvas container, which
     // reports zero size while its tab is display:none -- if a load
@@ -1466,7 +1490,6 @@ export default function App() {
         resetEachLevel: doseParams.resetEachLevel,
         decreasing: doseParams.decreasing,
         runtime: parseFloat(runtime) || 100,
-        plotDt: parseFloat(plotDt) || 1,
       }),
     })
       .then((r) => r.json())
@@ -1482,13 +1505,87 @@ export default function App() {
         setDoseError(String(err));
         setDoseRunning(false);
       });
-  }, [doseParams, flowGraph.nodes, runtime, plotDt]);
+  }, [doseParams, flowGraph.nodes, runtime]);
 
   const handleDoseHalt = useCallback(() => {
     doseHaltRef.current = true;
     setDoseRunning(false);
     fetch(`${API_BASE}/api/dose_response/halt`, { method: 'POST' }).catch(() => {});
   }, []);
+
+  // Reads the uploaded .json, parses+auto-matches it against the current
+  // model, and seeds entityMap from whatever matched -- unmatched entries
+  // stay '' so FindSimMenuBox's dropdowns show them as needing a manual
+  // pick before Run is enabled.
+  const handleFindSimFile = useCallback((file) => {
+    setFindSimError(null);
+    setFindSimResult(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      fetch(`${API_BASE}/api/findsim/parse`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: reader.result }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.error) {
+            setFindSimParsed(null);
+            setFindSimError(res.error);
+            return;
+          }
+          setFindSimParsed(res);
+          setFindSimEntityMap(res.matched);
+          setFindSimFileName(file.name);
+        })
+        .catch((err) => setFindSimError(String(err)));
+    };
+    reader.readAsText(file);
+  }, []);
+
+  const handleFindSimEntityChange = useCallback((blockId, poolId) => {
+    setFindSimEntityMap((m) => ({ ...m, [blockId]: poolId }));
+  }, []);
+
+  // A single blocking call (not a step session like Dose Response) -- a
+  // FindSim TimeSeries/DoseResponse file is typically a handful of
+  // stimulus/readout points, nowhere near Dose Response's own potentially
+  // long decade sweeps, so there's little to gain from the extra Halt/
+  // progress machinery.
+  const handleFindSimRun = useCallback(() => {
+    if (!findSimParsed) return;
+    const unresolved = Object.entries(findSimEntityMap).filter(([, poolId]) => !poolId);
+    if (unresolved.length > 0) {
+      setFindSimError('Pick a pool for every stimulus/readout entity before running');
+      return;
+    }
+    setFindSimError(null);
+    setFindSimRunning(true);
+    setDisplayTab(1);
+    fetch(`${API_BASE}/api/findsim/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        spec: findSimParsed.spec,
+        entityMap: findSimEntityMap,
+      }),
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        setFindSimRunning(false);
+        if (res.error) {
+          setFindSimError(res.error);
+          return;
+        }
+        // Same plot1-before-plot2 priority as Dose Response's own curve.
+        const plot1Used = flowGraph.nodes.some((n) => n.type === 'pool' && n.data.plotWindow === 1);
+        setFindSimResult({ ...res, window: plot1Used ? 2 : 1 });
+      })
+      .catch((err) => {
+        setFindSimRunning(false);
+        setFindSimError(String(err));
+      });
+  }, [findSimParsed, findSimEntityMap, flowGraph.nodes]);
 
   return (
     <AppLayout
@@ -1524,6 +1621,15 @@ export default function App() {
       doseError={doseError}
       onDoseStart={handleDoseStart}
       onDoseHalt={handleDoseHalt}
+      findSimParsed={findSimParsed}
+      findSimEntityMap={findSimEntityMap}
+      findSimFileName={findSimFileName}
+      findSimRunning={findSimRunning}
+      findSimError={findSimError}
+      findSimResult={findSimResult}
+      onFindSimFile={handleFindSimFile}
+      onFindSimEntityChange={handleFindSimEntityChange}
+      onFindSimRun={handleFindSimRun}
       displayTab={displayTab}
       setDisplayTab={setDisplayTab}
       flowGraph={flowGraph}

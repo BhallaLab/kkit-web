@@ -21,7 +21,7 @@ def _compartment_path(model_path):
     return kinetics if moose.exists(kinetics) else model_path
 
 
-def build_solver(model_path, plot_dt):
+def build_solver(model_path, simdt=_DEFAULT_SIMDT):
     """(Re)builds the Ksolve/Dsolve/Stoich trio that actually drives the
     reaction system -- moose.loadModel(..., 'ee') only parses the model and
     leaves every Pool/Reac/Enz unscheduled (tick=-1); 'ee' is a legacy mode
@@ -36,9 +36,18 @@ def build_solver(model_path, plot_dt):
     be coarser than a typical plot_dt, which made the recorded concentration
     hold the same value for several plot samples in a row (a real staircase
     in the data, not a Plotly rendering choice) before jumping to the next
-    actual solver update. Scheduling them onto tick 4 with a dt clamped to a
-    fraction of plot_dt guarantees the solver always advances several times
-    between plot samples, so the recorded trace is actually smooth.
+    actual solver update.
+
+    `simdt` is the caller's business, not this function's -- run_simulation
+    (the only caller that actually records a Table2 trace) clamps it to its
+    own plot_dt so the solver never updates *less* often than the trace is
+    sampled; everything else (Dose Response, FindSim) only ever samples a
+    pool's live value once per level/checkpoint, so there's no staircase to
+    guard against and no reason to run any finer than the plain default --
+    verified directly that silently inheriting a small plot_dt from the Run
+    panel's shared state (e.g. after fine-tuning a regular Run's plot) made
+    an otherwise-trivial FindSim run on a single-reaction model extraordinarily
+    slow for no benefit, since nothing was even reading the finer samples.
     """
     compt_path = _compartment_path(model_path)
     for name in ("stoich", "ksolve", "dsolve"):
@@ -47,6 +56,14 @@ def build_solver(model_path, plot_dt):
             moose.delete(p)
 
     ksolve = moose.Ksolve(f"{compt_path}/ksolve")
+    # Ksolve's own default method is "rk5" (GSL's adaptive Runge-Kutta-
+    # Fehlberg), not LSODA -- verified directly (Ksolve.method is never set
+    # otherwise). LSODA switches automatically between a non-stiff (Adams)
+    # and a stiff (BDF) method as the reaction system's own stiffness
+    # changes over the run, which suits a chemical kinetics model (rate
+    # constants routinely spanning several orders of magnitude) better than
+    # a single fixed-order adaptive RK method.
+    ksolve.method = "lsoda"
     dsolve = moose.Dsolve(f"{compt_path}/dsolve")
     stoich = moose.Stoich(f"{compt_path}/stoich")
     stoich.compartment = moose.element(compt_path)
@@ -54,7 +71,6 @@ def build_solver(model_path, plot_dt):
     stoich.dsolve = dsolve
     stoich.reacSystemPath = compt_path + "/##"
 
-    simdt = min(_DEFAULT_SIMDT, plot_dt / 10)
     moose.setClock(_SOLVE_TICK, simdt)
     moose.useClock(_SOLVE_TICK, ksolve.path, "process")
     moose.useClock(_SOLVE_TICK, dsolve.path, "process")
@@ -111,7 +127,7 @@ def dose_concentrations(min_decade, max_decade, fine):
     return concs
 
 
-def start_dose_response(model_path, input_id, output_id, concs, runtime, buffered, reset_each_level, plot_dt):
+def start_dose_response(model_path, input_id, output_id, concs, runtime, buffered, reset_each_level):
     """Sets up one dose-response *session* -- ported from xdoser.g's
     do_doser, but broken into a distinct step per dose level (see
     step_dose_response) rather than one all-in-one blocking loop, so the
@@ -122,8 +138,12 @@ def start_dose_response(model_path, input_id, output_id, concs, runtime, buffere
     Builds the solver once up front (this is one continuous series, not
     independent runs) and snapshots the input pool's original concInit/
     isBuffered so step_dose_response's caller can restore them via
-    finish_dose_response once the series ends or is halted."""
-    build_solver(model_path, plot_dt)
+    finish_dose_response once the series ends or is halted. Uses
+    build_solver's plain default simdt -- each level only ever samples the
+    output pool's live value once, at the end of its settle time, so
+    there's no recorded trace whose smoothness a finer dt would improve
+    (see build_solver's own docstring)."""
+    build_solver(model_path)
     input_pool = moose.element(input_id)
     moose.reinit()
     return {
@@ -186,7 +206,16 @@ def finish_dose_response(session):
 
 
 def run_simulation(model_path, runtime, plot_dt):
-    build_solver(model_path, plot_dt)
+    # A plot interval any finer than runtime/1000 buys essentially nothing
+    # in a displayed trace while directly costing solver steps -- clamp up
+    # rather than trust an arbitrarily small typed value; runtime/100 is
+    # already a comfortably smooth plot. Solving no finer than plot_dt
+    # itself (not a fraction of it) is enough to avoid a visible staircase
+    # -- the solver (LSODA, adaptive -- see build_solver) integrates
+    # accurately across whatever interval it's given, a fixed-step method's
+    # concern, not an adaptive one's.
+    plot_dt = max(plot_dt, runtime / 1000.0)
+    build_solver(model_path, min(_DEFAULT_SIMDT, plot_dt))
     tables = build_plot_tables(model_path)
     moose.setClock(8, plot_dt)
     moose.useClock(8, _plots_path(model_path) + "/##", "process")
