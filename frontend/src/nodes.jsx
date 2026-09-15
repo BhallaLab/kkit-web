@@ -40,9 +40,15 @@ function useFlipRemeasure(id, flipped) {
   }, [id, flipped, updateNodeInternals]);
 }
 
+// Shared with ContainerNode's own expanded-label sizing ("a font only 2
+// points bigger than the font used for pool names") -- kept as one named
+// constant rather than two copies of the literal 28 that could quietly
+// drift apart.
+const POOL_FONT_SIZE = 28;
+
 const baseStyle = {
   padding: '4px 10px',
-  fontSize: 28,
+  fontSize: POOL_FONT_SIZE,
   border: '1px solid #333',
 };
 
@@ -533,7 +539,12 @@ const HIT_MARGIN_PX = 4;
 // cycle entirely) doing one direct DOM style write per frame instead is
 // the standard fix for exactly this kind of per-frame, viewport-driven
 // styling -- same visual result, a small fraction of the cost.
-function useZoomCounterScale() {
+// `baseTransform` composes ahead of the counter-scale (e.g. a centering
+// translate for an element anchored by its own midpoint rather than a
+// corner) -- percentage translate values resolve against the element's own
+// unscaled box, so composing `translate(...) scale(...)` still centers
+// correctly regardless of the current zoom.
+function useZoomCounterScale(baseTransform = '') {
   const ref = useRef(null);
   const store = useStoreApi();
   // useLayoutEffect, not useEffect -- the initial `apply()` needs to land
@@ -543,11 +554,12 @@ function useZoomCounterScale() {
   useLayoutEffect(() => {
     const apply = () => {
       if (!ref.current) return;
-      ref.current.style.transform = `scale(${1 / store.getState().transform[2]})`;
+      const scale = `scale(${1 / store.getState().transform[2]})`;
+      ref.current.style.transform = baseTransform ? `${baseTransform} ${scale}` : scale;
     };
     apply();
     return store.subscribe(apply);
-  }, [store]);
+  }, [store, baseTransform]);
   return ref;
 }
 
@@ -567,23 +579,71 @@ function sideToPosition(side) {
   }
 }
 
-// Places a port's dot at `frac` (0..1) along its assigned side, overriding
-// React Flow's own default top:50%/left:0-style positioning entirely (the
-// same explicit left+top+transform pattern EnzNode's enzSite handle already
-// uses) -- a plain Position-based placement always centers on the edge, with
-// no way to offset along it, which is the whole point of a knob.
-function portHandleStyle(side, frac) {
+// A structural entity dot handle's own default (enzSite/chanParent/
+// stimTip) is 8px -- kept unchanged, but a group/compartment's own
+// connector knobs (named ports, and the generic fallback pair below) size
+// to `knobSize` instead, whatever collapseView.js's computePavement worked
+// out for *this* model's actual group spacing (see data.knobSize) rather
+// than a fixed pixel count that would read as gigantic on a tightly-packed
+// layout and vanishingly small on a sparse one. A plain flow-space size --
+// NOT counter-scaled the way the name badge is -- deliberately: knobSize is
+// already derived from this model's own real coordinate spacing (not an
+// arbitrary small constant that would vanish at extreme zoom-out the way a
+// fixed pixel count would), and a counter-scaled Handle's own rendered box
+// no longer matches what React Flow's internal bounds-to-flow-space math
+// assumes a zoom-following element looks like -- verified directly: with
+// the counter-scale in place, the *drawn* knob still landed exactly where
+// intended, but the edge's own measured sourceX/sourceY (and so the start
+// of the line BendableEdge renders) drifted hundreds of units away from
+// it, reading as a diagonal jump right at the knob. Plain flow-space
+// sizing keeps the Handle behaving like every other sized element on the
+// canvas, which is what React Flow's own math expects.
+function knobStyle(size) {
+  return { width: size, height: size, background: '#555', border: '2px solid #222', borderRadius: '50%' };
+}
+
+// Places a knob dot exactly ON the box's own edge at `frac` (0..1) along
+// the given side -- centered *on* the border line itself (the knob's own
+// diameter is what visually stands off from it, not an offset departure
+// point), overriding React Flow's own default top:50%/left:0 positioning
+// entirely (the same explicit left+top+transform pattern EnzNode's enzSite
+// handle already uses).
+function portHandleStyle(side, frac, size) {
   const pct = `${frac * 100}%`;
+  const base = { ...knobStyle(size), transform: 'translate(-50%, -50%)' };
   switch (side) {
     case 'right':
-      return { ...dotHandleStyle, left: '100%', top: pct, transform: 'translate(-50%, -50%)' };
+      return { ...base, left: '100%', top: pct };
     case 'top':
-      return { ...dotHandleStyle, left: pct, top: 0, transform: 'translate(-50%, -50%)' };
+      return { ...base, left: pct, top: 0 };
     case 'bottom':
-      return { ...dotHandleStyle, left: pct, top: '100%', transform: 'translate(-50%, -50%)' };
+      return { ...base, left: pct, top: '100%' };
     default:
-      return { ...dotHandleStyle, left: 0, top: pct, transform: 'translate(-50%, -50%)' };
+      return { ...base, left: 0, top: pct };
   }
+}
+
+function PortKnob({ port, knobSize }) {
+  return (
+    <Handle
+      id={port.id}
+      type={port.type}
+      position={sideToPosition(port.side)}
+      style={portHandleStyle(port.side, port.frac, knobSize)}
+    />
+  );
+}
+
+// The generic fallback pair (a container's own default, unnamed Handles --
+// still what an "individual" edge redirected onto a group/compartment
+// actually attaches to, see collapseView.js's computeCollapsedView) used
+// to be React Flow's own tiny, un-styled default handle -- visibly
+// inconsistent next to the now much larger named PortKnobs on the very
+// same box. Styled and sized identically (just fixed at the vertical
+// center, 50%, since there's no frac to place several of these along the
+// side).
+function FallbackContainerHandle({ type, side, knobSize }) {
+  return <Handle type={type} position={sideToPosition(side)} style={portHandleStyle(side, 0.5, knobSize)} />;
 }
 
 // A collapsed container's own knob set (data.ports, assigned by
@@ -612,16 +672,33 @@ function usePortsRemeasure(id, ports) {
   }, [id, key, updateNodeInternals]);
 }
 
-function ContainerNode({ id, data, selected, doubleWalled }) {
+// The outermost compartment (no parentId -- always "kinetics" by kkit
+// convention) keeps the label treatment every container used to have: a
+// small, fixed-screen-size badge pinned to its own top-left corner,
+// regardless of collapsed/expanded -- it's effectively never collapsed in
+// practice, and even if it were, a badge sized for a normal group would be
+// lost against a box spanning the whole model. Every *other* container
+// gets a size/placement suited to whichever state it's actually in: a
+// small badge centered *inside* the box while collapsed (there's nothing
+// underneath to obscure), or a larger label sized close to a Pool's own
+// name text and moved *outside* the box while expanded, so it never sits
+// on top of that container's real contents.
+const BADGE_FONT_SIZE = 7;
+const EXPANDED_LABEL_FONT_SIZE = POOL_FONT_SIZE + 2;
+
+function ContainerNode({ id, data, selected, doubleWalled, parentId }) {
   const { onContainerResize } = useContext(NodeActionsContext);
-  const badgeRef = useZoomCounterScale();
+  const isRoot = !parentId;
+  const collapsed = !!data.collapsed;
+  const showBadgeInside = !isRoot && collapsed;
+  const showExpandedLabel = !isRoot && !collapsed;
+  const badgeRef = useZoomCounterScale(showBadgeInside ? 'translate(-50%, -50%)' : '');
   usePortsRemeasure(id, data.ports ?? []);
   const handleResizeEnd = (event, params) => {
     onContainerResize(id, { x: params.x, y: params.y, width: params.width, height: params.height });
   };
   const borderWidth = doubleWalled ? 4 : 6;
   const hitWidth = borderWidth + HIT_MARGIN_PX;
-  const collapsed = !!data.collapsed;
   // A kkit .g-format group/compartment's raw color is often a bare
   // GENESIS-palette index ("0", "1", ... up to "64"), never a real CSS
   // color -- resolveGroupColor turns that into an actual, stable, derived
@@ -649,6 +726,12 @@ function ContainerNode({ id, data, selected, doubleWalled }) {
   // the dominant "generic stippled box" look every collapsed container
   // used to have regardless of its actual assigned color.
   const collapsedFill = paleColor(resolvedColor ?? '#c0c0c0');
+  // Only ever set (by collapseView.js's computeCollapsedView) on a
+  // currently-collapsed container that's actually part of the aggregate-
+  // routing pass -- an expanded container's fallback pair is never a real
+  // edge endpoint (see the comment on it below), so this fallback value is
+  // never actually seen, just needed to keep the style computation valid.
+  const knobSize = data.knobSize ?? 12;
 
   return (
     <Fragment>
@@ -675,9 +758,15 @@ function ContainerNode({ id, data, selected, doubleWalled }) {
             which don't specify a handle id) has somewhere to attach; a
             collapsed group is never itself a *real* substrate/product
             endpoint, so there's no handle-side convention to honor here.
-            Harmless while expanded -- nothing ever targets them then. */}
-        <Handle type="target" position={Position.Left} />
-        <Handle type="source" position={Position.Right} />
+            Harmless while expanded -- nothing ever targets them then.
+            Styled and sized the same as the named PortKnobs below (see
+            FallbackContainerHandle) so an "individual" connector -- one
+            side a real entity, the other a collapsed group redirected
+            onto this generic pair rather than a named port -- reads as
+            just as clearly a knob, not a leftover tiny default dot next
+            to its much larger siblings. */}
+        <FallbackContainerHandle type="target" side="left" knobSize={knobSize} />
+        <FallbackContainerHandle type="source" side="right" knobSize={knobSize} />
         {/* Distinct per-edge "connector knobs" around the box's four sides,
             assigned by collapseView.js's aggregated-edge port-layout pass so
             each collapsed-group-to-collapsed-group connector plugs into its
@@ -687,13 +776,7 @@ function ContainerNode({ id, data, selected, doubleWalled }) {
             (data.ports[].id) and typed per edge, so each only ever serves
             the one connector it was assigned to. */}
         {(data.ports ?? []).map((port) => (
-          <Handle
-            key={port.id}
-            id={port.id}
-            type={port.type}
-            position={sideToPosition(port.side)}
-            style={portHandleStyle(port.side, port.frac)}
-          />
+          <PortKnob key={port.id} port={port} knobSize={knobSize} />
         ))}
         {/* Offset outward by the parent's own border-box border (which an
             absolutely-positioned child with top/bottom/left/right:0 would
@@ -753,32 +836,62 @@ function ContainerNode({ id, data, selected, doubleWalled }) {
             }}
           />
         )}
-        {/* A fixed *screen* size regardless of zoom (see the block comment
-            above) -- anchored at the box's own top-left corner, growing
-            up-and-right from it via transformOrigin so it reads as sitting
-            just above the border the way the old plain label did, without
-            needing a separate pixel offset that would itself need
-            counter-scaling. */}
-        <div
-          ref={badgeRef}
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            transformOrigin: 'bottom left',
-            fontSize: 14,
-            fontWeight: 'bold',
-            whiteSpace: 'nowrap',
-            pointerEvents: 'auto',
-            cursor: 'pointer',
-            background: '#fff',
-            border: '1px solid #333',
-            borderRadius: 4,
-            padding: '1px 6px',
-          }}
-        >
-          {data.name}
-        </div>
+        {/* The root compartment's badge (fixed screen size regardless of
+            zoom) stays pinned to its own top-left corner, growing
+            up-and-right via transformOrigin exactly as every container's
+            label used to; a non-root container's *collapsed* badge instead
+            centers inside the box (transformOrigin doesn't matter there --
+            the ref's own imperative transform already includes a centering
+            translate, see useZoomCounterScale). Both share the same small,
+            halved BADGE_FONT_SIZE -- a fixed-screen label doesn't get to
+            grow with the model, so it needs to stay modest regardless of
+            which of the two positions it's in. */}
+        {(isRoot || showBadgeInside) && (
+          <div
+            ref={badgeRef}
+            style={{
+              position: 'absolute',
+              top: showBadgeInside ? '50%' : 0,
+              left: showBadgeInside ? '50%' : 0,
+              transformOrigin: showBadgeInside ? 'center' : 'bottom left',
+              fontSize: BADGE_FONT_SIZE,
+              fontWeight: 'bold',
+              whiteSpace: 'nowrap',
+              pointerEvents: 'auto',
+              cursor: 'pointer',
+              background: '#fff',
+              border: '1px solid #333',
+              borderRadius: 4,
+              padding: '1px 6px',
+            }}
+          >
+            {data.name}
+          </div>
+        )}
+        {/* An expanded (non-root) container's label instead scales
+            naturally with the model like everything else (no counter-scale
+            -- it's only ever viewed at a size where its own contents are
+            actually readable, unlike a collapsed icon that can be zoomed
+            out arbitrarily far), sized close to a Pool's own name text, and
+            moved fully *outside* the box -- above it -- so it never sits
+            over whatever's rendered near the container's own top edge. */}
+        {showExpandedLabel && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: '100%',
+              left: 0,
+              marginBottom: 6,
+              fontSize: EXPANDED_LABEL_FONT_SIZE,
+              fontWeight: 'bold',
+              whiteSpace: 'nowrap',
+              pointerEvents: 'auto',
+              cursor: 'pointer',
+            }}
+          >
+            {data.name}
+          </div>
+        )}
       </div>
       <NodeResizer nodeId={id} isVisible={selected} minWidth={60} minHeight={40} onResizeEnd={handleResizeEnd} />
     </Fragment>

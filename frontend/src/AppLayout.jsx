@@ -37,6 +37,7 @@ export default function AppLayout({
   onToggleCollapse,
   onAutoLayoutGroup,
   onAutoLayoutRecursive,
+  onClearLayoutLocks,
   onAddPool,
   onAddReac,
   onAddEnz,
@@ -93,6 +94,7 @@ export default function AppLayout({
         onToggleCollapse={onToggleCollapse}
         onAutoLayoutGroup={onAutoLayoutGroup}
         onAutoLayoutRecursive={onAutoLayoutRecursive}
+        onClearLayoutLocks={onClearLayoutLocks}
       />
     ),
     Run: (

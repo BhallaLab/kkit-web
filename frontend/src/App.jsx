@@ -452,6 +452,184 @@ function computeGridCells(sizes) {
   return { colWidth, rowHeight, cols };
 }
 
+// -- Connectivity-aware packing -------------------------------------------
+//
+// A plain index-order grid pack (i % cols, floor(i / cols)) preserves
+// whatever order `directChildren` happened to already be in -- which,
+// since the backend emits nodes grouped by type (every pool, then every
+// reac, then every enz), read as "marching through molecules, then
+// reactions, then enzymes in successive rows" with no regard for which
+// ones actually connect to each other, often needing long connector lines
+// to reach across the whole grid. This instead relaxes each child toward
+// the average position of whatever it's actually connected to (a cheap,
+// bounded-iteration barycenter/spring layout -- not a real force-directed
+// solver, just enough passes to pull connected neighbors together) starting
+// from wherever they currently sit, then greedily assigns each relaxed
+// position to whichever *still-open* grid cell is nearest it -- keeping
+// the same "everyone gets exactly one non-overlapping cell" guarantee the
+// plain grid pack always had, just choosing *which* cell each child lands
+// in based on real connectivity instead of insertion order.
+//
+// Only counts an edge when *both* ends are among the same set of children
+// -- a connection leaving this group entirely (to a sibling group, or up
+// to a parent) has no comparable position to pull toward without also
+// knowing that group's own final layout, which doesn't exist yet at this
+// point in a (possibly recursive) pass.
+const RELAX_ITERATIONS = 40;
+const RELAX_DAMPING = 0.5;
+
+function buildLocalAdjacency(ids, edges) {
+  const idSet = new Set(ids);
+  const adjacency = new Map(ids.map((id) => [id, []]));
+  edges.forEach((e) => {
+    if (e.source === e.target) return;
+    if (idSet.has(e.source) && idSet.has(e.target)) {
+      adjacency.get(e.source).push(e.target);
+      adjacency.get(e.target).push(e.source);
+    }
+  });
+  return adjacency;
+}
+
+// A locked child (see data.locked -- set whenever the user manually drags,
+// resizes, or flips something) stays a fixed anchor throughout relaxation
+// -- it still pulls its own unlocked neighbors toward it, since that's
+// real connectivity information worth using, but its own position is
+// never updated by this loop; excluded from the grid-cell assignment
+// entirely afterward, by the caller, since it isn't being repositioned at
+// all.
+function relaxPositions(ids, adjacency, initialPos, lockedIds) {
+  let pos = new Map(ids.map((id) => [id, { ...initialPos.get(id) }]));
+  for (let iter = 0; iter < RELAX_ITERATIONS; iter++) {
+    const next = new Map();
+    ids.forEach((id) => {
+      if (lockedIds.has(id)) {
+        next.set(id, pos.get(id));
+        return;
+      }
+      const neighbors = adjacency.get(id) ?? [];
+      if (neighbors.length === 0) {
+        next.set(id, pos.get(id));
+        return;
+      }
+      let sx = 0;
+      let sy = 0;
+      neighbors.forEach((nid) => {
+        const p = pos.get(nid);
+        sx += p.x;
+        sy += p.y;
+      });
+      const avg = { x: sx / neighbors.length, y: sy / neighbors.length };
+      const cur = pos.get(id);
+      next.set(id, { x: cur.x + (avg.x - cur.x) * RELAX_DAMPING, y: cur.y + (avg.y - cur.y) * RELAX_DAMPING });
+    });
+    pos = next;
+  }
+  return pos;
+}
+
+// Greedy nearest-open-cell assignment -- O(n^2), fine for the sizes a
+// single group's own direct children (or one recursive layout's own
+// level) actually reach in practice. The candidate cells are anchored at
+// the relaxed cluster's own top-left corner (not a fixed (0,0)) so
+// distance comparisons are meaningful regardless of where in the model
+// this particular group actually sits.
+function assignNearestCells(orderedIds, relaxedPos, cols, colWidth, rowHeight) {
+  const xs = orderedIds.map((id) => relaxedPos.get(id).x);
+  const ys = orderedIds.map((id) => relaxedPos.get(id).y);
+  const originX = Math.min(...xs);
+  const originY = Math.max(...ys);
+  const open = orderedIds.map((_, i) => ({
+    col: i % cols,
+    row: Math.floor(i / cols),
+    x: originX + (i % cols) * colWidth,
+    y: originY - Math.floor(i / cols) * rowHeight,
+  }));
+
+  const assignment = new Map();
+  orderedIds.forEach((id) => {
+    const p = relaxedPos.get(id);
+    let bestI = 0;
+    let bestDist = Infinity;
+    open.forEach((c, i) => {
+      const d = Math.hypot(p.x - c.x, p.y - c.y);
+      if (d < bestDist) {
+        bestDist = d;
+        bestI = i;
+      }
+    });
+    assignment.set(id, open[bestI]);
+    open.splice(bestI, 1);
+  });
+  return assignment;
+}
+
+// Reorders `children` (raw node objects, each with .id/.x/.y) so that
+// placing them index-by-index into a plain (i % cols, floor(i / cols))
+// grid -- exactly what onAutoLayoutGroup/computeLocalLayouts already do --
+// reads as connectivity-aware instead of insertion-order. Locked children
+// are dropped from the returned order entirely (callers leave them
+// wherever they already are, see onAutoLayoutGroup/computeLocalLayouts'
+// own handling) -- this only ever orders the ones actually being packed,
+// though a locked sibling still shapes *their* placement via relaxation.
+function connectivityAwareOrder(children, edges, cols, colWidth, rowHeight) {
+  const unlocked = children.filter((c) => !c.locked);
+  if (unlocked.length <= 1) return unlocked;
+  const ids = children.map((c) => c.id);
+  const lockedIds = new Set(children.filter((c) => c.locked).map((c) => c.id));
+  const adjacency = buildLocalAdjacency(ids, edges);
+  const initialPos = new Map(children.map((c) => [c.id, { x: c.x, y: c.y }]));
+  const relaxed = relaxPositions(ids, adjacency, initialPos, lockedIds);
+  const unlockedIds = unlocked.map((c) => c.id);
+  const assignment = assignNearestCells(unlockedIds, relaxed, cols, colWidth, rowHeight);
+  const byId = new Map(children.map((c) => [c.id, c]));
+  return [...assignment.entries()]
+    .sort((a, b) => a[1].row - b[1].row || a[1].col - b[1].col)
+    .map(([id]) => byId.get(id));
+}
+
+// -- Auto-flip during layout -----------------------------------------------
+//
+// The same substrate-vs-product-average-X rule computeInitialFlips uses at
+// load time, run again after auto-layout actually moves things -- an
+// auto-layout that leaves a connector needlessly crossing itself because
+// the substrate/product sides never got re-checked against the *new*
+// positions is only half fixing "minimize connector lengths". Only
+// reac/enz/concchan (the types with a substrate/product-style flip, not a
+// Pool's own less centrally-relevant one) are re-evaluated, and only
+// among `candidateIds` (whatever this particular layout operation
+// actually affected); a locked node's own flip is left alone regardless
+// -- a user's manual choice there is exactly what data.locked exists to
+// protect. `xById` must already reflect every *new* position this
+// operation just assigned, not just the ones being flip-checked -- a
+// reac's own substrates/products can easily live outside the immediate
+// scope being laid out.
+function computeFlipUpdates(candidateIds, rawById, edges, xById, lockedIds) {
+  const subXs = {};
+  const prodXs = {};
+  edges.forEach((e) => {
+    const type = e.data?.type;
+    const sourceType = rawById[e.source]?.type;
+    const targetType = rawById[e.target]?.type;
+    if ((type === 'substrate' || type === 'chanIn') && sourceType === 'pool' && xById[e.source] !== undefined) {
+      (subXs[e.target] ??= []).push(xById[e.source]);
+    } else if ((type === 'product' || type === 'chanOut') && targetType === 'pool' && xById[e.target] !== undefined) {
+      (prodXs[e.source] ??= []).push(xById[e.target]);
+    }
+  });
+  const avg = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const flips = {};
+  candidateIds.forEach((id) => {
+    if (lockedIds.has(id)) return;
+    const type = rawById[id]?.type;
+    if (type !== 'reac' && type !== 'enz' && type !== 'concchan') return;
+    const subs = subXs[id];
+    const prods = prodXs[id];
+    if (subs && prods) flips[id] = avg(subs) > avg(prods);
+  });
+  return flips;
+}
+
 // Each direct child's own footprint for grid-packing purposes -- a
 // nested container's real effective box (padded so its own border
 // doesn't sit flush against a neighbor's), or a flat AUTO_LAYOUT_CELL
@@ -488,13 +666,21 @@ function childFootprint(c, containerIndex, boxById) {
 // necessary. The container's own *position* is what actually needed to
 // stay put (see assignAbsolutePositions/onAutoLayoutGroup, both
 // unaffected by this), not its size.
-function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts) {
+function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, edges) {
   const directChildren = rawNodes.filter(
     (n) => n.parentId === rootId && !(n.type === 'pool' && n.isEnzComplex)
   );
+  // A locked container (see data.locked) is a true "do not touch" island
+  // -- its own subtree uses *absolute*, not parent-relative, coordinates
+  // on the backend (see effectiveContainerBox's own reliance on that), so
+  // moving the container without also moving every descendant by the same
+  // delta would silently detach them from it. Simplest and safest is to
+  // never recurse into (or reposition) one at all -- its own current
+  // footprint still counts toward this level's bounding-box accounting
+  // below, just never gets a fresh internal layout or a new position.
   directChildren.forEach((child) => {
-    if (CONTAINER_TYPES.includes(child.type)) {
-      computeLocalLayouts(child.id, rawNodes, rawById, containerIndex, boxById, localLayouts);
+    if (CONTAINER_TYPES.includes(child.type) && !child.locked) {
+      computeLocalLayouts(child.id, rawNodes, rawById, containerIndex, boxById, localLayouts, edges);
     }
   });
   if (directChildren.length === 0) {
@@ -502,35 +688,79 @@ function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById,
     localLayouts[rootId] = { children: [], width: currentBox.width, height: currentBox.height };
     return;
   }
-  // A nested container's size here is its own *freshly computed*
-  // localLayouts entry (just populated by the recursive call above), not
-  // childFootprint's effectiveContainerBox -- that would read the box as
-  // it stood *before* this whole operation started, silently ignoring
-  // however much this same layout just grew or shrank it by (verified
-  // directly: this mismatch was letting nested containers overlap in the
-  // grow case, and was part of why sizes never tightened up in the
-  // shrink case).
-  const sizes = directChildren.map((c) => {
+
+  const currentBox = effectiveContainerBox(rawById[rootId], containerIndex, boxById);
+  const lockedContainers = directChildren.filter((c) => CONTAINER_TYPES.includes(c.type) && c.locked);
+  // Everything else actually gets a position -- an unlocked entity/
+  // container, freshly packed below, or a locked *plain entity* (no
+  // cascading-descendant concern, unlike a locked container), which keeps
+  // its current offset from this container's own new origin so it travels
+  // along with whatever group it's actually in without being repacked
+  // into a fresh grid slot.
+  const repositionable = directChildren.filter((c) => !(CONTAINER_TYPES.includes(c.type) && c.locked));
+  const unlockedPackable = repositionable.filter((c) => !c.locked);
+  const lockedEntities = repositionable.filter((c) => c.locked);
+
+  // A nested (unlocked) container's size here is its own *freshly
+  // computed* localLayouts entry (just populated by the recursive call
+  // above), not childFootprint's effectiveContainerBox -- that would read
+  // the box as it stood *before* this whole operation started, silently
+  // ignoring however much this same layout just grew or shrank it by
+  // (verified directly: this mismatch was letting nested containers
+  // overlap in the grow case, and was part of why sizes never tightened
+  // up in the shrink case). A locked one instead just reads its own
+  // current, unchanged size (see effectiveContainerBox below).
+  const sizes = unlockedPackable.map((c) => {
     if (!CONTAINER_TYPES.includes(c.type)) return { width: AUTO_LAYOUT_CELL, height: AUTO_LAYOUT_CELL };
     const own = localLayouts[c.id];
     return { width: own.width + CONTAINER_NESTING_PADDING, height: own.height + CONTAINER_NESTING_PADDING };
   });
-  const { colWidth, rowHeight, cols } = computeGridCells(sizes);
+  const { colWidth, rowHeight, cols } = computeGridCells(
+    sizes.length > 0 ? sizes : [{ width: AUTO_LAYOUT_CELL, height: AUTO_LAYOUT_CELL }]
+  );
+
+  // Connectivity-aware order (see its own comment) instead of plain
+  // insertion order -- children actually connected to each other land in
+  // nearby grid cells instead of wherever the backend happened to list
+  // them.
+  const ordered = connectivityAwareOrder(unlockedPackable, edges, cols, colWidth, rowHeight);
   // CONTAINER_PADDING is baked into each child's own localX/localY here
   // (matching onAutoLayoutGroup's single-level originX/originY) -- so
   // assignAbsolutePositions below only ever has to add a container's own
   // real origin to these, never a second padding offset on top.
-  const children = directChildren.map((child, i) => ({
+  const packedChildren = ordered.map((child, i) => ({
     id: child.id,
     localX: CONTAINER_PADDING + (i % cols) * colWidth,
     localY: -CONTAINER_PADDING - Math.floor(i / cols) * rowHeight,
+    right: CONTAINER_PADDING + (i % cols) * colWidth + colWidth,
+    bottom: -CONTAINER_PADDING - Math.floor(i / cols) * rowHeight - rowHeight,
   }));
-  const xs = children.map((c) => c.localX);
-  const ys = children.map((c) => c.localY);
+
+  const lockedEntityPlacements = lockedEntities.map((c) => {
+    const footprint = childFootprint(c, containerIndex, boxById);
+    const localX = c.x - currentBox.x;
+    const localY = c.y - currentBox.y;
+    return { id: c.id, localX, localY, right: localX + footprint.width, bottom: localY - footprint.height };
+  });
+
+  const lockedContainerBounds = lockedContainers.map((c) => {
+    const box = effectiveContainerBox(c, containerIndex, boxById);
+    const localX = c.x - currentBox.x;
+    const localY = c.y - currentBox.y;
+    return { localX, localY, right: localX + box.width, bottom: localY - box.height };
+  });
+
+  // `children` only ever holds entries assignAbsolutePositions should
+  // actually move (a locked container is deliberately excluded, see
+  // above) -- the bounding-box math just below additionally folds in
+  // every locked container's own current footprint, so this level's final
+  // size still actually contains it even though it's never repositioned.
+  const children = [...packedChildren, ...lockedEntityPlacements];
+  const allBounds = [...packedChildren, ...lockedEntityPlacements, ...lockedContainerBounds];
   localLayouts[rootId] = {
     children,
-    width: Math.max(...xs) - Math.min(...xs) + colWidth + CONTAINER_PADDING * 2,
-    height: Math.max(...ys) - Math.min(...ys) + rowHeight + CONTAINER_PADDING * 2,
+    width: Math.max(...allBounds.map((b) => b.right)) - Math.min(...allBounds.map((b) => b.localX)) + CONTAINER_PADDING * 2,
+    height: Math.max(...allBounds.map((b) => b.localY)) - Math.min(...allBounds.map((b) => b.bottom)) + CONTAINER_PADDING * 2,
   };
 }
 
@@ -616,6 +846,13 @@ function buildFlowNodes(graph, scale, preserve = {}) {
       // server.py's _extract_collapsed) on first load.
       node.data.collapsed = preserve.collapsed?.[n.id] ?? n.collapsed ?? false;
     }
+    // Frontend-only, same reasoning as flipped/collapsed just above --
+    // set whenever the user manually drags, resizes, or flips something
+    // (see onNodeDragStop/onContainerResize/onToggleFlip), so the
+    // auto-layout actions know to leave it exactly where/however it is.
+    // Applies to any node type (a plain entity or a container), so it's
+    // not gated behind isContainer/type the way flipped/collapsed are.
+    node.data.locked = preserve.locked?.[n.id] ?? false;
     if (n.parentId) {
       node.parentId = n.parentId;
       node.extent = 'parent';
@@ -1029,8 +1266,12 @@ export default function App() {
         }
         setFlowGraph((g) => ({
           ...g,
+          // A manual drag is exactly the "manually positioned" case
+          // data.locked exists to flag -- see its own comment -- so a
+          // later auto-layout run leaves this node exactly where the user
+          // just put it instead of repacking it.
           nodes: g.nodes.map((n) =>
-            n.id === node.id ? { ...n, data: { ...n.data, x, y } } : n
+            n.id === node.id ? { ...n, data: { ...n.data, x, y, locked: true } } : n
           ),
         }));
       })
@@ -1090,7 +1331,10 @@ export default function App() {
                     // buildFlowNodes call; left unsynced here, the next
                     // refresh (or a save/reload round-trip) would silently
                     // snap this container back to its pre-resize box.
-                    data: { ...n.data, x, y, width, height, expandedStyle: { width: box.width, height: box.height } },
+                    // A manual resize (like a manual drag, see
+                    // onNodeDragStop) counts as "manually positioned" --
+                    // see data.locked's own comment.
+                    data: { ...n.data, x, y, width, height, expandedStyle: { width: box.width, height: box.height }, locked: true },
                   }
                 : n
             ),
@@ -1133,10 +1377,18 @@ export default function App() {
         (n) => n.parentId === groupId && !(n.type === 'pool' && n.isEnzComplex)
       );
       if (directChildren.length === 0) return;
+      // A locked child (see data.locked) never moves or resizes -- exactly
+      // the "manually positioned/oriented" case that flag exists to
+      // protect -- but the group's own final size still has to actually
+      // contain it, so its current real footprint is folded into the
+      // bounding-box math below alongside the freshly-packed grid.
+      const unlockedChildren = directChildren.filter((c) => !c.locked);
+      const lockedChildren = directChildren.filter((c) => c.locked);
+      if (unlockedChildren.length === 0) return;
 
       const containerIndex = buildContainerIndex(rawNodes, rawById);
       const boxById = {};
-      const sizes = directChildren.map((c) => childFootprint(c, containerIndex, boxById));
+      const sizes = unlockedChildren.map((c) => childFootprint(c, containerIndex, boxById));
       const { colWidth, rowHeight, cols } = computeGridCells(sizes);
       // Anchored at the group's own *effective* box (see effectiveContainerBox),
       // not its raw x/y fields directly -- those only mean "top-left of the
@@ -1153,11 +1405,17 @@ export default function App() {
       const groupBox = effectiveContainerBox(group, containerIndex, boxById);
       const originX = groupBox.x + CONTAINER_PADDING;
       const originY = groupBox.y - CONTAINER_PADDING;
-      const placements = directChildren.map((child, i) => ({
+      // Connectivity-aware order (see its own comment) instead of plain
+      // insertion order -- children actually connected to each other land
+      // in nearby grid cells instead of wherever the backend happened to
+      // list them.
+      const ordered = connectivityAwareOrder(unlockedChildren, flowGraph.edges, cols, colWidth, rowHeight);
+      const placements = ordered.map((child, i) => ({
         child,
         x: originX + (i % cols) * colWidth,
         y: originY - Math.floor(i / cols) * rowHeight,
       }));
+      const lockedFootprints = lockedChildren.map((c) => ({ x: c.x, y: c.y, ...childFootprint(c, containerIndex, boxById) }));
 
       Promise.all(
         placements.map(({ child, x, y }) =>
@@ -1171,21 +1429,24 @@ export default function App() {
         .then((results) => {
           const failed = results.find((r) => r.error);
           if (failed) throw new Error(failed.error);
-          const xs = placements.map((p) => p.x);
-          const ys = placements.map((p) => p.y);
           // Auto-layout keeps the group's own *position* fixed always
           // (see groupBox.x/y just below -- never touched by anything
           // computed here), but its size always ends up exactly what the
-          // freshly-packed grid needs, grown or shrunk -- an earlier
-          // version only ever grew it (never shrinking below whatever it
-          // measured before), meant to stop this from resizing a
+          // freshly-packed grid (plus whatever locked children have to
+          // stay contained) needs, grown or shrunk -- an earlier version
+          // only ever grew it (never shrinking below whatever it measured
+          // before), meant to stop this from resizing a
           // deliberately-sized group out from under itself, but that
           // also permanently locked in any already-oversized box as a
           // floor no later run could tighten back up, which is backwards
           // from what asking for a fresh layout is for: it read as dead
           // space inside the group, not "its contents rearranged".
-          const width = Math.max(...xs) - Math.min(...xs) + colWidth + CONTAINER_PADDING * 2;
-          const height = Math.max(...ys) - Math.min(...ys) + rowHeight + CONTAINER_PADDING * 2;
+          const leftEdges = [...placements.map((p) => p.x), ...lockedFootprints.map((f) => f.x)];
+          const rightEdges = [...placements.map((p) => p.x + colWidth), ...lockedFootprints.map((f) => f.x + f.width)];
+          const bottomEdges = [...placements.map((p) => p.y - rowHeight), ...lockedFootprints.map((f) => f.y - f.height)];
+          const topEdges = [...placements.map((p) => p.y), ...lockedFootprints.map((f) => f.y)];
+          const width = Math.max(...rightEdges) - Math.min(...leftEdges) + CONTAINER_PADDING * 2;
+          const height = Math.max(...topEdges) - Math.min(...bottomEdges) + CONTAINER_PADDING * 2;
           return fetch(`${API_BASE}/api/update_position`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1197,6 +1458,26 @@ export default function App() {
             setStatus(`error: ${res.error}`);
             return;
           }
+          // Re-evaluate flip (see computeFlipUpdates) for every reac/enz/
+          // concchan this operation just repositioned, using each one's
+          // connected pools' *final* absolute X -- freshly placed ones
+          // from `placements`, everything else (a neighbor outside this
+          // group, or a locked sibling) from its own current position.
+          const xById = {};
+          rawNodes.forEach((n) => {
+            xById[n.id] = n.x;
+          });
+          placements.forEach((p) => {
+            xById[p.child.id] = p.x;
+          });
+          const lockedIds = new Set(rawNodes.filter((n) => n.locked).map((n) => n.id));
+          const flips = computeFlipUpdates(placements.map((p) => p.child.id), rawById, flowGraph.edges, xById, lockedIds);
+          if (Object.keys(flips).length > 0) {
+            setFlowGraph((g) => ({
+              ...g,
+              nodes: g.nodes.map((n) => (flips[n.id] !== undefined ? { ...n, data: { ...n.data, flipped: flips[n.id] } } : n)),
+            }));
+          }
           refreshGraphRef.current?.();
           // The group can easily have grown (or shrunk) enough that the
           // viewport's current pan/zoom no longer frames it well -- same
@@ -1207,7 +1488,7 @@ export default function App() {
         })
         .catch((err) => setStatus(`error: ${err}`));
     },
-    [flowGraph.nodes]
+    [flowGraph.nodes, flowGraph.edges]
   );
 
   // The recursive version of the same action -- see computeLocalLayouts/
@@ -1231,7 +1512,7 @@ export default function App() {
       const containerIndex = buildContainerIndex(rawNodes, rawById);
       const boxById = {};
       const localLayouts = {};
-      computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts);
+      computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, flowGraph.edges);
       if (localLayouts[rootId].children.length === 0) return;
 
       // The root of this operation keeps its own current position --
@@ -1276,6 +1557,31 @@ export default function App() {
             setStatus(`error: ${failed.error}`);
             return;
           }
+          // Re-evaluate flip (see computeFlipUpdates) for every reac/enz/
+          // concchan this operation just repositioned, using each one's
+          // connected pools' *final* absolute X -- freshly placed ones
+          // from positionUpdates/resizeUpdates, everything else (a
+          // neighbor outside this subtree, or a locked node) from its own
+          // current position.
+          const xById = {};
+          rawNodes.forEach((n) => {
+            xById[n.id] = n.x;
+          });
+          positionUpdates.forEach((u) => {
+            xById[u.id] = u.x;
+          });
+          resizeUpdates.forEach((u) => {
+            xById[u.id] = u.x;
+          });
+          const lockedIds = new Set(rawNodes.filter((n) => n.locked).map((n) => n.id));
+          const candidateIds = positionUpdates.map((u) => u.id);
+          const flips = computeFlipUpdates(candidateIds, rawById, flowGraph.edges, xById, lockedIds);
+          if (Object.keys(flips).length > 0) {
+            setFlowGraph((g) => ({
+              ...g,
+              nodes: g.nodes.map((n) => (flips[n.id] !== undefined ? { ...n, data: { ...n.data, flipped: flips[n.id] } } : n)),
+            }));
+          }
           refreshGraphRef.current?.();
           // A whole-subtree layout can change the root's own overall
           // footprint dramatically -- same reasoning (and mechanism) as
@@ -1286,7 +1592,7 @@ export default function App() {
         })
         .catch((err) => setStatus(`error: ${err}`));
     },
-    [flowGraph.nodes]
+    [flowGraph.nodes, flowGraph.edges]
   );
 
   const nodeActions = useMemo(() => ({ onContainerResize }), [onContainerResize]);
@@ -1580,8 +1886,10 @@ export default function App() {
           const existingColor = {};
           const existingPlotWindow = {};
           const existingCollapsed = {};
+          const existingLocked = {};
           g.nodes.forEach((n) => {
             existingFlipped[n.id] = n.data.flipped;
+            existingLocked[n.id] = n.data.locked;
             if (n.type === 'pool') {
               existingColor[n.id] = n.data.color;
               existingPlotWindow[n.id] = n.data.plotWindow;
@@ -1595,6 +1903,7 @@ export default function App() {
             color: existingColor,
             plotWindow: existingPlotWindow,
             collapsed: existingCollapsed,
+            locked: existingLocked,
           });
         });
       })
@@ -1631,8 +1940,40 @@ export default function App() {
   const onToggleFlip = useCallback((nodeId, flipped) => {
     setFlowGraph((g) => ({
       ...g,
-      nodes: g.nodes.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, flipped } } : n)),
+      // A manual flip toggle counts as "manually oriented" -- see
+      // data.locked's own comment -- so auto-layout's own flip pass
+      // (computeFlipUpdates) leaves this node's orientation alone from
+      // here on, the same way a manual drag protects its position.
+      nodes: g.nodes.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, flipped, locked: true } } : n)),
     }));
+  }, []);
+
+  // Clears data.locked across a whole subtree (the container this was
+  // invoked on, plus every descendant) -- the escape hatch for "no, I
+  // really do want auto-layout to touch everything here again", since
+  // there's otherwise no way back from a manual edit's own automatic lock
+  // once it's served its purpose. Frontend-only, same as the flag itself
+  // (see onToggleFlip/onNodeDragStop/onContainerResize) -- nothing to
+  // persist, just an immediate local update.
+  const onClearLayoutLocks = useCallback((rootId) => {
+    setFlowGraph((g) => {
+      const byId = {};
+      g.nodes.forEach((n) => {
+        byId[n.id] = n;
+      });
+      const isInScope = (id) => {
+        let cur = byId[id];
+        while (cur) {
+          if (cur.id === rootId) return true;
+          cur = cur.parentId ? byId[cur.parentId] : null;
+        }
+        return false;
+      };
+      return {
+        ...g,
+        nodes: g.nodes.map((n) => (n.data.locked && isInScope(n.id) ? { ...n, data: { ...n.data, locked: false } } : n)),
+      };
+    });
   }, []);
 
   // Same reasoning as onToggleFlip -- collapsed is frontend-only (see
@@ -2082,8 +2423,10 @@ export default function App() {
           const existingColor = {};
           const existingPlotWindow = {};
           const existingCollapsed = {};
+          const existingLocked = {};
           g.nodes.forEach((n) => {
             existingFlipped[n.id] = n.data.flipped;
+            existingLocked[n.id] = n.data.locked;
             if (n.type === 'pool') {
               existingColor[n.id] = n.data.color;
               existingPlotWindow[n.id] = n.data.plotWindow;
@@ -2097,6 +2440,7 @@ export default function App() {
             color: existingColor,
             plotWindow: existingPlotWindow,
             collapsed: existingCollapsed,
+            locked: existingLocked,
           });
         });
         setStatus(`reset ${graph.nodes.length} nodes to initial values`);
@@ -2287,6 +2631,7 @@ export default function App() {
       onToggleIsolateMode={onToggleIsolateMode}
       onAutoLayoutGroup={onAutoLayoutGroup}
       onAutoLayoutRecursive={onAutoLayoutRecursive}
+      onClearLayoutLocks={onClearLayoutLocks}
       loadGeneration={loadGeneration}
       onCanvasDrop={handleCanvasDrop}
       onUnplot={handleUnplot}

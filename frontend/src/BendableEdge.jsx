@@ -69,11 +69,44 @@ function polylinePath(points) {
   return points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x},${p.y}`).join(' ');
 }
 
-// The midpoint handle serves two purposes: drag it to bend the edge for a
-// clearer layout, or click it (no drag) to select the edge so it can be
-// removed with Backspace/Delete -- the handle sits in a separate DOM
-// subtree (EdgeLabelRenderer's portal) from the path itself, so it needs
-// its own click-vs-drag detection to forward a plain click as a selection.
+// Drags one segment of a multi-bend polyline perpendicular to itself,
+// re-deriving an axis-aligned route rather than letting the dragged point
+// go anywhere -- `points` is the FULL point list including the fixed
+// source/target ends (a stable snapshot taken at drag-start, see
+// onSegmentPointerDown's own comment), `segIndex` the segment between
+// points[segIndex] and points[segIndex+1]. A segment touching a via point
+// on either end just slides that point's shared coordinate to follow the
+// pointer (the original single-handle behavior, generalized to whichever
+// segment was actually grabbed); a segment touching the *fixed* source or
+// target end can't move that endpoint at all, so instead a brand-new via
+// point is inserted right next to it -- dragging a "stub" segment bends a
+// new corner into existence rather than doing nothing. Returns the new
+// via array (points with both fixed ends stripped back off).
+function dragSegment(points, segIndex, pointer) {
+  const a = points[segIndex];
+  const b = points[segIndex + 1];
+  const axis = a.y === b.y ? 'y' : 'x';
+  const other = axis === 'x' ? 'y' : 'x';
+  const newCoord = pointer[axis];
+  const isFixedStart = segIndex === 0;
+  const isFixedEnd = segIndex === points.length - 2;
+  const next = points.map((p) => ({ ...p }));
+  if (!isFixedStart) next[segIndex][axis] = newCoord;
+  if (!isFixedEnd) next[segIndex + 1][axis] = newCoord;
+  if (isFixedStart) {
+    next.splice(1, 0, { [axis]: newCoord, [other]: next[0][other] });
+  } else if (isFixedEnd) {
+    const insertIdx = next.length - 1;
+    next.splice(insertIdx, 0, { [axis]: newCoord, [other]: next[insertIdx][other] });
+  }
+  return next.slice(1, -1);
+}
+
+// Every segment gets its own handle -- drag any one of them, or click it
+// (no drag) to select the edge so it can be removed with Backspace/Delete.
+// Handles sit in a separate DOM subtree (EdgeLabelRenderer's portal) from
+// the path itself, so each needs its own click-vs-drag detection to
+// forward a plain click as a selection.
 export default function BendableEdge({
   id,
   sourceX,
@@ -98,15 +131,66 @@ export default function BendableEdge({
   // single-bend default) but can also be an *array* of points -- written by
   // avoidObstacles' and assignAggregatePorts' own automatic routing,
   // rendered as a straight-segment polyline instead of the single smooth
-  // spline a lone via point gets. Dragging a *recognized* 2-point/
-  // one-shared-axis array (see onPointerMove below) keeps writing that same
-  // shape back, so a right-angled connector stays right-angled while it's
-  // being repositioned; any other via shape still collapses to the
-  // simpler single-bend, user-owned spline form on the first touch.
+  // spline a lone via point gets. Dragging any segment of a multi-bend
+  // route (see dragSegment above) keeps writing an axis-aligned array back,
+  // so a right-angled connector stays right-angled while it's being
+  // repositioned; the single-point/spline case (no array at all) keeps the
+  // simpler one-handle behavior it always had.
   const isMultiBend = Array.isArray(data?.via) && data.via.length > 0;
   const viaPoints = isMultiBend ? data.via : [data?.via ?? { x: (sourceX + targetX) / 2, y: (sourceY + targetY) / 2 }];
+  // The route's own via array is computed once, off in collapseView.js,
+  // against its own independently-derived idea of where a handle sits;
+  // sourceX/sourceY/targetX/targetY here are React Flow's own live,
+  // authoritative measurement of that same point, taken fresh every
+  // render. The two aren't always pixel-identical -- verified directly on
+  // a real collapsed model, a several-unit drift (measurement/rounding,
+  // not a logic bug either side) was enough to turn the endpoint-adjacent
+  // segment visibly diagonal, especially at the heavy zoom-out a large
+  // collapsed model fits to. Snapping the near-end via point's *free* axis
+  // (the one it does NOT share with its own neighboring via point -- that
+  // shared one is the deliberate lane/shelf coordinate, left untouched) to
+  // the real endpoint value guarantees the rendered path always actually
+  // touches the endpoint and starts/ends axis-aligned, regardless of any
+  // such drift.
+  //
+  // "Which axis is free" is read off the via array's own two nearest
+  // points, NOT off sourcePosition/targetPosition or a closest-distance
+  // guess -- both were tried and verified unreliable: sourcePosition
+  // alone doesn't say which axis a *specific* route construction shares
+  // (collapseView.js's two different route builders, the plain shelf
+  // route and the obstacle-avoiding detour, share opposite axes for the
+  // same departure side), and a closest-distance guess picks the wrong
+  // axis whenever the real lane coordinate happens to sit numerically
+  // closer to the endpoint than the genuine shared axis's own tiny drift
+  // does. Comparing a via point to its *immediate via neighbor* instead is
+  // reliable regardless of construction: that neighbor relationship is
+  // always an exact match by construction (never subject to any
+  // measurement drift), so whichever axis they don't already agree on is
+  // unambiguously the free one. Purely a rendering-time correction --
+  // data.via itself is never touched, so this can't compound across
+  // renders or fight a user's own drag.
+  const freeAxisFrom = (p, neighbor) => {
+    if (p.x === neighbor.x) return 'y';
+    if (p.y === neighbor.y) return 'x';
+    return null;
+  };
+  const snappedViaPoints = isMultiBend
+    ? viaPoints.map((p, i, arr) => {
+        if (arr.length < 2) return p;
+        if (i === 0) {
+          const freeAxis = freeAxisFrom(p, arr[1]);
+          if (freeAxis) return { ...p, [freeAxis]: freeAxis === 'x' ? sourceX : sourceY };
+        }
+        if (i === arr.length - 1) {
+          const freeAxis = freeAxisFrom(p, arr[arr.length - 2]);
+          if (freeAxis) return { ...p, [freeAxis]: freeAxis === 'x' ? targetX : targetY };
+        }
+        return p;
+      })
+    : viaPoints;
+  const allPoints = isMultiBend ? [{ x: sourceX, y: sourceY }, ...snappedViaPoints, { x: targetX, y: targetY }] : null;
   const path = isMultiBend
-    ? polylinePath([{ x: sourceX, y: sourceY }, ...viaPoints, { x: targetX, y: targetY }])
+    ? polylinePath(allPoints)
     : splinePath(
         { x: sourceX, y: sourceY },
         viaPoints[0],
@@ -116,9 +200,9 @@ export default function BendableEdge({
         sourceHandleId === 'product' || sourceHandleId === 'chanOut',
         targetHandleId === 'substrate' || targetHandleId === 'chanIn'
       );
-  // The one draggable handle sits at the polyline's own average bend
-  // point for a multi-bend edge (there's no single "the" via point to
-  // anchor it to), or the lone via point otherwise.
+  // The stoichiometry label (below) still anchors at the polyline's own
+  // average bend point regardless of how many segment handles it now has
+  // -- there's no single "the" via point to hang it off otherwise.
   const via = isMultiBend
     ? {
         x: viaPoints.reduce((sum, p) => sum + p.x, 0) / viaPoints.length,
@@ -126,13 +210,27 @@ export default function BendableEdge({
       }
     : viaPoints[0];
 
-  const onPointerDown = useCallback((event) => {
+  // Not a useCallback -- `allPoints` is a fresh array every render (it's
+  // derived straight from `data.via`), so there would be nothing stable to
+  // memoize against anyway.
+  const onSegmentPointerDown = (event, segIndex) => {
     event.stopPropagation();
-    dragState.current = { startX: event.clientX, startY: event.clientY, dragging: false };
+    dragState.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      dragging: false,
+      segIndex,
+      // A stable snapshot of the whole polyline as it stood *before* this
+      // gesture -- every subsequent pointermove recomputes from this same
+      // reference rather than compounding onto whatever the previous move
+      // just wrote, so a single continuous drag inserts at most one new
+      // corner, not one per animation frame.
+      originalPoints: allPoints ? allPoints.map((p) => ({ ...p })) : null,
+    };
     event.target.setPointerCapture(event.pointerId);
-  }, []);
+  };
 
-  const onPointerMove = useCallback(
+  const onSegmentPointerMove = useCallback(
     (event) => {
       if (!dragState.current) return;
       const dx = event.clientX - dragState.current.startX;
@@ -140,36 +238,17 @@ export default function BendableEdge({
       if (!dragState.current.dragging && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
       dragState.current.dragging = true;
       const flowPoint = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      // A right-angled 2-bend connector (an aggregate group-to-group
-      // connector, or any edge avoidObstacles routed around a third box)
-      // stays right-angled while it's being dragged, instead of always
-      // collapsing to the single smooth-spline point every other drag
-      // produces -- sliding the *shared* coordinate (whichever axis both
-      // bend points agree on) to follow the pointer, and re-deriving the
-      // other from the current source/target, keeps every segment
-      // horizontal/vertical throughout the gesture. Only a genuinely
-      // unrecognized via shape (not this exact 2-point, one-shared-axis
-      // pattern) falls back to the plain single-point/spline form.
-      if (isMultiBend && data.via.length === 2 && data.via[0].x === data.via[1].x) {
-        moveEdgeVia(id, [
-          { x: flowPoint.x, y: sourceY },
-          { x: flowPoint.x, y: targetY },
-        ]);
-        return;
-      }
-      if (isMultiBend && data.via.length === 2 && data.via[0].y === data.via[1].y) {
-        moveEdgeVia(id, [
-          { x: sourceX, y: flowPoint.y },
-          { x: targetX, y: flowPoint.y },
-        ]);
+      const { segIndex, originalPoints } = dragState.current;
+      if (originalPoints) {
+        moveEdgeVia(id, dragSegment(originalPoints, segIndex, flowPoint));
         return;
       }
       moveEdgeVia(id, flowPoint);
     },
-    [id, screenToFlowPosition, moveEdgeVia, isMultiBend, data, sourceX, sourceY, targetX, targetY]
+    [id, screenToFlowPosition, moveEdgeVia]
   );
 
-  const onPointerUp = useCallback(() => {
+  const onSegmentPointerUp = useCallback(() => {
     if (dragState.current && !dragState.current.dragging) {
       selectEdge(id);
     }
@@ -199,23 +278,55 @@ export default function BendableEdge({
         interactionWidth={20}
       />
       <EdgeLabelRenderer>
-        <div
-          className="nodrag nopan"
-          style={{
-            position: 'absolute',
-            transform: `translate(-50%, -50%) translate(${via.x}px, ${via.y}px)`,
-            width: 6,
-            height: 6,
-            borderRadius: '50%',
-            background: selected ? '#1a73e8' : '#666',
-            border: 'none',
-            cursor: 'grab',
-            pointerEvents: 'all',
-          }}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-        />
+        {/* One handle per segment for a multi-bend route -- each at that
+            segment's own midpoint -- so any part of the polyline can be
+            grabbed and tweaked, not just whichever one segment happened to
+            carry the single shared handle before. The single-point/spline
+            case keeps its one lone handle, unchanged. */}
+        {isMultiBend
+          ? allPoints.slice(0, -1).map((p, i) => {
+              const q = allPoints[i + 1];
+              const mid = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+              return (
+                <div
+                  key={i}
+                  className="nodrag nopan"
+                  style={{
+                    position: 'absolute',
+                    transform: `translate(-50%, -50%) translate(${mid.x}px, ${mid.y}px)`,
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: selected ? '#1a73e8' : '#666',
+                    border: 'none',
+                    cursor: 'grab',
+                    pointerEvents: 'all',
+                  }}
+                  onPointerDown={(event) => onSegmentPointerDown(event, i)}
+                  onPointerMove={onSegmentPointerMove}
+                  onPointerUp={onSegmentPointerUp}
+                />
+              );
+            })
+          : (
+              <div
+                className="nodrag nopan"
+                style={{
+                  position: 'absolute',
+                  transform: `translate(-50%, -50%) translate(${via.x}px, ${via.y}px)`,
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: selected ? '#1a73e8' : '#666',
+                  border: 'none',
+                  cursor: 'grab',
+                  pointerEvents: 'all',
+                }}
+                onPointerDown={(event) => onSegmentPointerDown(event, 0)}
+                onPointerMove={onSegmentPointerMove}
+                onPointerUp={onSegmentPointerUp}
+              />
+            )}
         {/* Stoichiometry > 1 (multiple separate MOOSE messages between the
             same reac/enz and pool -- see moose_graph.py's build_graph) --
             offset from the drag handle above so the two don't overlap. */}

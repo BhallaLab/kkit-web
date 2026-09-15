@@ -16,6 +16,67 @@
 
 import { resolveGroupColor } from './colorUtils';
 
+// How much clearance a route keeps from any group's border it isn't
+// actually departing from (the crossing-test inflation), and the diameter
+// every connector knob is drawn at (see nodes.jsx's data.knobSize) -- a
+// single fixed pixel count read as "too narrow" on a sparse, widely-spaced
+// layout and "way too wide" on a tight one, so this is instead a fraction
+// of however far apart this *particular* model's own collapsed groups
+// actually sit, computed fresh each time from the real nearest-neighbor
+// gaps between them. Falls back to MIN_PAVEMENT when there's nothing to
+// measure (0 or 1 collapsed group -- no neighbor gap exists at all).
+const PAVEMENT_FRACTION = 0.22;
+const MIN_PAVEMENT = 4;
+const MAX_PAVEMENT = 40;
+
+// The gap between two boxes along whichever axis they're actually
+// *neighbors* on -- only meaningful (and only returned) when their extent
+// on the OTHER axis overlaps at all; two boxes that don't line up in
+// either row or column aren't "next to" each other in any sense a
+// pavement measurement should care about.
+function neighborGap(a, b) {
+  const gaps = [];
+  const yOverlap = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+  if (yOverlap > 0) {
+    const gap = a.x < b.x ? b.x - (a.x + a.width) : a.x - (b.x + b.width);
+    if (gap > 0) gaps.push(gap);
+  }
+  const xOverlap = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+  if (xOverlap > 0) {
+    const gap = a.y < b.y ? b.y - (a.y + a.height) : a.y - (b.y + b.height);
+    if (gap > 0) gaps.push(gap);
+  }
+  return gaps;
+}
+
+// The median nearest-neighbor row/column gap across every pair of
+// *collapsed* boxes (an expanded container's box can be huge, which would
+// badly skew a raw average -- only collapsed ones read as discrete,
+// evenly-spaced "blocks" the way this measurement assumes), times
+// PAVEMENT_FRACTION, clamped to a sane range. O(n^2) over the collapsed
+// count, which is normally small (tens, not hundreds).
+function computePavement(collapsedBoxes) {
+  const gaps = [];
+  for (let i = 0; i < collapsedBoxes.length; i++) {
+    for (let j = i + 1; j < collapsedBoxes.length; j++) {
+      gaps.push(...neighborGap(collapsedBoxes[i].box, collapsedBoxes[j].box));
+    }
+  }
+  if (gaps.length === 0) return MIN_PAVEMENT;
+  gaps.sort((a, b) => a - b);
+  const median = gaps[Math.floor(gaps.length / 2)];
+  return Math.min(MAX_PAVEMENT, Math.max(MIN_PAVEMENT, median * PAVEMENT_FRACTION));
+}
+
+// Grows `box` by `margin` on every side -- used only for the *crossing
+// test* (so a route within `margin` of a third group's edge counts as
+// "too close", not just one that actually enters it), never for the box
+// used to compute where a detour should clear to (orthogonalDetour keeps
+// its own separate margin for that).
+function inflateBox(box, margin) {
+  return { x: box.x - margin, y: box.y - margin, width: box.width + margin * 2, height: box.height + margin * 2 };
+}
+
 function isGroupOrCompartment(node) {
   return node.data.type === 'group' || node.data.type === 'compartment';
 }
@@ -43,7 +104,7 @@ function outermostCollapsedAncestor(nodeId, byId, collapsedIds) {
 // that. A case-5/5.1 edge (only one side collapsed) keeps its own real
 // style, since it's still fundamentally one real connection, not a
 // summary of several.
-const AGGREGATE_EDGE_STYLE = { stroke: '#555', strokeWidth: 1.5 };
+const AGGREGATE_EDGE_STYLE = { stroke: '#555', strokeWidth: 4 };
 
 // `collapsedIds`: Set of currently-collapsed group/compartment node ids.
 // Returns the node/edge lists to actually render -- collapsed groups
@@ -116,8 +177,9 @@ export function computeCollapsedView(nodes, edges, collapsedIds) {
     .filter(isGroupOrCompartment)
     .map((n) => ({ id: n.id, box: absoluteBox(n.id, byId) }))
     .filter((o) => o.box);
+  const pavement = computePavement(allObstacles.filter((o) => byId[o.id]?.data?.collapsed));
 
-  const { portsByContainer, routeByPair } = assignAggregatePorts([...aggregated.values()], byId, allObstacles);
+  const { portsByContainer, routeByPair } = assignAggregatePorts([...aggregated.values()], byId, allObstacles, pavement);
 
   const aggregatedEdges = [...aggregated.values()].map((agg) => {
     const route = routeByPair.get(`${agg.a}|${agg.b}`);
@@ -158,7 +220,13 @@ export function computeCollapsedView(nodes, edges, collapsedIds) {
       { type: 'source', position: 'right', x: w, y: h / 2 },
       ...ports.map((p) => ({ id: p.id, type: p.type, position: p.side, x: p.x, y: p.y })),
     ];
-    return { ...n, data: { ...n.data, ports }, handles };
+    // The dynamic pavement value doubles as every connector knob's own
+    // diameter (see nodes.jsx's PortKnob/fallback-handle styling) -- a
+    // model-wide constant would either look gigantic on a tightly-packed
+    // model or vanishingly small on a sparse one, so this carries the same
+    // number that governs routing clearance straight through to the visual
+    // size, keeping the two proportionate to each other.
+    return { ...n, data: { ...n.data, ports, knobSize: pavement }, handles };
   });
 
   return { nodes: nodesWithPorts, edges: [...individual, ...aggregatedEdges] };
@@ -190,7 +258,11 @@ const OPPOSITE_SIDE = { left: 'right', right: 'left', top: 'bottom', bottom: 'to
 // Node-local (0..width, 0..height) coordinates for a port -- the form
 // React Flow's own declared-`handles` node property expects (see
 // computeIsolateView's PROXY_LAYOUT above), as opposed to portPoint's
-// absolute flow-space point used for the actual route geometry.
+// absolute flow-space point used for the actual route geometry. Sits
+// exactly ON the box's own edge -- the knob drawn there (see nodes.jsx's
+// PortKnob) is what visually "stands off" from the border now, via its own
+// diameter (data.knobSize), rather than the line's actual attachment point
+// being offset outward past it.
 function localPortXY(box, side, frac) {
   switch (side) {
     case 'right':
@@ -260,7 +332,7 @@ function containerColor(id, byId) {
   return resolveGroupColor(byId[id]?.data?.color, id) ?? '#555';
 }
 
-function assignAggregatePorts(aggPairs, byId, allObstacles) {
+function assignAggregatePorts(aggPairs, byId, allObstacles, pavement) {
   const portsByContainer = new Map();
   const routeByPair = new Map();
   if (aggPairs.length === 0) return { portsByContainer, routeByPair };
@@ -349,19 +421,83 @@ function assignAggregatePorts(aggPairs, byId, allObstacles) {
     // its child groups collapse) would otherwise "block" via its own
     // giant bounding box, since the direct A-to-B line trivially lies
     // entirely inside it. Mirrors avoidObstacles' own exclusion below.
-    const candidates = (allObstacles ?? []).filter(
-      (o) => o.id !== agg.a && o.id !== agg.b && !isAncestorOf(o.id, agg.a, byId) && !isAncestorOf(o.id, agg.b, byId)
-    );
-    const via = unionDetour(pointA.x, pointA.y, pointB.x, pointB.y, candidates) ?? orthogonalPortRoute(pointA, portA.side, pointB);
+    // Inflated by the pavement value before the crossing test -- a route
+    // that merely grazes within that same distance a knob keeps clear of
+    // its *own* box should keep that same clearance from any *other* box
+    // it passes near, not just ones it would otherwise cut straight
+    // through.
+    const candidates = (allObstacles ?? [])
+      .filter((o) => o.id !== agg.a && o.id !== agg.b && !isAncestorOf(o.id, agg.a, byId) && !isAncestorOf(o.id, agg.b, byId))
+      .map((o) => ({ ...o, box: inflateBox(o.box, pavement) }));
+    const via =
+      unionDetour(pointA.x, pointA.y, pointB.x, pointB.y, candidates, pavement * 2) ?? orthogonalPortRoute(pointA, portA.side, pointB);
     routeByPair.set(pairKey, {
       sourceHandle: portA.id,
       targetHandle: portB.id,
       via,
-      style: { stroke: color, strokeWidth: 2.5 },
+      style: { stroke: color, strokeWidth: 4 },
     });
   });
 
+  const laneGap = pavement * 2;
+  deconflictLanes(routeByPair, 'x', laneGap);
+  deconflictLanes(routeByPair, 'y', laneGap);
+
   return { portsByContainer, routeByPair };
+}
+
+// Two different connectors can each independently land on the exact same
+// (or a barely-different) "shelf"/"lane" coordinate -- their own 2-bend
+// routes never consider each other, only their own two endpoints -- and
+// then visibly run right on top of each other for however long their
+// lanes overlap. Clusters routes sharing an axis (`axisKey`: 'x' for a
+// vertical lane, i.e. via[0].x === via[1].x; 'y' for a horizontal shelf)
+// whose lane coordinate is within `laneGap` *and* whose span on the other
+// axis actually overlaps (not just any two routes that happen to share a
+// coordinate -- two lanes far apart on the other axis were never going to
+// visually collide), then re-spreads each cluster's members out from their
+// own shared average, evenly separated by `laneGap` (the same dynamic
+// pavement-derived value everything else here uses, not a fixed pixel
+// count -- see computePavement). Mutates the route objects' own via points
+// in place -- they're freshly built by this same function, never shared
+// with anything else yet.
+function deconflictLanes(routeByPair, axisKey, laneGap) {
+  const otherKey = axisKey === 'x' ? 'y' : 'x';
+  const items = [...routeByPair.values()]
+    .filter((r) => Array.isArray(r.via) && r.via.length === 2 && r.via[0][axisKey] === r.via[1][axisKey])
+    .map((r) => ({
+      r,
+      coord: r.via[0][axisKey],
+      lo: Math.min(r.via[0][otherKey], r.via[1][otherKey]),
+      hi: Math.max(r.via[0][otherKey], r.via[1][otherKey]),
+    }));
+  items.sort((a, b) => a.coord - b.coord);
+
+  const clusters = [];
+  let current = [];
+  items.forEach((item) => {
+    if (current.length > 0) {
+      const last = current[current.length - 1];
+      const near = Math.abs(item.coord - last.coord) < laneGap;
+      const overlaps = item.lo <= last.hi && last.lo <= item.hi;
+      if (!near || !overlaps) {
+        clusters.push(current);
+        current = [];
+      }
+    }
+    current.push(item);
+  });
+  if (current.length > 0) clusters.push(current);
+
+  clusters.forEach((cluster) => {
+    if (cluster.length < 2) return;
+    const base = cluster.reduce((sum, it) => sum + it.coord, 0) / cluster.length;
+    cluster.forEach((it, i) => {
+      const newCoord = base + (i - (cluster.length - 1) / 2) * laneGap;
+      it.r.via[0][axisKey] = newCoord;
+      it.r.via[1][axisKey] = newCoord;
+    });
+  });
 }
 
 // -- Isolate mode (design section 6) -----------------------------------
@@ -704,7 +840,7 @@ function lineCrossesBox(x1, y1, x2, y2, box, steps = 40) {
 // this route need to dodge a third box" and "how" are answered identically
 // in both places. Returns null when nothing blocks, so callers can fall
 // back to whatever simpler route they'd otherwise use.
-function unionDetour(x1, y1, x2, y2, candidates) {
+function unionDetour(x1, y1, x2, y2, candidates, margin) {
   const blocking = candidates.filter((o) => lineCrossesBox(x1, y1, x2, y2, o.box));
   if (blocking.length === 0) return null;
   const unionBox = blocking.reduce(
@@ -716,12 +852,43 @@ function unionDetour(x1, y1, x2, y2, candidates) {
     }),
     { x: Infinity, y: Infinity, x2: -Infinity, y2: -Infinity }
   );
-  return orthogonalDetour(x1, y1, x2, y2, {
-    x: unionBox.x,
-    y: unionBox.y,
-    width: unionBox.x2 - unionBox.x,
-    height: unionBox.y2 - unionBox.y,
-  });
+  return orthogonalDetour(
+    x1,
+    y1,
+    x2,
+    y2,
+    {
+      x: unionBox.x,
+      y: unionBox.y,
+      width: unionBox.x2 - unionBox.x,
+      height: unionBox.y2 - unionBox.y,
+    },
+    margin
+  );
+}
+
+// Where an edge's endpoint actually attaches, in absolute flow-space --
+// `pos` is that node's own absolute top-left (from absolutePosition). A
+// plain entity's real Handle sits near its own center regardless of which
+// specific one is in play (adequate for a routing decision, not meant to
+// match BendableEdge's own precise per-handle anchor) -- but a collapsed
+// group/compartment redirected onto its generic fallback pair (see
+// computeCollapsedView's "individual" edges, the only case a container
+// ever appears as a real edge endpoint here) attaches at its own LEFT edge
+// as a target or RIGHT edge as a source, never its center (ContainerNode's
+// own default Handles, Position.Left/Position.Right). Using the box center
+// there instead -- the old, entity-shaped formula applied uniformly --
+// put the computed route's own start/end point visibly off from where the
+// line actually renders, reading as "oddly angular, doesn't terminate on
+// the knob" until the first manual drag (which uses React Flow's own
+// accurate sourceX/sourceY) silently snapped it back into place.
+function anchorPoint(node, pos, role) {
+  const w = node.style?.width ?? node.initialWidth ?? 0;
+  const h = node.style?.height ?? node.initialHeight ?? 0;
+  if (isGroupOrCompartment(node)) {
+    return { x: pos.x + (role === 'source' ? w : 0), y: pos.y + h / 2 };
+  }
+  return { x: pos.x + w / 2, y: pos.y + h / 2 };
 }
 
 export function avoidObstacles(nodes, edges) {
@@ -734,6 +901,12 @@ export function avoidObstacles(nodes, edges) {
     .map((n) => ({ id: n.id, box: absoluteBox(n.id, byId) }))
     .filter((o) => o.box);
   if (obstacles.length === 0) return edges;
+  // Same dynamic pavement as assignAggregatePorts (see computePavement) --
+  // computed independently here since this runs as a separate pass over a
+  // possibly-different node set, only from whichever of these obstacles
+  // are actually collapsed (an expanded box's "gap" to its neighbors isn't
+  // a meaningful spacing measurement -- see computePavement's own comment).
+  const pavement = computePavement(obstacles.filter((o) => byId[o.id]?.data?.collapsed));
 
   return edges.map((e) => {
     // A user-dragged point (or an aggregate edge's own, merged in by
@@ -746,12 +919,8 @@ export function avoidObstacles(nodes, edges) {
 
     const sourcePos = absolutePosition(e.source, byId);
     const targetPos = absolutePosition(e.target, byId);
-    // Roughly each node's own center -- adequate for a routing decision,
-    // not meant to match BendableEdge's own precise per-handle anchor.
-    const sx = sourcePos.x + (sourceNode.style?.width ?? sourceNode.initialWidth ?? 0) / 2;
-    const sy = sourcePos.y + (sourceNode.style?.height ?? sourceNode.initialHeight ?? 0) / 2;
-    const tx = targetPos.x + (targetNode.style?.width ?? targetNode.initialWidth ?? 0) / 2;
-    const ty = targetPos.y + (targetNode.style?.height ?? targetNode.initialHeight ?? 0) / 2;
+    const { x: sx, y: sy } = anchorPoint(sourceNode, sourcePos, 'source');
+    const { x: tx, y: ty } = anchorPoint(targetNode, targetPos, 'target');
 
     // Every obstacle the direct line actually cuts through, not just the
     // first one found -- a line spanning several sibling groups in a row
@@ -759,11 +928,14 @@ export function avoidObstacles(nodes, edges) {
     // (the old `.find()`) left it still slicing through whichever others
     // happened to sit further along the same line. unionDetour folds them
     // into a single union box so the result stays one clean 2-bend
-    // polyline that clears all of them at once.
-    const candidates = obstacles.filter(
-      (o) => o.id !== e.source && o.id !== e.target && !isAncestorOf(o.id, e.source, byId) && !isAncestorOf(o.id, e.target, byId)
-    );
-    const via = unionDetour(sx, sy, tx, ty, candidates);
+    // polyline that clears all of them at once. Inflated by the pavement
+    // value so a route that merely runs close alongside a group's border
+    // -- not actually through it -- still gets routed clear, the same
+    // margin a connector's own knob keeps from its box.
+    const candidates = obstacles
+      .filter((o) => o.id !== e.source && o.id !== e.target && !isAncestorOf(o.id, e.source, byId) && !isAncestorOf(o.id, e.target, byId))
+      .map((o) => ({ ...o, box: inflateBox(o.box, pavement) }));
+    const via = unionDetour(sx, sy, tx, ty, candidates, pavement * 2);
     if (!via) return e;
 
     return { ...e, data: { ...e.data, via } };

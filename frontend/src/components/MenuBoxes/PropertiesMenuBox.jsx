@@ -8,6 +8,7 @@ import {
   Button,
   Grid,
   Divider,
+  Chip,
 } from '@mui/material';
 import { RAINBOW_16 } from '../../colorUtils';
 
@@ -134,6 +135,7 @@ export default function PropertiesMenuBox({
   onToggleCollapse,
   onAutoLayoutGroup,
   onAutoLayoutRecursive,
+  onClearLayoutLocks,
 }) {
   const [fields, setFields] = useState(null);
   // Tracks whether `fields` has any edit not yet sent to the backend --
@@ -187,8 +189,17 @@ export default function PropertiesMenuBox({
 
   return (
     <Box sx={{ p: 2, background: '#f5f5f5', borderRadius: 2, height: '100%', overflowY: 'auto' }}>
-      <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 2 }}>
+      <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: node.data.locked ? 0.5 : 2, display: 'flex', alignItems: 'center', gap: 1 }}>
         {titleFor(node)}
+        {node.data.locked && (
+          <Chip
+            label="Position/orientation locked"
+            size="small"
+            color="warning"
+            variant="outlined"
+            title="Set automatically by a manual drag, resize, or flip toggle -- auto-layout skips this node until the lock is cleared (see the group-level 'Clear layout locks' button)."
+          />
+        )}
       </Typography>
 
       <Grid container spacing={1.5}>
@@ -370,6 +381,18 @@ export default function PropertiesMenuBox({
                 title="Lays out every nested group's own contents first, then this one, bottom-up -- everything below it rearranges, not just its own direct children."
               >
                 Auto-layout recursively
+              </Button>
+            </Grid>
+            <Grid size={12}>
+              <Button
+                fullWidth
+                size="small"
+                variant="outlined"
+                color="warning"
+                onClick={() => onClearLayoutLocks(node.id)}
+                title="Clears the 'manually positioned/oriented' flag on this group and everything inside it -- a manual drag, resize, or flip toggle sets that flag automatically so auto-layout leaves it alone; use this if you actually want auto-layout to touch everything here again."
+              >
+                Clear layout locks (this group and everything inside it)
               </Button>
             </Grid>
           </Grid>
