@@ -31,10 +31,12 @@ export default function AppLayout({
   status,
   onGraphLoaded,
   selectedNode,
+  selectedParentName,
   onSaveNode,
   onToggleFlip,
   onToggleCollapse,
   onAutoLayoutGroup,
+  onAutoLayoutRecursive,
   onAddPool,
   onAddReac,
   onAddEnz,
@@ -85,10 +87,12 @@ export default function AppLayout({
     Properties: (
       <PropertiesMenuBox
         node={selectedNode}
+        parentName={selectedParentName}
         onSave={onSaveNode}
         onToggleFlip={onToggleFlip}
         onToggleCollapse={onToggleCollapse}
         onAutoLayoutGroup={onAutoLayoutGroup}
+        onAutoLayoutRecursive={onAutoLayoutRecursive}
       />
     ),
     Run: (

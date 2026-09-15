@@ -1,6 +1,6 @@
-import { Fragment, useContext, useEffect, useRef } from 'react';
-import { Handle, NodeResizer, Position, useStore, useUpdateNodeInternals } from '@xyflow/react';
-import { getContrastTextColor, PLOT_WINDOW_COLORS } from './colorUtils';
+import { Fragment, useContext, useEffect, useLayoutEffect, useRef } from 'react';
+import { Handle, NodeResizer, Position, useStoreApi, useUpdateNodeInternals } from '@xyflow/react';
+import { getContrastTextColor, paleColor, PLOT_WINDOW_COLORS, resolveGroupColor } from './colorUtils';
 import PlotSquiggleIcon from './PlotSquiggleIcon';
 import { NodeActionsContext } from './NodeActionsContext';
 
@@ -251,16 +251,40 @@ export function ReacNode({ id, data, selected }) {
 export const ENZ_CLIP_PATH_RIGHT = 'polygon(0% 25%, 65% 25%, 65% 0%, 100% 50%, 65% 100%, 65% 75%, 0% 75%)';
 const ENZ_CLIP_PATH_LEFT = 'polygon(100% 25%, 35% 25%, 35% 0%, 0% 50%, 35% 100%, 35% 75%, 100% 75%)';
 
+// A fixed 110px shaft was tight enough that anything longer than a short
+// name got clipped by the arrowhead notch (the clip-path's own shape, not
+// text overflow CSS, so there was nothing to just enable). Grown from name
+// length instead, the same rough per-character estimate PoolNode's own
+// (also text-driven) size uses -- the clip-path polygon is defined in
+// percentages of the box, so a wider box just stretches the same arrow
+// shape proportionally rather than needing new geometry.
+const ENZ_HEIGHT = 80;
+const ENZ_MIN_WIDTH = 110;
+
 export function EnzNode({ id, data, selected }) {
   const flipped = !!data.flipped;
   useFlipRemeasure(id, flipped);
+  const width = Math.max(ENZ_MIN_WIDTH, 24 + (data.name?.length ?? 0) * 15);
+
+  // An enzyme's hidden complex pool is plotted via *this* icon (see
+  // App.jsx's handleCanvasDrop/handleUnplot) rather than needing its own
+  // canvas presence -- data.complexPoolId/complexPlotWindow are stashed
+  // here by buildFlowNodes precisely so this one badge can stand in for
+  // it, the same "drag to the trash to un-plot" affordance PoolNode's own
+  // badge offers, just carrying the complex pool's real id as its payload
+  // instead of this enzyme's own.
+  const handleBadgeDragStart = (event) => {
+    event.dataTransfer.setData('application/kkit-unplot', JSON.stringify({ poolId: data.complexPoolId }));
+    event.dataTransfer.effectAllowed = 'move';
+  };
+
   return (
     // The clip-path lives on an inner decorative layer, not this outer
     // container -- otherwise it would also clip away the substrate/product
     // triangles, which deliberately protrude outside the visible shape.
     // Box scaled up along with the doubled font size below -- otherwise
     // the bigger name text would get clipped by the arrowhead shape.
-    <div style={{ position: 'relative', boxSizing: 'border-box', width: 110, height: 80 }}>
+    <div style={{ position: 'relative', boxSizing: 'border-box', width, height: ENZ_HEIGHT }}>
       <div
         style={{
           position: 'absolute',
@@ -282,22 +306,34 @@ export function EnzNode({ id, data, selected }) {
       </div>
       <SubstrateHandle flipped={flipped} />
       <ProductHandle flipped={flipped} />
-      {/* the arrow's visible top edge sits at 25% down, not at y=0 -- the
-          top corners are cut away by the clip-path's arrowhead notch. Keeps
-          the same straddle-the-boundary look as the pool handles. The 30/70
-          split mirrors along with the shaft, which moves from [0,65]% to
-          [35,100]% when flipped. */}
+      {/* The structural link to the enzyme's own parent pool, at the
+          bottom edge (mirroring the arrow's own bottom notch at 75% down,
+          the same distance from the shaft's edge as the top notch the
+          handle used to sit on) so it reads as "attached to the molecule
+          underneath", not competing visually with the substrate/product
+          arrows on the left/right. The 30/70 split still mirrors along
+          with the shaft on flip, moving from [0,65]% to [35,100]%. */}
       <Handle
         type="target"
-        position={Position.Top}
+        position={Position.Bottom}
         id="enzSite"
         style={{
           ...dotHandleStyle,
           left: flipped ? '70%' : '30%',
-          top: '25%',
+          top: '75%',
           transform: 'translate(-50%, -50%)',
         }}
       />
+      {data.complexPlotWindow && (
+        <div
+          draggable
+          onDragStart={handleBadgeDragStart}
+          title="Drag to the trash icon above to un-plot"
+          style={{ position: 'absolute', top: -40, right: -40, cursor: 'grab' }}
+        >
+          <PlotSquiggleIcon width={36} height={26} traceColor={PLOT_WINDOW_COLORS[data.complexPlotWindow]} />
+        </div>
+      )}
     </div>
   );
 }
@@ -480,22 +516,139 @@ export function StimNode({ data, selected }) {
 // on every container regardless of how it's zoomed.
 const HIT_MARGIN_PX = 4;
 
-// A raw zoom-only store selector, not useViewport -- that also tracks
-// pan (x/y), which would re-render every container on every frame of an
-// ordinary pan gesture even though only zoom is ever used here.
-const zoomSelector = (s) => s.transform[2];
+// Keeps a ref'd element's own `transform: scale(...)` in sync with the
+// *inverse* of the current viewport zoom, without ever causing a React
+// re-render for it. `useStore(zoomSelector)` (the obvious approach, and
+// what this replaced) subscribes the normal React way -- a re-render on
+// every single store update -- and React Flow's own transform updates
+// continuously during an active pan/zoom gesture, easily dozens of times
+// a second. That's one React re-render (full JSX rebuild, reconciliation,
+// possible DOM writes for the whole subtree) per container per frame, for
+// every single container simultaneously visible on screen. Fine for a
+// handful; became the dominant cost -- verified directly, this was the
+// actual bottleneck behind zooming into a several-hundred-node model
+// visibly locking up the tab and, over sustained interaction, growing
+// memory pressure enough to eventually take the whole process down. A raw
+// store subscription (zustand's own .subscribe, bypassing React's render
+// cycle entirely) doing one direct DOM style write per frame instead is
+// the standard fix for exactly this kind of per-frame, viewport-driven
+// styling -- same visual result, a small fraction of the cost.
+function useZoomCounterScale() {
+  const ref = useRef(null);
+  const store = useStoreApi();
+  // useLayoutEffect, not useEffect -- the initial `apply()` needs to land
+  // before the browser's first paint of this node, or a heavily zoomed-out
+  // view would flash the badge at its true (huge, uncorrected) flow-space
+  // size for one frame before snapping to the right on-screen size.
+  useLayoutEffect(() => {
+    const apply = () => {
+      if (!ref.current) return;
+      ref.current.style.transform = `scale(${1 / store.getState().transform[2]})`;
+    };
+    apply();
+    return store.subscribe(apply);
+  }, [store]);
+  return ref;
+}
+
+// Maps a port's abstract side (assigned by collapseView.js's port-layout
+// pass, see its own block comment) to the Position enum React Flow needs
+// for departure-direction bookkeeping (BendableEdge's departureOffset).
+function sideToPosition(side) {
+  switch (side) {
+    case 'right':
+      return Position.Right;
+    case 'top':
+      return Position.Top;
+    case 'bottom':
+      return Position.Bottom;
+    default:
+      return Position.Left;
+  }
+}
+
+// Places a port's dot at `frac` (0..1) along its assigned side, overriding
+// React Flow's own default top:50%/left:0-style positioning entirely (the
+// same explicit left+top+transform pattern EnzNode's enzSite handle already
+// uses) -- a plain Position-based placement always centers on the edge, with
+// no way to offset along it, which is the whole point of a knob.
+function portHandleStyle(side, frac) {
+  const pct = `${frac * 100}%`;
+  switch (side) {
+    case 'right':
+      return { ...dotHandleStyle, left: '100%', top: pct, transform: 'translate(-50%, -50%)' };
+    case 'top':
+      return { ...dotHandleStyle, left: pct, top: 0, transform: 'translate(-50%, -50%)' };
+    case 'bottom':
+      return { ...dotHandleStyle, left: pct, top: '100%', transform: 'translate(-50%, -50%)' };
+    default:
+      return { ...dotHandleStyle, left: 0, top: pct, transform: 'translate(-50%, -50%)' };
+  }
+}
+
+// A collapsed container's own knob set (data.ports, assigned by
+// collapseView.js's aggregated-edge port-layout pass) changes on an
+// *already-mounted* node -- collapsing a previously-expanded group adds
+// brand-new named Handles to a node React Flow has had measured (with no
+// handles at all) since it first mounted. Exactly the case
+// useFlipRemeasure's own comment describes: React Flow only re-measures
+// handle bounds via its ResizeObserver on an actual DOM/size change, never
+// merely because a node's *set* of Handle children grew -- left alone, an
+// edge targeting a freshly-added port id fails outright ("Couldn't create
+// edge for source handle id", react-flow error #008), not just render
+// stale, since the id never had any bounds registered at all. Unlike
+// useFlipRemeasure, the *first* run here must NOT be skipped: a node's
+// very first appearance of a non-empty ports array (collapsing it) is
+// exactly the transition that needs the remeasure, not a no-op default
+// state already correct on mount. Scoped to only the (typically much
+// smaller) set of currently-collapsed containers, and only re-fires when
+// the actual port id set changes, so this doesn't reintroduce the
+// per-node-on-every-load cost that comment warns about.
+function usePortsRemeasure(id, ports) {
+  const updateNodeInternals = useUpdateNodeInternals();
+  const key = ports.map((p) => p.id).join(',');
+  useEffect(() => {
+    if (key) updateNodeInternals(id);
+  }, [id, key, updateNodeInternals]);
+}
 
 function ContainerNode({ id, data, selected, doubleWalled }) {
   const { onContainerResize } = useContext(NodeActionsContext);
-  const zoom = useStore(zoomSelector);
+  const badgeRef = useZoomCounterScale();
+  usePortsRemeasure(id, data.ports ?? []);
   const handleResizeEnd = (event, params) => {
     onContainerResize(id, { x: params.x, y: params.y, width: params.width, height: params.height });
   };
   const borderWidth = doubleWalled ? 4 : 6;
   const hitWidth = borderWidth + HIT_MARGIN_PX;
-  const inverseZoom = 1 / zoom;
   const collapsed = !!data.collapsed;
-  const baseFill = data.color && data.color !== 'white' ? data.color : 'rgba(0,0,0,0.03)';
+  // A kkit .g-format group/compartment's raw color is often a bare
+  // GENESIS-palette index ("0", "1", ... up to "64"), never a real CSS
+  // color -- resolveGroupColor turns that into an actual, stable, derived
+  // color instead of silently discarding it (see its own comment); only a
+  // genuinely absent/'white' value comes back null, meaning "no color was
+  // ever assigned" rather than "assigned but unparseable".
+  const resolvedColor = resolveGroupColor(data.color, id);
+  const hasOwnColor = !!resolvedColor;
+  // A user-assigned color, rendered at full strength, made the whole
+  // (potentially huge) container read as a heavy saturated block with its
+  // own contents hard to pick out on top of it -- paled the same way the
+  // collapsed fill already was, just a lighter mix since an *expanded* box
+  // still needs to look "chosen", not washed out entirely. Absent a color,
+  // an almost-invisible 0.03 alpha wash read as plain white -- bumped to a
+  // level that's still clearly a neutral, unobtrusive container, but
+  // actually visible without a color picked.
+  const baseFill = hasOwnColor ? paleColor(resolvedColor, 0.72) : 'rgba(0,0,0,0.07)';
+  // A collapsed box uses a *pale* wash of its own color (or a neutral pale
+  // gray, absent one) rather than the same full-strength shade a Pool
+  // would use -- a whole group/compartment reads as heavy-handed at full
+  // saturation in a way a small molecule icon doesn't, especially once it
+  // can be as large as its own real, uncollapsed box (see this
+  // component's own block comment above). The diagonal hatch layered on
+  // top is now just a subtle texture cue that contents are hidden, not
+  // the dominant "generic stippled box" look every collapsed container
+  // used to have regardless of its actual assigned color.
+  const collapsedFill = paleColor(resolvedColor ?? '#c0c0c0');
 
   return (
     <Fragment>
@@ -510,13 +663,9 @@ function ContainerNode({ id, data, selected, doubleWalled }) {
           // enough at a glance that they don't read as the same kind of box.
           border: doubleWalled ? `${borderWidth}px solid #333` : `${borderWidth}px dashed #333`,
           borderRadius: 4,
-          background: baseFill,
-          // A diagonal hatch layered on top of the normal fill -- the one
-          // purely visual cue that this box's contents are hidden, not
-          // just genuinely empty, since collapsing no longer changes its
-          // size or interior chrome at all.
+          background: collapsed ? collapsedFill : baseFill,
           backgroundImage: collapsed
-            ? 'repeating-linear-gradient(45deg, rgba(0,0,0,0.12) 0, rgba(0,0,0,0.12) 6px, transparent 6px, transparent 16px)'
+            ? 'repeating-linear-gradient(45deg, rgba(0,0,0,0.05) 0, rgba(0,0,0,0.05) 6px, transparent 6px, transparent 16px)'
             : 'none',
           pointerEvents: 'none',
         }}
@@ -529,6 +678,23 @@ function ContainerNode({ id, data, selected, doubleWalled }) {
             Harmless while expanded -- nothing ever targets them then. */}
         <Handle type="target" position={Position.Left} />
         <Handle type="source" position={Position.Right} />
+        {/* Distinct per-edge "connector knobs" around the box's four sides,
+            assigned by collapseView.js's aggregated-edge port-layout pass so
+            each collapsed-group-to-collapsed-group connector plugs into its
+            own clearly-placed point on whichever side gives the shortest
+            routing, instead of every connector converging on the one fixed
+            Left/Right handle above regardless of actual direction. Named
+            (data.ports[].id) and typed per edge, so each only ever serves
+            the one connector it was assigned to. */}
+        {(data.ports ?? []).map((port) => (
+          <Handle
+            key={port.id}
+            id={port.id}
+            type={port.type}
+            position={sideToPosition(port.side)}
+            style={portHandleStyle(port.side, port.frac)}
+          />
+        ))}
         {/* Offset outward by the parent's own border-box border (which an
             absolutely-positioned child with top/bottom/left/right:0 would
             otherwise anchor *inside*, at the padding edge, not the actual
@@ -594,11 +760,11 @@ function ContainerNode({ id, data, selected, doubleWalled }) {
             needing a separate pixel offset that would itself need
             counter-scaling. */}
         <div
+          ref={badgeRef}
           style={{
             position: 'absolute',
             top: 0,
             left: 0,
-            transform: `scale(${inverseZoom})`,
             transformOrigin: 'bottom left',
             fontSize: 14,
             fontWeight: 'bold',

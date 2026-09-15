@@ -126,7 +126,15 @@ function titleFor(node) {
   return `Enzyme (${node.data.mechanism})`;
 }
 
-export default function PropertiesMenuBox({ node, onSave, onToggleFlip, onToggleCollapse, onAutoLayoutGroup }) {
+export default function PropertiesMenuBox({
+  node,
+  parentName,
+  onSave,
+  onToggleFlip,
+  onToggleCollapse,
+  onAutoLayoutGroup,
+  onAutoLayoutRecursive,
+}) {
   const [fields, setFields] = useState(null);
   // Tracks whether `fields` has any edit not yet sent to the backend --
   // set by setField, cleared on every explicit Save and whenever a fresh
@@ -184,6 +192,17 @@ export default function PropertiesMenuBox({ node, onSave, onToggleFlip, onToggle
       </Typography>
 
       <Grid container spacing={1.5}>
+        <Grid size={12}>
+          <TextField
+            fullWidth
+            label="Parent"
+            size="small"
+            value={parentName ?? '(top level)'}
+            slotProps={{ input: { readOnly: true } }}
+            variant="filled"
+            helperText="Names repeat across a model -- this disambiguates which one you're looking at."
+          />
+        </Grid>
         <Grid size={12}>
           <TextField
             fullWidth
@@ -331,15 +350,28 @@ export default function PropertiesMenuBox({ node, onSave, onToggleFlip, onToggle
         )}
 
         {(node.data.type === 'group' || node.data.type === 'compartment') && (
-          <Grid size={12}>
-            <Button
-              fullWidth
-              size="small"
-              variant="outlined"
-              onClick={() => onAutoLayoutGroup(node.id)}
-            >
-              Auto-layout direct children
-            </Button>
+          <Grid size={12} container spacing={1}>
+            <Grid size={6}>
+              <Button
+                fullWidth
+                size="small"
+                variant="outlined"
+                onClick={() => onAutoLayoutGroup(node.id)}
+              >
+                Auto-layout direct children
+              </Button>
+            </Grid>
+            <Grid size={6}>
+              <Button
+                fullWidth
+                size="small"
+                variant="outlined"
+                onClick={() => onAutoLayoutRecursive(node.id)}
+                title="Lays out every nested group's own contents first, then this one, bottom-up -- everything below it rearranges, not just its own direct children."
+              >
+                Auto-layout recursively
+              </Button>
+            </Grid>
           </Grid>
         )}
 

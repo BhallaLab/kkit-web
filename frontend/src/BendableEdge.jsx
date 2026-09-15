@@ -59,6 +59,16 @@ function splinePath(S, V, T, sourcePosition, targetPosition, sourceInvert, targe
   );
 }
 
+// A straight-segment polyline through every point in order -- used only
+// for the *multiple*-bend case (data.via as an array, see
+// collapseView.js's avoidObstacles), whose whole point is reading as
+// grid-aligned/circuit-trace-like right-angle-ish routing rather than a
+// single smooth diagonal bow; a spline through 3+ points would fight
+// that look, not reinforce it.
+function polylinePath(points) {
+  return points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x},${p.y}`).join(' ');
+}
+
 // The midpoint handle serves two purposes: drag it to bend the edge for a
 // clearer layout, or click it (no drag) to select the edge so it can be
 // removed with Backspace/Delete -- the handle sits in a separate DOM
@@ -84,16 +94,37 @@ export default function BendableEdge({
   const { selectEdge, moveEdgeVia } = useContext(EdgeActionsContext);
   const dragState = useRef(null);
 
-  const via = data?.via ?? { x: (sourceX + targetX) / 2, y: (sourceY + targetY) / 2 };
-  const path = splinePath(
-    { x: sourceX, y: sourceY },
-    via,
-    { x: targetX, y: targetY },
-    sourcePosition,
-    targetPosition,
-    sourceHandleId === 'product' || sourceHandleId === 'chanOut',
-    targetHandleId === 'substrate' || targetHandleId === 'chanIn'
-  );
+  // data.via is normally a single {x,y} (a plain user drag, or a legacy
+  // single-bend default) but can also be an *array* of points -- written by
+  // avoidObstacles' and assignAggregatePorts' own automatic routing,
+  // rendered as a straight-segment polyline instead of the single smooth
+  // spline a lone via point gets. Dragging a *recognized* 2-point/
+  // one-shared-axis array (see onPointerMove below) keeps writing that same
+  // shape back, so a right-angled connector stays right-angled while it's
+  // being repositioned; any other via shape still collapses to the
+  // simpler single-bend, user-owned spline form on the first touch.
+  const isMultiBend = Array.isArray(data?.via) && data.via.length > 0;
+  const viaPoints = isMultiBend ? data.via : [data?.via ?? { x: (sourceX + targetX) / 2, y: (sourceY + targetY) / 2 }];
+  const path = isMultiBend
+    ? polylinePath([{ x: sourceX, y: sourceY }, ...viaPoints, { x: targetX, y: targetY }])
+    : splinePath(
+        { x: sourceX, y: sourceY },
+        viaPoints[0],
+        { x: targetX, y: targetY },
+        sourcePosition,
+        targetPosition,
+        sourceHandleId === 'product' || sourceHandleId === 'chanOut',
+        targetHandleId === 'substrate' || targetHandleId === 'chanIn'
+      );
+  // The one draggable handle sits at the polyline's own average bend
+  // point for a multi-bend edge (there's no single "the" via point to
+  // anchor it to), or the lone via point otherwise.
+  const via = isMultiBend
+    ? {
+        x: viaPoints.reduce((sum, p) => sum + p.x, 0) / viaPoints.length,
+        y: viaPoints.reduce((sum, p) => sum + p.y, 0) / viaPoints.length,
+      }
+    : viaPoints[0];
 
   const onPointerDown = useCallback((event) => {
     event.stopPropagation();
@@ -108,9 +139,34 @@ export default function BendableEdge({
       const dy = event.clientY - dragState.current.startY;
       if (!dragState.current.dragging && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
       dragState.current.dragging = true;
-      moveEdgeVia(id, screenToFlowPosition({ x: event.clientX, y: event.clientY }));
+      const flowPoint = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      // A right-angled 2-bend connector (an aggregate group-to-group
+      // connector, or any edge avoidObstacles routed around a third box)
+      // stays right-angled while it's being dragged, instead of always
+      // collapsing to the single smooth-spline point every other drag
+      // produces -- sliding the *shared* coordinate (whichever axis both
+      // bend points agree on) to follow the pointer, and re-deriving the
+      // other from the current source/target, keeps every segment
+      // horizontal/vertical throughout the gesture. Only a genuinely
+      // unrecognized via shape (not this exact 2-point, one-shared-axis
+      // pattern) falls back to the plain single-point/spline form.
+      if (isMultiBend && data.via.length === 2 && data.via[0].x === data.via[1].x) {
+        moveEdgeVia(id, [
+          { x: flowPoint.x, y: sourceY },
+          { x: flowPoint.x, y: targetY },
+        ]);
+        return;
+      }
+      if (isMultiBend && data.via.length === 2 && data.via[0].y === data.via[1].y) {
+        moveEdgeVia(id, [
+          { x: sourceX, y: flowPoint.y },
+          { x: targetX, y: flowPoint.y },
+        ]);
+        return;
+      }
+      moveEdgeVia(id, flowPoint);
     },
-    [id, screenToFlowPosition, moveEdgeVia]
+    [id, screenToFlowPosition, moveEdgeVia, isMultiBend, data, sourceX, sourceY, targetX, targetY]
   );
 
   const onPointerUp = useCallback(() => {
@@ -120,7 +176,16 @@ export default function BendableEdge({
     dragState.current = null;
   }, [id, selectEdge]);
 
-  const edgeStyle = selected ? { ...style, stroke: '#1a73e8', strokeWidth: 3 } : style;
+  // vectorEffect keeps the drawn stroke a constant *screen*-pixel width
+  // regardless of the current viewport zoom -- without it, strokeWidth is
+  // just another flow-space unit like everything else, and a large
+  // collapsed/zoomed-out model can shrink a "1px" edge down to a fraction
+  // of an actual screen pixel, effectively invisible even though it's
+  // still technically drawn. A big model heavily zoomed out to fit is
+  // exactly the case this matters most for.
+  const edgeStyle = selected
+    ? { ...style, stroke: '#1a73e8', strokeWidth: 3, vectorEffect: 'non-scaling-stroke' }
+    : { ...style, vectorEffect: 'non-scaling-stroke' };
   const stoich = data?.stoich ?? 1;
 
   return (

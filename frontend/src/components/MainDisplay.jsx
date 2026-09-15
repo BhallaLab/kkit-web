@@ -159,7 +159,7 @@ function Canvas({
           onDrop={handleDrop}
           onDragOver={handleDragOver}
           deleteKeyCode={['Backspace', 'Delete']}
-          minZoom={0.05}
+          minZoom={0.005}
           maxZoom={2}
           fitView
           fitViewOptions={{ padding: 0.2, maxZoom: 1 }}

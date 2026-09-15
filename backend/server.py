@@ -984,8 +984,18 @@ def update_position():
     node_id = body.get("id")
     if _current_model_path is None or not node_id or not node_id.startswith(_current_model_path):
         return jsonify({"error": "invalid or stale node id"}), 400
-    if not moose.exists(node_id) or not moose.exists(node_id + "/info"):
-        return jsonify({"error": f"node or info not found: {node_id}"}), 404
+    if not moose.exists(node_id):
+        return jsonify({"error": f"node not found: {node_id}"}), 404
+    # /info is normally created alongside a node at the moment it first gets
+    # *any* explicit position (create_info, called from every "add X"
+    # endpoint) -- but the one compartment a brand-new/freshly-loaded model
+    # starts with is never itself created that way, so it can reach here
+    # with no /info yet (verified directly: moose_graph.py's own _info()
+    # already tolerates this missing case for reads, defaulting to zeros --
+    # this is the equivalent tolerance for the write side, rather than
+    # 404ing on the first-ever attempt to position/resize it).
+    if not moose.exists(node_id + "/info"):
+        create_info(node_id, 0.0, 0.0)
 
     info = moose.element(node_id + "/info")
     info.x = float(body.get("x"))

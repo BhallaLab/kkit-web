@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { applyNodeChanges, applyEdgeChanges } from '@xyflow/react';
 import AppLayout from './AppLayout';
 import { RAINBOW_16 } from './colorUtils';
-import { computeCollapsedView, computeIsolateView } from './collapseView';
+import { computeCollapsedView, computeIsolateView, avoidObstacles } from './collapseView';
 
 const API_BASE = `http://${window.location.hostname}:5001`;
 
@@ -93,13 +93,13 @@ function computeAutoScale(graph) {
 }
 
 const EDGE_STYLE = {
-  substrate: { stroke: 'green' },
-  product: { stroke: '#333' },
-  enzyme: { stroke: 'orange', strokeDasharray: '4 2' },
-  chanParent: { stroke: 'orange', strokeDasharray: '4 2' },
-  chanIn: { stroke: 'green' },
-  chanOut: { stroke: '#333' },
-  stimTarget: { stroke: '#e63946', strokeDasharray: '2 2' },
+  substrate: { stroke: 'green', strokeWidth: 1.75 },
+  product: { stroke: '#333', strokeWidth: 1.75 },
+  enzyme: { stroke: 'orange', strokeDasharray: '4 2', strokeWidth: 1.75 },
+  chanParent: { stroke: 'orange', strokeDasharray: '4 2', strokeWidth: 1.75 },
+  chanIn: { stroke: 'green', strokeWidth: 1.75 },
+  chanOut: { stroke: '#333', strokeWidth: 1.75 },
+  stimTarget: { stroke: '#e63946', strokeDasharray: '2 2', strokeWidth: 1.75 },
 };
 
 // Which named Handle (see nodes.jsx) each edge type terminates on, on the
@@ -286,8 +286,14 @@ const AUTO_LAYOUT_CELL = 3;
 const CONTAINER_PADDING = 1.5;
 // Extra breathing room specifically when a container's auto-fit box has to
 // wrap another container (rather than just plain pools/reacs) -- otherwise
-// the inner box's own border sits right up against the outer one's.
-const CONTAINER_NESTING_PADDING = 3.5;
+// the inner box's own border sits right up against the outer one's. Also
+// the minimum gap auto-layout's own grid keeps between two sibling
+// containers placed as neighboring cells -- widened from the original 3.5
+// (verified directly: that was tight enough, especially at a small
+// scale factor, that two thick-bordered sibling boxes could read as
+// touching/overlapping even though the grid math itself never actually
+// let their footprints intersect).
+const CONTAINER_NESTING_PADDING = 6;
 
 function isDescendantOf(nodeId, containerId, rawById) {
   let cur = rawById[nodeId];
@@ -336,6 +342,11 @@ function buildContainerIndex(rawNodes, rawById) {
       }
       return;
     }
+    // An enz complex pool is never rendered on the canvas (see
+    // buildFlowNodes/App.jsx's canvasGraph) -- it shouldn't grow a
+    // container's own auto-fit box to accommodate a position nobody ever
+    // sees either.
+    if (n.type === 'pool' && n.isEnzComplex) return;
     let cur = n.parentId ? rawById[n.parentId] : null;
     while (cur) {
       (descendants[cur.id] ??= []).push(n);
@@ -397,6 +408,149 @@ function effectiveContainerBox(n, index, boxById) {
   };
   boxById[n.id] = box;
   return box;
+}
+
+// -- Recursive auto-layout -----------------------------------------------
+//
+// onAutoLayoutGroup (below, inside the component) lays out one container's
+// own direct children in a grid and resizes it to fit -- these two
+// functions generalize that to a whole subtree at once: every nested
+// group is laid out first (so its own final size is known), then its
+// parent's grid places it as a single cell alongside its siblings, and so
+// on up to whichever container this was invoked on.
+//
+// A naive single bottom-up pass (place *and* size each level immediately,
+// the single-level math wrapped in recursion) breaks the moment a
+// container gets repositioned by its own parent's grid: an
+// already-placed container's children keep whatever *absolute* position
+// they were just given, so the whole subtree would detach from its own
+// box the instant the box itself moved again one level up. Two passes
+// instead: computeLocalLayouts (bottom-up) works out only each
+// container's own *size* and a child layout relative to an arbitrary
+// (0,0) reference, since its real, final origin isn't known yet at that
+// point; assignAbsolutePositions (top-down) then walks back down from the
+// root -- whose own position isn't touched here, only its contents move
+// -- turning each container's relative child layout into real positions,
+// using its own just-assigned real origin as it descends into its own
+// children in turn.
+
+// Packs a set of already-sized children into a simple grid, sized
+// per-axis (a separate column width and row height, not one uniform
+// square cell) -- a uniform cell sized to the single largest child in
+// *either* dimension wastes space for every other child in whichever
+// axis it isn't actually that large in, which is exactly backwards from
+// "plenty of spare space" still somehow not being enough room: the axis
+// that's actually tight never got any extra from the space being wasted
+// in the other one. Shared by both onAutoLayoutGroup and
+// computeLocalLayouts (below) so the two single- and whole-subtree
+// actions read as the same layout, just applied at one level or every
+// level.
+function computeGridCells(sizes) {
+  const colWidth = Math.max(AUTO_LAYOUT_CELL, ...sizes.map((s) => s.width));
+  const rowHeight = Math.max(AUTO_LAYOUT_CELL, ...sizes.map((s) => s.height));
+  const cols = Math.ceil(Math.sqrt(sizes.length));
+  return { colWidth, rowHeight, cols };
+}
+
+// Each direct child's own footprint for grid-packing purposes -- a
+// nested container's real effective box (padded so its own border
+// doesn't sit flush against a neighbor's), or a flat AUTO_LAYOUT_CELL
+// square for a plain entity, which has no border/size concept of its own
+// to measure. Only for onAutoLayoutGroup's own single-level use (below,
+// inside the component) -- computeLocalLayouts needs each nested
+// container's *freshly recomputed* size instead (see its own comment),
+// not this stale-by-construction read of whatever the container's box
+// happened to be before this operation touched anything.
+function childFootprint(c, containerIndex, boxById) {
+  if (!CONTAINER_TYPES.includes(c.type)) return { width: AUTO_LAYOUT_CELL, height: AUTO_LAYOUT_CELL };
+  const box = effectiveContainerBox(c, containerIndex, boxById);
+  return { width: box.width + CONTAINER_NESTING_PADDING, height: box.height + CONTAINER_NESTING_PADDING };
+}
+
+// `localLayouts[id] = { children: [{id, localX, localY}], width, height }`
+// for every container in the subtree rooted at `rootId`, mutated in
+// place (a plain accumulator, not a return value, since every recursive
+// call needs to both read siblings' already-computed sizes and add its
+// own). A container with no direct children at all keeps its own current
+// effective box size rather than collapsing to nothing -- there's no
+// "contents" for a layout to be tight *around* in that case.
+//
+// A container's own final width/height here is always exactly what its
+// freshly-packed grid needs, not clamped to never shrink below whatever
+// it happened to measure before -- an earlier version kept the larger of
+// the two specifically to stop auto-layout from resizing a
+// deliberately-sized container out from under itself, but that same rule
+// also permanently locked in *any* oversized box (its own past auto-fit
+// included) as a floor no later run could ever tighten back up, which is
+// exactly backwards from what asking for a fresh layout is for -- it
+// read as walls of dead space inside (and between, one level up) every
+// container the moment one of them had ever been bigger than strictly
+// necessary. The container's own *position* is what actually needed to
+// stay put (see assignAbsolutePositions/onAutoLayoutGroup, both
+// unaffected by this), not its size.
+function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts) {
+  const directChildren = rawNodes.filter(
+    (n) => n.parentId === rootId && !(n.type === 'pool' && n.isEnzComplex)
+  );
+  directChildren.forEach((child) => {
+    if (CONTAINER_TYPES.includes(child.type)) {
+      computeLocalLayouts(child.id, rawNodes, rawById, containerIndex, boxById, localLayouts);
+    }
+  });
+  if (directChildren.length === 0) {
+    const currentBox = effectiveContainerBox(rawById[rootId], containerIndex, boxById);
+    localLayouts[rootId] = { children: [], width: currentBox.width, height: currentBox.height };
+    return;
+  }
+  // A nested container's size here is its own *freshly computed*
+  // localLayouts entry (just populated by the recursive call above), not
+  // childFootprint's effectiveContainerBox -- that would read the box as
+  // it stood *before* this whole operation started, silently ignoring
+  // however much this same layout just grew or shrank it by (verified
+  // directly: this mismatch was letting nested containers overlap in the
+  // grow case, and was part of why sizes never tightened up in the
+  // shrink case).
+  const sizes = directChildren.map((c) => {
+    if (!CONTAINER_TYPES.includes(c.type)) return { width: AUTO_LAYOUT_CELL, height: AUTO_LAYOUT_CELL };
+    const own = localLayouts[c.id];
+    return { width: own.width + CONTAINER_NESTING_PADDING, height: own.height + CONTAINER_NESTING_PADDING };
+  });
+  const { colWidth, rowHeight, cols } = computeGridCells(sizes);
+  // CONTAINER_PADDING is baked into each child's own localX/localY here
+  // (matching onAutoLayoutGroup's single-level originX/originY) -- so
+  // assignAbsolutePositions below only ever has to add a container's own
+  // real origin to these, never a second padding offset on top.
+  const children = directChildren.map((child, i) => ({
+    id: child.id,
+    localX: CONTAINER_PADDING + (i % cols) * colWidth,
+    localY: -CONTAINER_PADDING - Math.floor(i / cols) * rowHeight,
+  }));
+  const xs = children.map((c) => c.localX);
+  const ys = children.map((c) => c.localY);
+  localLayouts[rootId] = {
+    children,
+    width: Math.max(...xs) - Math.min(...xs) + colWidth + CONTAINER_PADDING * 2,
+    height: Math.max(...ys) - Math.min(...ys) + rowHeight + CONTAINER_PADDING * 2,
+  };
+}
+
+// Turns each container's own locally-relative child placements into real
+// ones, given `originX`/`originY` -- that container's own real, final
+// top-left corner -- and recurses into every nested container using its
+// own freshly-assigned origin in turn. Appends to `positionUpdates` (every
+// repositioned node, container or not) and `resizeUpdates` (containers
+// only, which need width/height alongside their new x/y).
+function assignAbsolutePositions(containerId, originX, originY, rawById, localLayouts, positionUpdates, resizeUpdates) {
+  localLayouts[containerId].children.forEach(({ id, localX, localY }) => {
+    const x = originX + localX;
+    const y = originY + localY;
+    positionUpdates.push({ id, x, y });
+    if (CONTAINER_TYPES.includes(rawById[id].type)) {
+      const childLayout = localLayouts[id];
+      resizeUpdates.push({ id, x, y, width: childLayout.width, height: childLayout.height });
+      assignAbsolutePositions(id, x, y, rawById, localLayouts, positionUpdates, resizeUpdates);
+    }
+  });
 }
 
 // Shared by the initial/full load path and refreshGraph -- `preserve` lets
@@ -480,6 +634,42 @@ function buildFlowNodes(graph, scale, preserve = {}) {
       node.zIndex = n.type === 'compartment' ? -2 : -1;
     }
     return node;
+  });
+
+  // An explicit-complex enzyme's hidden "cplx" pool (see
+  // moose_graph.py's is_enz_complex) is never shown as a node of its own
+  // on the canvas (see App.jsx's canvasGraph) -- it has no meaningful
+  // position of its own to lay out or drag, it's simply the enzyme's own
+  // bound state. It's never wired via any edge either (structural only,
+  // a plain MOOSE parent-child link, not a message) -- the only way to
+  // associate it back to its enzyme is the naming itself: its own id is
+  // always exactly the enzyme's id plus one more path segment (verified
+  // directly against moose_graph.py's is_enz_complex/create_enz). Stashed
+  // onto the enzyme's own data (not removed from `nodes` -- Properties,
+  // the Run/Plots pipeline, and SBML persistence all still need it to
+  // exist as a real, addressable pool) so the enzyme can show its own
+  // plot badge and accept a dropped plot icon on its own behalf.
+  //
+  // The trailing `[0]` strip matters: MOOSE's own .path property brackets
+  // every *ancestor* segment with its index (.../enz1[0]/enz1_cplx) but
+  // never the element's own trailing segment when that's queried as an id
+  // in its own right (that same enzyme's own `n.id` is just .../enz1, no
+  // bracket) -- verified directly, and without stripping it here the two
+  // spellings of "the same enzyme" never string-matched, silently leaving
+  // complexPoolId null for every enzyme.
+  const complexPoolByEnzId = {};
+  nodes.forEach((n) => {
+    if (n.data.type === 'pool' && n.data.isEnzComplex) {
+      const enzId = n.id.slice(0, n.id.lastIndexOf('/')).replace(/\[\d+\]$/, '');
+      complexPoolByEnzId[enzId] = n;
+    }
+  });
+  nodes.forEach((n) => {
+    if (n.data.type === 'enz') {
+      const cplx = complexPoolByEnzId[n.id];
+      n.data.complexPoolId = cplx?.id ?? null;
+      n.data.complexPlotWindow = cplx?.data.plotWindow ?? null;
+    }
   });
 
   const edges = graph.edges.map((e, i) => toEdge(e.from, e.to, e.type, i, e.stoich));
@@ -675,6 +865,36 @@ export default function App() {
     [flowGraph.nodes, selectedNodeId]
   );
 
+  // A read-only "Parent" field the Properties panel shows for every
+  // entity -- moose paths reuse names constantly across different
+  // branches of a model (the same pool name inside two different groups
+  // is completely ordinary), so an entity's own name alone often can't
+  // tell two same-named objects apart; its immediate container's name
+  // usually can. null for a node with no parentId at all (a top-level
+  // compartment).
+  const selectedParentName = useMemo(() => {
+    if (!selectedNode?.data?.parentId) return null;
+    return flowGraph.nodes.find((n) => n.id === selectedNode.data.parentId)?.data?.name ?? null;
+  }, [selectedNode, flowGraph.nodes]);
+
+  // An enz complex pool is never its own citizen on the canvas -- see
+  // buildFlowNodes' own comment on why (no meaningful position, no edges,
+  // just the enzyme's bound state) -- filtered out here rather than at
+  // buildFlowNodes/flowGraph itself, since Properties (reachable by
+  // clicking the *enzyme*, not this pool, once App.jsx's onNodeClick
+  // routes there), the Run/Plots pipeline, and SBML persistence all still
+  // need it present in flowGraph.nodes as a real, addressable pool.
+  const canvasGraph = useMemo(() => {
+    const hiddenIds = new Set(
+      flowGraph.nodes.filter((n) => n.data.type === 'pool' && n.data.isEnzComplex).map((n) => n.id)
+    );
+    if (hiddenIds.size === 0) return { nodes: flowGraph.nodes, edges: flowGraph.edges };
+    return {
+      nodes: flowGraph.nodes.filter((n) => !hiddenIds.has(n.id)),
+      edges: flowGraph.edges.filter((e) => !hiddenIds.has(e.source) && !hiddenIds.has(e.target)),
+    };
+  }, [flowGraph.nodes, flowGraph.edges]);
+
   // The canvas renders this, not flowGraph directly -- everything else
   // (Properties, Plots, Dose Response, FindSim, add/remove) keeps working
   // against the full, uncollapsed flowGraph exactly as before; only the
@@ -690,20 +910,25 @@ export default function App() {
   }, [flowGraph.nodes]);
   const displayGraph = useMemo(() => {
     const view = isolateMode
-      ? computeIsolateView(flowGraph.nodes, flowGraph.edges, collapsedIds)
-      : computeCollapsedView(flowGraph.nodes, flowGraph.edges, collapsedIds);
-    if (Object.keys(aggregateVia).length === 0) return view;
+      ? computeIsolateView(canvasGraph.nodes, canvasGraph.edges, collapsedIds)
+      : computeCollapsedView(canvasGraph.nodes, canvasGraph.edges, collapsedIds);
     // Aggregate edges have no backing entry in flowGraph.edges (see
     // moveEdgeVia) -- their bend point is applied here instead, as a
     // cheap post-process over whatever computeCollapsedView just
     // synthesized, keyed by its own deterministic `aggregate-<a>-<b>` id.
     // A no-op lookup under isolate mode, which never produces aggregate
     // edges in the first place -- harmless, not worth special-casing out.
-    return {
-      ...view,
-      edges: view.edges.map((e) => (aggregateVia[e.id] ? { ...e, data: { ...e.data, via: aggregateVia[e.id] } } : e)),
-    };
-  }, [flowGraph.nodes, flowGraph.edges, collapsedIds, isolateMode, aggregateVia]);
+    const edgesWithAggregateVia =
+      Object.keys(aggregateVia).length === 0
+        ? view.edges
+        : view.edges.map((e) => (aggregateVia[e.id] ? { ...e, data: { ...e.data, via: aggregateVia[e.id] } } : e));
+    // Fills in a default bend point for any edge that still doesn't have
+    // one and would otherwise draw straight through some unrelated
+    // group's box -- see collapseView.js's own comment. Runs last, after
+    // any user-dragged or aggregate via is already in place, since it
+    // only ever supplies a default, never overrides one.
+    return { ...view, edges: avoidObstacles(view.nodes, edgesWithAggregateVia) };
+  }, [canvasGraph.nodes, canvasGraph.edges, collapsedIds, isolateMode, aggregateVia]);
 
   const onNodeClick = useCallback((event, node) => {
     // A proxy (isolate mode -- see collapseView.js's computeIsolateView) is
@@ -895,25 +1120,24 @@ export default function App() {
       });
       const group = rawById[groupId];
       if (!group) return;
-      const directChildren = rawNodes.filter((n) => n.parentId === groupId);
+      // An enz complex pool is never its own node on the canvas (see
+      // buildFlowNodes/canvasGraph) -- it still shows up here as a
+      // structural "direct child" of the group (container_parent_id walks
+      // straight past its own enzyme to find one), but it has no
+      // meaningful position of its own to place; left out entirely rather
+      // than given a grid slot next to entities it has no visual relation
+      // to (verified directly: that's exactly what read as "some isolated
+      // molecule in a corner" -- it wasn't a stray pool, it was one of
+      // these).
+      const directChildren = rawNodes.filter(
+        (n) => n.parentId === groupId && !(n.type === 'pool' && n.isEnzComplex)
+      );
       if (directChildren.length === 0) return;
 
       const containerIndex = buildContainerIndex(rawNodes, rawById);
       const boxById = {};
-      // A uniform cell size, sized to fit whichever direct child needs the
-      // most room -- a nested container's own effective box (it has to fit
-      // its own contents), or the flat AUTO_LAYOUT_CELL spacing for a plain
-      // entity. Uniform (not per-child) so the grid math below stays a
-      // plain row/column index, not a packing problem.
-      const cellSize = Math.max(
-        AUTO_LAYOUT_CELL,
-        ...directChildren.map((c) => {
-          if (!CONTAINER_TYPES.includes(c.type)) return AUTO_LAYOUT_CELL;
-          const box = effectiveContainerBox(c, containerIndex, boxById);
-          return Math.max(box.width, box.height) + CONTAINER_NESTING_PADDING;
-        })
-      );
-      const cols = Math.ceil(Math.sqrt(directChildren.length));
+      const sizes = directChildren.map((c) => childFootprint(c, containerIndex, boxById));
+      const { colWidth, rowHeight, cols } = computeGridCells(sizes);
       // Anchored at the group's own *effective* box (see effectiveContainerBox),
       // not its raw x/y fields directly -- those only mean "top-left of the
       // box" for a group that's actually been explicitly sized at some point
@@ -931,8 +1155,8 @@ export default function App() {
       const originY = groupBox.y - CONTAINER_PADDING;
       const placements = directChildren.map((child, i) => ({
         child,
-        x: originX + (i % cols) * cellSize,
-        y: originY - Math.floor(i / cols) * cellSize,
+        x: originX + (i % cols) * colWidth,
+        y: originY - Math.floor(i / cols) * rowHeight,
       }));
 
       Promise.all(
@@ -949,14 +1173,23 @@ export default function App() {
           if (failed) throw new Error(failed.error);
           const xs = placements.map((p) => p.x);
           const ys = placements.map((p) => p.y);
-          const width = Math.max(...xs) - Math.min(...xs) + cellSize + CONTAINER_PADDING * 2;
-          const height = Math.max(...ys) - Math.min(...ys) + cellSize + CONTAINER_PADDING * 2;
-          const boxX = Math.min(...xs) - CONTAINER_PADDING;
-          const boxY = Math.max(...ys) + CONTAINER_PADDING;
+          // Auto-layout keeps the group's own *position* fixed always
+          // (see groupBox.x/y just below -- never touched by anything
+          // computed here), but its size always ends up exactly what the
+          // freshly-packed grid needs, grown or shrunk -- an earlier
+          // version only ever grew it (never shrinking below whatever it
+          // measured before), meant to stop this from resizing a
+          // deliberately-sized group out from under itself, but that
+          // also permanently locked in any already-oversized box as a
+          // floor no later run could tighten back up, which is backwards
+          // from what asking for a fresh layout is for: it read as dead
+          // space inside the group, not "its contents rearranged".
+          const width = Math.max(...xs) - Math.min(...xs) + colWidth + CONTAINER_PADDING * 2;
+          const height = Math.max(...ys) - Math.min(...ys) + rowHeight + CONTAINER_PADDING * 2;
           return fetch(`${API_BASE}/api/update_position`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: groupId, x: boxX, y: boxY, width, height }),
+            body: JSON.stringify({ id: groupId, x: groupBox.x, y: groupBox.y, width, height }),
           }).then((r) => r.json());
         })
         .then((res) => {
@@ -965,6 +1198,91 @@ export default function App() {
             return;
           }
           refreshGraphRef.current?.();
+          // The group can easily have grown (or shrunk) enough that the
+          // viewport's current pan/zoom no longer frames it well -- same
+          // reasoning as a full load/reset, just triggered by a local
+          // edit instead (see MainDisplay's own FitViewOnLoad, which
+          // this generation bump is what actually drives).
+          setLoadGeneration((g) => g + 1);
+        })
+        .catch((err) => setStatus(`error: ${err}`));
+    },
+    [flowGraph.nodes]
+  );
+
+  // The recursive version of the same action -- see computeLocalLayouts/
+  // assignAbsolutePositions' own block comment for why this needs two
+  // passes rather than just calling onAutoLayoutGroup depth-first. Batches
+  // every position/resize update from the *entire* subtree into two
+  // Promise.all rounds (position, then resize, since a container's own
+  // resize also carries its final position and would otherwise race a
+  // plain position update for the same id) followed by one refreshGraph,
+  // rather than one round trip per nesting level.
+  const onAutoLayoutRecursive = useCallback(
+    (rootId) => {
+      const rawNodes = flowGraph.nodes.map((n) => n.data);
+      const rawById = {};
+      rawNodes.forEach((n) => {
+        rawById[n.id] = n;
+      });
+      const root = rawById[rootId];
+      if (!root) return;
+
+      const containerIndex = buildContainerIndex(rawNodes, rawById);
+      const boxById = {};
+      const localLayouts = {};
+      computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts);
+      if (localLayouts[rootId].children.length === 0) return;
+
+      // The root of this operation keeps its own current position --
+      // only its *contents* are being rearranged, so there's nothing
+      // above it in the tree to anchor a new position against; it does
+      // still get resized to fit whatever its own subtree now needs.
+      const rootBox = effectiveContainerBox(root, containerIndex, boxById);
+      const positionUpdates = [];
+      const resizeUpdates = [
+        { id: rootId, x: rootBox.x, y: rootBox.y, width: localLayouts[rootId].width, height: localLayouts[rootId].height },
+      ];
+      assignAbsolutePositions(rootId, rootBox.x, rootBox.y, rawById, localLayouts, positionUpdates, resizeUpdates);
+
+      const resizedIds = new Set(resizeUpdates.map((u) => u.id));
+      Promise.all(
+        positionUpdates
+          .filter((u) => !resizedIds.has(u.id))
+          .map((u) =>
+            fetch(`${API_BASE}/api/update_position`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: u.id, x: u.x, y: u.y }),
+            }).then((r) => r.json())
+          )
+      )
+        .then((results) => {
+          const failed = results.find((r) => r.error);
+          if (failed) throw new Error(failed.error);
+          return Promise.all(
+            resizeUpdates.map((u) =>
+              fetch(`${API_BASE}/api/update_position`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(u),
+              }).then((r) => r.json())
+            )
+          );
+        })
+        .then((results) => {
+          const failed = results.find((r) => r.error);
+          if (failed) {
+            setStatus(`error: ${failed.error}`);
+            return;
+          }
+          refreshGraphRef.current?.();
+          // A whole-subtree layout can change the root's own overall
+          // footprint dramatically -- same reasoning (and mechanism) as
+          // onAutoLayoutGroup's own re-fit just above, more likely to
+          // actually matter here given how much more a recursive pass
+          // can move around at once.
+          setLoadGeneration((g) => g + 1);
         })
         .catch((err) => setStatus(`error: ${err}`));
     },
@@ -1175,7 +1493,15 @@ export default function App() {
           // id (the node itself, any edges, and the current selection) has
           // to be repointed at the new one.
           const renamed = updated.previousId && updated.previousId !== updated.id;
-          if (renamed && (node.data.type === 'group' || node.data.type === 'compartment')) {
+          // An explicit-complex enzyme's own path is likewise a prefix of
+          // its hidden complex pool's path (same "child in the MOOSE
+          // hierarchy" reasoning as a group/compartment, just one level
+          // deep instead of arbitrarily many) -- its own stashed
+          // complexPoolId (see buildFlowNodes) would otherwise go stale
+          // the moment the enzyme is renamed, silently breaking its own
+          // plot badge/drop target until some *other* edit happened to
+          // trigger a full refresh (verified directly).
+          if (renamed && (node.data.type === 'group' || node.data.type === 'compartment' || node.data.type === 'enz')) {
             // A group/compartment's own path is a *prefix* of every
             // descendant's path (that's what "children in the MOOSE
             // hierarchy" means) -- renaming it silently changes every
@@ -1626,21 +1952,35 @@ export default function App() {
       } else if (type === 'plot1' || type === 'plot2') {
         const window = type === 'plot1' ? 1 : 2;
         const hitNode = flowGraph.nodes.find((n) => n.id === hitNodeId);
-        if (!hitNode || hitNode.type !== 'pool') {
-          setStatus('drop the plot icon onto a pool to plot it');
+        // Dropped onto an enzyme -- plots its own hidden complex pool's
+        // conc (never itself a droppable canvas node, see buildFlowNodes/
+        // canvasGraph), which is what "plot this enzyme" can only sensibly
+        // mean now that the complex pool isn't shown as its own icon.
+        const targetPoolId = hitNode?.type === 'enz' ? hitNode.data.complexPoolId : hitNode?.id;
+        if (!hitNode || (hitNode.type !== 'pool' && hitNode.type !== 'enz') || !targetPoolId) {
+          setStatus('drop the plot icon onto a pool (or an enzyme, to plot its complex) to plot it');
           return;
         }
         // Purely a frontend marker (like flipped/color) -- toggled so
         // dropping the same window's icon on an already-assigned pool
-        // un-plots it; dropping the other window's icon reassigns it.
-        setFlowGraph((g) => ({
-          ...g,
-          nodes: g.nodes.map((n) =>
-            n.id === hitNode.id
-              ? { ...n, data: { ...n.data, plotWindow: n.data.plotWindow === window ? null : window } }
-              : n
-          ),
-        }));
+        // un-plots it; dropping the other window's icon reassigns it. The
+        // enzyme's own complexPlotWindow is kept in lockstep with its
+        // complex pool's real plotWindow here (its own copy, since
+        // EnzNode only ever sees its own data, not the full node list) --
+        // buildFlowNodes re-derives the same pairing fresh on every full
+        // reload/refresh regardless, this is just what keeps the plot
+        // badge's on-canvas state correct *before* the next one of those.
+        setFlowGraph((g) => {
+          const newWindow = g.nodes.find((n) => n.id === targetPoolId)?.data.plotWindow === window ? null : window;
+          return {
+            ...g,
+            nodes: g.nodes.map((n) => {
+              if (n.id === targetPoolId) return { ...n, data: { ...n.data, plotWindow: newWindow } };
+              if (n.id === hitNode.id && n.data.type === 'enz') return { ...n, data: { ...n.data, complexPlotWindow: newWindow } };
+              return n;
+            }),
+          };
+        });
       }
     },
     [
@@ -1663,7 +2003,18 @@ export default function App() {
   const handleUnplot = useCallback((poolId) => {
     setFlowGraph((g) => ({
       ...g,
-      nodes: g.nodes.map((n) => (n.id === poolId ? { ...n, data: { ...n.data, plotWindow: null } } : n)),
+      nodes: g.nodes.map((n) => {
+        if (n.id === poolId) return { ...n, data: { ...n.data, plotWindow: null } };
+        // An enz complex pool's own badge is dragged from its *enzyme*'s
+        // rendered position (see nodes.jsx's EnzNode), but carries the
+        // complex pool's real id as its drag payload -- the enzyme's own
+        // cached complexPlotWindow needs the same clearing the pool's real
+        // plotWindow just got, above, or the badge would keep showing.
+        if (n.data.type === 'enz' && n.data.complexPoolId === poolId) {
+          return { ...n, data: { ...n.data, complexPlotWindow: null } };
+        }
+        return n;
+      }),
     }));
   }, []);
 
@@ -1927,6 +2278,7 @@ export default function App() {
       plots={plots}
       collapsedMap={collapsedMap}
       selectedNode={selectedNode}
+      selectedParentName={selectedParentName}
       onSaveNode={onSaveNode}
       onToggleFlip={onToggleFlip}
       onToggleCollapse={onToggleCollapse}
@@ -1934,6 +2286,7 @@ export default function App() {
       isolateMode={isolateMode}
       onToggleIsolateMode={onToggleIsolateMode}
       onAutoLayoutGroup={onAutoLayoutGroup}
+      onAutoLayoutRecursive={onAutoLayoutRecursive}
       loadGeneration={loadGeneration}
       onCanvasDrop={handleCanvasDrop}
       onUnplot={handleUnplot}

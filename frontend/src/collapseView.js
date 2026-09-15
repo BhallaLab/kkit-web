@@ -14,6 +14,8 @@
 // free by always resolving to the *outermost* collapsed ancestor, not the
 // nearest one.
 
+import { resolveGroupColor } from './colorUtils';
+
 function isGroupOrCompartment(node) {
   return node.data.type === 'group' || node.data.type === 'compartment';
 }
@@ -106,17 +108,260 @@ export function computeCollapsedView(nodes, edges, collapsedIds) {
     }
   });
 
-  const aggregatedEdges = [...aggregated.values()].map((agg) => ({
-    id: `aggregate-${agg.a}-${agg.b}`,
-    source: agg.a,
-    target: agg.b,
-    style: AGGREGATE_EDGE_STYLE,
-    markerEnd: 'arrowclosed',
-    markerStart: agg.aToB && agg.bToA ? 'arrowclosed' : undefined,
-    data: { type: 'aggregate', stoich: agg.count },
-  }));
+  // The full obstacle list (every visible collapsed container's box), so
+  // assignAggregatePorts' own routing can check a pair's connector against
+  // *third* groups sitting between them -- not just each other -- the same
+  // way avoidObstacles already does for individual/real edges below.
+  const allObstacles = nodes
+    .filter(isGroupOrCompartment)
+    .map((n) => ({ id: n.id, box: absoluteBox(n.id, byId) }))
+    .filter((o) => o.box);
 
-  return { nodes: visibleNodes, edges: [...individual, ...aggregatedEdges] };
+  const { portsByContainer, routeByPair } = assignAggregatePorts([...aggregated.values()], byId, allObstacles);
+
+  const aggregatedEdges = [...aggregated.values()].map((agg) => {
+    const route = routeByPair.get(`${agg.a}|${agg.b}`);
+    return {
+      id: `aggregate-${agg.a}-${agg.b}`,
+      source: agg.a,
+      target: agg.b,
+      sourceHandle: route?.sourceHandle,
+      targetHandle: route?.targetHandle,
+      style: route?.style ?? AGGREGATE_EDGE_STYLE,
+      markerEnd: 'arrowclosed',
+      markerStart: agg.aToB && agg.bToA ? 'arrowclosed' : undefined,
+      data: { type: 'aggregate', stoich: agg.count, via: route?.via },
+    };
+  });
+
+  // Attach each collapsed container's assigned knobs (if any) to its own
+  // node -- a fresh object, never mutating the node App.jsx handed in. Also
+  // declares them via the node's own `handles` property (not just
+  // data.ports, which only drives what ContainerNode actually renders) --
+  // the same escape hatch computeIsolateView's proxy nodes already rely on
+  // (see its own block comment on initialWidth/handles): a freshly-added
+  // named handle otherwise has no bounds until its own Handle element
+  // mounts *and* is measured, which under onlyRenderVisibleElements can be
+  // delayed indefinitely (or race a container's own remeasure effect) --
+  // verified directly, without this a large collapsed model logged a wave
+  // of "Couldn't create edge for ... handle id" warnings on every
+  // render pass, not just a one-time settling blip. Declaring the exact
+  // geometry up front sidesteps the race entirely; real measurement still
+  // silently corrects it moments later same as for a proxy.
+  const nodesWithPorts = visibleNodes.map((n) => {
+    if (!collapsedIds.has(n.id)) return n;
+    const ports = portsByContainer.get(n.id) ?? [];
+    const w = n.style?.width ?? 0;
+    const h = n.style?.height ?? 0;
+    const handles = [
+      { type: 'target', position: 'left', x: 0, y: h / 2 },
+      { type: 'source', position: 'right', x: w, y: h / 2 },
+      ...ports.map((p) => ({ id: p.id, type: p.type, position: p.side, x: p.x, y: p.y })),
+    ];
+    return { ...n, data: { ...n.data, ports }, handles };
+  });
+
+  return { nodes: nodesWithPorts, edges: [...individual, ...aggregatedEdges] };
+}
+
+// -- Aggregated-edge port assignment (design section: connector knobs) ----
+//
+// A plain single fixed Left/Right handle pair (ContainerNode's own default,
+// still used for the "one side is a real entity" case below) put every
+// aggregate connector at the exact same two anchor points regardless of
+// which direction the other group actually sat in -- BendableEdge's spline
+// then had to bend however necessary to reach it, reading as "a confusing
+// mix of x/y lines and arbitrary angles" for anything not directly left/
+// right of its partner. This instead picks, per aggregated group-to-group
+// edge, whichever of the container's four sides faces the other group most
+// directly (the shortest-routing side), gives it its own knob on that side
+// (spread out along the side when more than one connector lands there so
+// they don't all leave from the same point -- the multiple-lines-on-top-of-
+// each-other complaint), and always renders the connector as a strict
+// 2-bend orthogonal polyline between the two chosen knobs.
+
+function pickSide(dx, dy) {
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 'right' : 'left';
+  return dy >= 0 ? 'bottom' : 'top';
+}
+
+const OPPOSITE_SIDE = { left: 'right', right: 'left', top: 'bottom', bottom: 'top' };
+
+// Node-local (0..width, 0..height) coordinates for a port -- the form
+// React Flow's own declared-`handles` node property expects (see
+// computeIsolateView's PROXY_LAYOUT above), as opposed to portPoint's
+// absolute flow-space point used for the actual route geometry.
+function localPortXY(box, side, frac) {
+  switch (side) {
+    case 'right':
+      return { x: box.width, y: frac * box.height };
+    case 'top':
+      return { x: frac * box.width, y: 0 };
+    case 'bottom':
+      return { x: frac * box.width, y: box.height };
+    default:
+      return { x: 0, y: frac * box.height };
+  }
+}
+
+function portPoint(box, side, frac) {
+  switch (side) {
+    case 'right':
+      return { x: box.x + box.width, y: box.y + frac * box.height };
+    case 'top':
+      return { x: box.x + frac * box.width, y: box.y };
+    case 'bottom':
+      return { x: box.x + frac * box.width, y: box.y + box.height };
+    default:
+      return { x: box.x, y: box.y + frac * box.height };
+  }
+}
+
+// The perpendicular-axis coordinate of `otherPoint`, used only to order
+// several knobs sharing one side so they read left-to-right/top-to-bottom
+// in the same order their real partners sit in, rather than an arbitrary
+// insertion order that would make the connectors cross each other right at
+// the box edge.
+function perpCoord(side, otherPoint) {
+  return side === 'left' || side === 'right' ? otherPoint.y : otherPoint.x;
+}
+
+// A strict 2-bend, axis-aligned polyline between two ports whose sides are
+// always exact opposites by construction (pickSide is evaluated from each
+// container's own center toward the other's, so a and b's choices are
+// always mirror images) -- always returns two points (even when the ports
+// already share the coordinate that would make one bend a no-op), so the
+// caller can treat every aggregate connector as multi-bend/polyline
+// uniformly rather than special-casing the already-straight case.
+function orthogonalPortRoute(aPoint, aSide, bPoint) {
+  if (aSide === 'left' || aSide === 'right') {
+    const midX = (aPoint.x + bPoint.x) / 2;
+    return [
+      { x: midX, y: aPoint.y },
+      { x: midX, y: bPoint.y },
+    ];
+  }
+  const midY = (aPoint.y + bPoint.y) / 2;
+  return [
+    { x: aPoint.x, y: midY },
+    { x: bPoint.x, y: midY },
+  ];
+}
+
+// The color rule: "the group to the left, or if in the same column, the
+// upper group" -- read directly off whichever container's center sorts
+// first on the axis that actually distinguishes the pair.
+function leftOrUpperColor(aCenter, aColor, bCenter, bColor) {
+  if (aCenter.x !== bCenter.x) return aCenter.x < bCenter.x ? aColor : bColor;
+  return aCenter.y <= bCenter.y ? aColor : bColor;
+}
+
+function containerColor(id, byId) {
+  return resolveGroupColor(byId[id]?.data?.color, id) ?? '#555';
+}
+
+function assignAggregatePorts(aggPairs, byId, allObstacles) {
+  const portsByContainer = new Map();
+  const routeByPair = new Map();
+  if (aggPairs.length === 0) return { portsByContainer, routeByPair };
+
+  const boxes = new Map();
+  aggPairs.forEach((agg) => {
+    if (!boxes.has(agg.a)) boxes.set(agg.a, absoluteBox(agg.a, byId));
+    if (!boxes.has(agg.b)) boxes.set(agg.b, absoluteBox(agg.b, byId));
+  });
+
+  // One attachment record per pair-end (two per pair: a's end and b's end).
+  const attachments = [];
+  aggPairs.forEach((agg) => {
+    const boxA = boxes.get(agg.a);
+    const boxB = boxes.get(agg.b);
+    if (!boxA || !boxB) return;
+    const centerA = { x: boxA.cx, y: boxA.cy };
+    const centerB = { x: boxB.cx, y: boxB.cy };
+    const sideA = pickSide(centerB.x - centerA.x, centerB.y - centerA.y);
+    const sideB = OPPOSITE_SIDE[sideA];
+    attachments.push({ pairKey: `${agg.a}|${agg.b}`, containerId: agg.a, side: sideA, otherCenter: centerB, role: 'a' });
+    attachments.push({ pairKey: `${agg.a}|${agg.b}`, containerId: agg.b, side: sideB, otherCenter: centerA, role: 'b' });
+  });
+
+  // Group by (container, side), order to match the real geometry, then
+  // spread evenly along that side.
+  const bySideKey = new Map();
+  attachments.forEach((att) => {
+    const key = `${att.containerId}|${att.side}`;
+    if (!bySideKey.has(key)) bySideKey.set(key, []);
+    bySideKey.get(key).push(att);
+  });
+
+  const portByAttachment = new Map();
+  bySideKey.forEach((group, key) => {
+    const [containerId, side] = key.split('|');
+    group.sort((x, y) => perpCoord(side, x.otherCenter) - perpCoord(side, y.otherCenter));
+    group.forEach((att, i) => {
+      const frac = (i + 1) / (group.length + 1);
+      const portId = `port-${containerId}-${side}-${i}`;
+      portByAttachment.set(att, { id: portId, side, frac });
+      if (!portsByContainer.has(containerId)) portsByContainer.set(containerId, []);
+    });
+  });
+
+  attachments.forEach((att) => {
+    const port = portByAttachment.get(att);
+    const box = boxes.get(att.containerId);
+    const local = localPortXY(box, port.side, port.frac);
+    portsByContainer.get(att.containerId).push({
+      id: port.id,
+      side: port.side,
+      frac: port.frac,
+      type: att.role === 'a' ? 'source' : 'target',
+      x: local.x,
+      y: local.y,
+    });
+  });
+
+  aggPairs.forEach((agg) => {
+    const pairKey = `${agg.a}|${agg.b}`;
+    const attA = attachments.find((att) => att.pairKey === pairKey && att.role === 'a');
+    const attB = attachments.find((att) => att.pairKey === pairKey && att.role === 'b');
+    if (!attA || !attB) return;
+    const portA = portByAttachment.get(attA);
+    const portB = portByAttachment.get(attB);
+    const boxA = boxes.get(agg.a);
+    const boxB = boxes.get(agg.b);
+    const pointA = portPoint(boxA, portA.side, portA.frac);
+    const pointB = portPoint(boxB, portB.side, portB.frac);
+    const color = leftOrUpperColor(
+      { x: boxA.cx, y: boxA.cy },
+      containerColor(agg.a, byId),
+      { x: boxB.cx, y: boxB.cy },
+      containerColor(agg.b, byId)
+    );
+    // A third group sitting geometrically between this pair would
+    // otherwise get sliced right through by the plain 2-bend Z-route below
+    // (that route only ever considers the two endpoints) -- checked here
+    // against the straight A-to-B line the same way avoidObstacles checks
+    // any other edge, and only when something's actually in the way does
+    // the more roundabout clearing detour replace the simple shelf route.
+    // Excludes not just A and B themselves but any of *their* ancestors
+    // too -- an uncollapsed outer compartment containing both (almost
+    // always true: the root compartment typically stays expanded while
+    // its child groups collapse) would otherwise "block" via its own
+    // giant bounding box, since the direct A-to-B line trivially lies
+    // entirely inside it. Mirrors avoidObstacles' own exclusion below.
+    const candidates = (allObstacles ?? []).filter(
+      (o) => o.id !== agg.a && o.id !== agg.b && !isAncestorOf(o.id, agg.a, byId) && !isAncestorOf(o.id, agg.b, byId)
+    );
+    const via = unionDetour(pointA.x, pointA.y, pointB.x, pointB.y, candidates) ?? orthogonalPortRoute(pointA, portA.side, pointB);
+    routeByPair.set(pairKey, {
+      sourceHandle: portA.id,
+      targetHandle: portB.id,
+      via,
+      style: { stroke: color, strokeWidth: 2.5 },
+    });
+  });
+
+  return { portsByContainer, routeByPair };
 }
 
 // -- Isolate mode (design section 6) -----------------------------------
@@ -180,11 +425,13 @@ const PROXY_LAYOUT = {
     ],
   },
   enz: {
-    size: () => ({ width: 110, height: 80 }),
+    // Matches nodes.jsx's EnzNode own text-driven width estimate -- an
+    // enzyme's name is rendered at the same rough size/weight as a Pool's.
+    size: (name) => ({ width: Math.max(110, 24 + name.length * 15), height: 80 }),
     handles: (w, h) => [
       { id: 'substrate', type: 'target', position: 'left', x: 0, y: h / 2 },
       { id: 'product', type: 'source', position: 'right', x: w, y: h / 2 },
-      { id: 'enzSite', type: 'target', position: 'top', x: w * 0.3, y: 0 },
+      { id: 'enzSite', type: 'target', position: 'bottom', x: w * 0.3, y: h },
     ],
   },
   concchan: {
@@ -414,6 +661,147 @@ export function computeIsolateView(nodes, edges, collapsedIds) {
   });
 
   return { nodes: [...visibleNodes, ...proxyNodes], edges: resultEdges };
+}
+
+// -- Obstacle-avoiding default bend point ---------------------------------
+//
+// A straight line between two entities in different, unrelated groups can
+// end up slicing right through some *third* group's box along the way --
+// purely an accident of where things happen to sit on the canvas, nothing
+// about the connection itself. BendableEdge already supports a manual
+// bend point (data.via, user-draggable) for exactly this; this computes a
+// *default* one automatically, only for an edge that doesn't already have
+// one (a user-dragged point, or an aggregate edge's own -- see App.jsx's
+// aggregateVia -- always wins), so the common case already reads
+// sensibly without the user needing to find and drag every offending edge
+// by hand. A cheap sampled-points check, not exact line/rectangle
+// geometry -- good enough to catch "this line visibly cuts through that
+// box", which is what actually matters for a default worth having, not a
+// mathematically pure collision test.
+function isAncestorOf(candidateId, nodeId, byId) {
+  let cur = byId[nodeId];
+  while (cur && cur.parentId) {
+    if (cur.parentId === candidateId) return true;
+    cur = byId[cur.parentId];
+  }
+  return false;
+}
+
+function lineCrossesBox(x1, y1, x2, y2, box, steps = 40) {
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const x = x1 + (x2 - x1) * t;
+    const y = y1 + (y2 - y1) * t;
+    if (x >= box.x && x <= box.x + box.width && y >= box.y && y <= box.y + box.height) return true;
+  }
+  return false;
+}
+
+// Every obstacle from `candidates` the direct line from (x1,y1) to (x2,y2)
+// actually cuts through, folded into one union box and cleared with a
+// single 2-bend orthogonalDetour -- shared between avoidObstacles (real
+// edges) and assignAggregatePorts (group-to-group connectors) so "does
+// this route need to dodge a third box" and "how" are answered identically
+// in both places. Returns null when nothing blocks, so callers can fall
+// back to whatever simpler route they'd otherwise use.
+function unionDetour(x1, y1, x2, y2, candidates) {
+  const blocking = candidates.filter((o) => lineCrossesBox(x1, y1, x2, y2, o.box));
+  if (blocking.length === 0) return null;
+  const unionBox = blocking.reduce(
+    (acc, o) => ({
+      x: Math.min(acc.x, o.box.x),
+      y: Math.min(acc.y, o.box.y),
+      x2: Math.max(acc.x2, o.box.x + o.box.width),
+      y2: Math.max(acc.y2, o.box.y + o.box.height),
+    }),
+    { x: Infinity, y: Infinity, x2: -Infinity, y2: -Infinity }
+  );
+  return orthogonalDetour(x1, y1, x2, y2, {
+    x: unionBox.x,
+    y: unionBox.y,
+    width: unionBox.x2 - unionBox.x,
+    height: unionBox.y2 - unionBox.y,
+  });
+}
+
+export function avoidObstacles(nodes, edges) {
+  const byId = {};
+  nodes.forEach((n) => {
+    byId[n.id] = n;
+  });
+  const obstacles = nodes
+    .filter((n) => n.data?.type === 'group' || n.data?.type === 'compartment')
+    .map((n) => ({ id: n.id, box: absoluteBox(n.id, byId) }))
+    .filter((o) => o.box);
+  if (obstacles.length === 0) return edges;
+
+  return edges.map((e) => {
+    // A user-dragged point (or an aggregate edge's own, merged in by
+    // App.jsx before this ever runs) always wins -- this only ever fills
+    // in a default, never overrides a deliberate choice.
+    if (e.data?.via) return e;
+    const sourceNode = byId[e.source];
+    const targetNode = byId[e.target];
+    if (!sourceNode || !targetNode) return e;
+
+    const sourcePos = absolutePosition(e.source, byId);
+    const targetPos = absolutePosition(e.target, byId);
+    // Roughly each node's own center -- adequate for a routing decision,
+    // not meant to match BendableEdge's own precise per-handle anchor.
+    const sx = sourcePos.x + (sourceNode.style?.width ?? sourceNode.initialWidth ?? 0) / 2;
+    const sy = sourcePos.y + (sourceNode.style?.height ?? sourceNode.initialHeight ?? 0) / 2;
+    const tx = targetPos.x + (targetNode.style?.width ?? targetNode.initialWidth ?? 0) / 2;
+    const ty = targetPos.y + (targetNode.style?.height ?? targetNode.initialHeight ?? 0) / 2;
+
+    // Every obstacle the direct line actually cuts through, not just the
+    // first one found -- a line spanning several sibling groups in a row
+    // can cross more than one of them, and detouring around only the first
+    // (the old `.find()`) left it still slicing through whichever others
+    // happened to sit further along the same line. unionDetour folds them
+    // into a single union box so the result stays one clean 2-bend
+    // polyline that clears all of them at once.
+    const candidates = obstacles.filter(
+      (o) => o.id !== e.source && o.id !== e.target && !isAncestorOf(o.id, e.source, byId) && !isAncestorOf(o.id, e.target, byId)
+    );
+    const via = unionDetour(sx, sy, tx, ty, candidates);
+    if (!via) return e;
+
+    return { ...e, data: { ...e.data, via } };
+  });
+}
+
+// A two-bend, three-straight-segment detour around `box`, staying purely
+// horizontal/vertical throughout ("aligned to a rectangular grid", the
+// circuit-board-trace look multi-bend routing is meant to read as, rather
+// than a single smooth diagonal bow around the obstacle). Two candidate
+// routes -- a horizontal "shelf" above or below the box, or a vertical
+// one left or right of it -- and whichever needs the smaller detour
+// distance from the direct line is used, so a pair of entities mostly
+// stacked vertically (say) doesn't get routed the long way around just
+// because one particular axis happened to be tried first.
+function orthogonalDetour(sx, sy, tx, ty, box, margin = 30) {
+  const clearAbove = box.y - margin;
+  const clearBelow = box.y + box.height + margin;
+  const midY = (sy + ty) / 2;
+  const yDetour = Math.min(Math.abs(midY - clearAbove), Math.abs(midY - clearBelow));
+  const clearY = Math.abs(midY - clearAbove) <= Math.abs(midY - clearBelow) ? clearAbove : clearBelow;
+
+  const clearLeft = box.x - margin;
+  const clearRight = box.x + box.width + margin;
+  const midX = (sx + tx) / 2;
+  const xDetour = Math.min(Math.abs(midX - clearLeft), Math.abs(midX - clearRight));
+  const clearX = Math.abs(midX - clearLeft) <= Math.abs(midX - clearRight) ? clearLeft : clearRight;
+
+  if (yDetour <= xDetour) {
+    return [
+      { x: sx, y: clearY },
+      { x: tx, y: clearY },
+    ];
+  }
+  return [
+    { x: clearX, y: sy },
+    { x: clearX, y: ty },
+  ];
 }
 
 export { isGroupOrCompartment, outermostCollapsedAncestor };

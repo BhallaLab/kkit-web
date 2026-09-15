@@ -2,7 +2,8 @@ import { Box, IconButton, Tooltip, Typography } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
-import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import { ENZ_CLIP_PATH_RIGHT, STIM_CLIP_PATH } from '../nodes';
 import PlotSquiggleIcon from '../PlotSquiggleIcon';
 import { PLOT_WINDOW_COLORS } from '../colorUtils';
@@ -296,10 +297,10 @@ export default function EntityPalette({
       >
         <EnzIcon />
       </DragIcon>
-      <DragIcon type="plot1" clickDisabled title="Drag onto a pool to plot it in Plot window 1">
+      <DragIcon type="plot1" clickDisabled title="Drag onto a pool (or an enzyme, to plot its complex) to plot it in Plot window 1">
         <PlotSquiggleIcon width={40} height={28} traceColor={PLOT_WINDOW_COLORS[1]} />
       </DragIcon>
-      <DragIcon type="plot2" clickDisabled title="Drag onto a pool to plot it in Plot window 2">
+      <DragIcon type="plot2" clickDisabled title="Drag onto a pool (or an enzyme, to plot its complex) to plot it in Plot window 2">
         <PlotSquiggleIcon width={40} height={28} traceColor={PLOT_WINDOW_COLORS[2]} />
       </DragIcon>
       <DragIcon
@@ -372,7 +373,7 @@ export default function EntityPalette({
           }
         >
           <IconButton size="small" onClick={onToggleIsolateMode} color={isolateMode ? 'primary' : 'default'}>
-            <CenterFocusStrongIcon fontSize="small" />
+            {isolateMode ? <VisibilityOffIcon fontSize="small" /> : <VisibilityIcon fontSize="small" />}
           </IconButton>
         </Tooltip>
       </Box>
