@@ -361,7 +361,16 @@ def describe_enz(path):
     # Km is a plain concentration (no reaction-order dependence the way
     # Kf/Kb have) -- always a flat mM->uM conversion.
     km_display = e.Km * 1000.0
-    extra = {"mechanism": "michaelis-menten" if is_mm else "explicit-complex", "KmUnit": _MICROMOLAR}
+    extra = {
+        "mechanism": "michaelis-menten" if is_mm else "explicit-complex",
+        "KmUnit": _MICROMOLAR,
+        # The parent molecule this enzyme is attached to (like a
+        # ConcChan's own parentPoolId above) -- this element's own MOOSE
+        # parent, not a message neighbor. Distinct from "parentId" (set
+        # later, in build_graph's own loop) which instead walks up to the
+        # nearest enclosing group/compartment for canvas containment.
+        "parentPoolId": e.parent.path,
+    }
     if is_mm:
         extra.update({"Km": km_display, "kcat": e.kcat})
     else:
@@ -500,8 +509,18 @@ def build_graph(model_path, extra_plot_windows=None, extra_collapsed=None):
     for e in moose.wildcardFind(model_path + "/##[ISA=EnzBase]"):
         e = moose.element(e)
         nodes.append(describe_enz(e.path))
-        for enzParent in e.neighbors["enz"]:
-            add_edge(enzParent.path, e.path, "enzyme")
+        # Used to read this off e.neighbors["enz"] -- but that message
+        # field doesn't exist at all on an MMenz (MOOSE prints a stderr
+        # warning and silently returns [] every time, verified directly
+        # against Kholodenko.g, an all-MMenz model: zero "enzyme" edges
+        # came out of the old loop), and is unreliably wired even on a
+        # real explicit-complex Enz in some loaded .g files (a handful of
+        # synSynth7.g's own enzymes had no "enz" message either). The
+        # enzyme's own MOOSE tree parent -- already the reliable signal
+        # describe_enz's own parentPoolId uses above -- is always its real
+        # host pool for both mechanisms, so it needs no neighbor lookup at
+        # all.
+        add_edge(e.parent.path, e.path, "enzyme")
         for sub in e.neighbors["sub"]:
             add_edge(sub.path, e.path, "substrate")
         for prd in e.neighbors["prd"]:

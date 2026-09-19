@@ -28,7 +28,12 @@ import { NodeActionsContext } from './NodeActionsContext';
 // synchronous layout read against the (by then large) DOM -- real layout
 // thrashing, and the actual reason this got dramatically worse than
 // linearly with model size.
-function useFlipRemeasure(id, flipped) {
+// `extra` is an optional second value whose *change* also needs a
+// remeasure -- an enzyme/ConcChan's parentSide (top vs bottom, see
+// computeInitialParentSides) moves its structural-link dot to the
+// opposite edge exactly the way flipped moves substrate/product, so it
+// needs the identical treatment.
+function useFlipRemeasure(id, flipped, extra) {
   const updateNodeInternals = useUpdateNodeInternals();
   const mounted = useRef(false);
   useEffect(() => {
@@ -37,7 +42,7 @@ function useFlipRemeasure(id, flipped) {
       return;
     }
     updateNodeInternals(id);
-  }, [id, flipped, updateNodeInternals]);
+  }, [id, flipped, extra, updateNodeInternals]);
 }
 
 // Shared with ContainerNode's own expanded-label sizing ("a font only 2
@@ -269,7 +274,8 @@ const ENZ_MIN_WIDTH = 110;
 
 export function EnzNode({ id, data, selected }) {
   const flipped = !!data.flipped;
-  useFlipRemeasure(id, flipped);
+  const parentSide = data.parentSide === 'top' ? 'top' : 'bottom';
+  useFlipRemeasure(id, flipped, parentSide);
   const width = Math.max(ENZ_MIN_WIDTH, 24 + (data.name?.length ?? 0) * 15);
 
   // An enzyme's hidden complex pool is plotted via *this* icon (see
@@ -312,21 +318,25 @@ export function EnzNode({ id, data, selected }) {
       </div>
       <SubstrateHandle flipped={flipped} />
       <ProductHandle flipped={flipped} />
-      {/* The structural link to the enzyme's own parent pool, at the
-          bottom edge (mirroring the arrow's own bottom notch at 75% down,
-          the same distance from the shaft's edge as the top notch the
-          handle used to sit on) so it reads as "attached to the molecule
-          underneath", not competing visually with the substrate/product
-          arrows on the left/right. The 30/70 split still mirrors along
-          with the shaft on flip, moving from [0,65]% to [35,100]%. */}
+      {/* The structural link to the enzyme's own real parent molecule --
+          on the top or bottom edge (mirroring the arrow's own notch at
+          75%/25% down, the same distance from the shaft's edge as the
+          opposite notch), never left/right so it never competes visually
+          with the substrate/product arrows there. Which of the two edges
+          is picked -- App.jsx's computeInitialParentSides, persisted as
+          data.parentSide -- is whichever one actually faces the real
+          parent pool, so the connector reads as "attached to the molecule"
+          instead of routing all the way around to a fixed side that may
+          be facing away from it. The 30/70 split still mirrors along with
+          the shaft on flip, moving from [0,65]% to [35,100]%. */}
       <Handle
         type="target"
-        position={Position.Bottom}
+        position={parentSide === 'top' ? Position.Top : Position.Bottom}
         id="enzSite"
         style={{
           ...dotHandleStyle,
           left: flipped ? '70%' : '30%',
-          top: '75%',
+          top: parentSide === 'top' ? '25%' : '75%',
           transform: 'translate(-50%, -50%)',
         }}
       />
@@ -365,7 +375,8 @@ function ChanOutHandle({ flipped }) {
 
 export function ConcChanNode({ id, data, selected }) {
   const flipped = !!data.flipped;
-  useFlipRemeasure(id, flipped);
+  const parentSide = data.parentSide === 'top' ? 'top' : 'bottom';
+  useFlipRemeasure(id, flipped, parentSide);
   const { width, height } = CONC_CHAN_SIZE;
   const capRx = 10;
   const railY = 6;
@@ -389,11 +400,16 @@ export function ConcChanNode({ id, data, selected }) {
           strokeWidth="2"
         />
       </svg>
+      {/* Same real-parent-pool side selection as EnzNode's own enzSite
+          (see computeInitialParentSides/data.parentSide) -- mirrors
+          between the tube's two rails (0%/100% down) rather than
+          enzSite's 25%/75%, since a ConcChan has no shaft notch to line
+          up with. */}
       <Handle
         type="target"
-        position={Position.Bottom}
+        position={parentSide === 'top' ? Position.Top : Position.Bottom}
         id="chanParent"
-        style={{ ...dotHandleStyle, left: '50%', top: '100%', transform: 'translate(-50%, -50%)' }}
+        style={{ ...dotHandleStyle, left: '50%', top: parentSide === 'top' ? '0%' : '100%', transform: 'translate(-50%, -50%)' }}
       />
       <ChanInHandle flipped={flipped} />
       <ChanOutHandle flipped={flipped} />

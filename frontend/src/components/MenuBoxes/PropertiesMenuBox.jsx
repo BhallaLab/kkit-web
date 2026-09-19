@@ -136,6 +136,9 @@ export default function PropertiesMenuBox({
   onAutoLayoutGroup,
   onAutoLayoutRecursive,
   onClearLayoutLocks,
+  selectedGroupScore,
+  onUndoLayout,
+  canUndoLayout,
 }) {
   const [fields, setFields] = useState(null);
   // Tracks whether `fields` has any edit not yet sent to the backend --
@@ -206,21 +209,21 @@ export default function PropertiesMenuBox({
         <Grid size={12}>
           <TextField
             fullWidth
+            label="Name"
+            size="small"
+            value={fields.name}
+            onChange={(e) => setField('name', e.target.value)}
+          />
+        </Grid>
+        <Grid size={12}>
+          <TextField
+            fullWidth
             label="Parent"
             size="small"
             value={parentName ?? '(top level)'}
             slotProps={{ input: { readOnly: true } }}
             variant="filled"
             helperText="Names repeat across a model -- this disambiguates which one you're looking at."
-          />
-        </Grid>
-        <Grid size={12}>
-          <TextField
-            fullWidth
-            label="Name"
-            size="small"
-            value={fields.name}
-            onChange={(e) => setField('name', e.target.value)}
           />
         </Grid>
 
@@ -362,6 +365,19 @@ export default function PropertiesMenuBox({
 
         {(node.data.type === 'group' || node.data.type === 'compartment') && (
           <Grid size={12} container spacing={1}>
+            {selectedGroupScore && (
+              <Grid size={12}>
+                <TextField
+                  fullWidth
+                  label="Layout score"
+                  size="small"
+                  value={formatNumber(selectedGroupScore.weighted)}
+                  slotProps={{ input: { readOnly: true } }}
+                  variant="filled"
+                  helperText="Lower is better -- weighted total of connector length, crossings, icon overlaps, and footprint area. Same score auto-layout itself uses to judge a candidate."
+                />
+              </Grid>
+            )}
             <Grid size={6}>
               <Button
                 fullWidth
@@ -381,6 +397,18 @@ export default function PropertiesMenuBox({
                 title="Lays out every nested group's own contents first, then this one, bottom-up -- everything below it rearranges, not just its own direct children."
               >
                 Auto-layout recursively
+              </Button>
+            </Grid>
+            <Grid size={12}>
+              <Button
+                fullWidth
+                size="small"
+                variant="outlined"
+                disabled={!canUndoLayout}
+                onClick={onUndoLayout}
+                title="Reverts whatever the last auto-layout action (on this group or any other) just changed -- only the most recent run can be undone."
+              >
+                Undo last auto-layout
               </Button>
             </Grid>
             <Grid size={12}>
