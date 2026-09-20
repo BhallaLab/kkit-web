@@ -322,6 +322,35 @@ const CONTAINER_PADDING = 1.5;
 // let their footprints intersect).
 const CONTAINER_NESTING_PADDING = 6;
 
+// Extra gap between GRID CELLS specifically when a level's own repack is
+// packing sibling *containers* (not molecules) -- unlike
+// CONTAINER_NESTING_PADDING, which is baked into each individual
+// container's own reported footprint (so its border doesn't visually
+// touch its parent's), this is genuine open breathing room between two
+// neighboring group boxes' cells, generous enough for the inter-group
+// connector routing (see collapseView.js's own pavement system) to
+// actually have room to work with, not just enough to keep two borders
+// from touching.
+const CONTAINER_GRID_GAP = 15;
+
+// Cheap AABB test shared by computeLocalLayouts' own overlap safety net
+// below -- `a`/`b` are the same {localX, localY, right, bottom} shape
+// packedChildren/lockedEntityPlacements/lockedContainerBounds all use
+// (Y-up: localY is the top edge, bottom the -- numerically lower -- one).
+function boxesOverlap(a, b) {
+  const ox = Math.min(a.right, b.right) - Math.max(a.localX, b.localX);
+  const oy = Math.min(a.localY, b.localY) - Math.max(a.bottom, b.bottom);
+  return ox > 0 && oy > 0;
+}
+function anyOverlap(boxes) {
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      if (boxesOverlap(boxes[i], boxes[j])) return true;
+    }
+  }
+  return false;
+}
+
 function isDescendantOf(nodeId, containerId, rawById) {
   let cur = rawById[nodeId];
   while (cur && cur.parentId) {
@@ -582,46 +611,24 @@ function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById,
     })
   );
   const unlockedSizes = unlockedPackable.map((c) => sizesMap.get(c.id));
-  const { colWidth, rowHeight, cols } = computeGridCells(
+  const { colWidth: baseColWidth, rowHeight: baseRowHeight, cols } = computeGridCells(
     unlockedSizes.length > 0 ? unlockedSizes : [{ width: AUTO_LAYOUT_CELL, height: AUTO_LAYOUT_CELL }]
   );
+  // Molecule-level packing keeps its own already-tuned cell size exactly
+  // as-is; only a level whose repositionable children are themselves
+  // containers gets the extra CONTAINER_GRID_GAP breathing room (see its
+  // own comment) -- both the SA search below and the actual grid-pack
+  // placement use this same widened spacing, so a candidate's score
+  // always reflects the spacing it'll actually be placed with.
+  const packingContainers = unlockedPackable.some((c) => CONTAINER_TYPES.includes(c.type));
+  const colWidth = baseColWidth + (packingContainers ? CONTAINER_GRID_GAP : 0);
+  const rowHeight = baseRowHeight + (packingContainers ? CONTAINER_GRID_GAP : 0);
 
   // Seed + simulated-annealing refinement (see optimizeGroupLayout's own
   // comment) instead of plain insertion order -- children actually
   // connected to each other land in nearby grid cells instead of
   // wherever the backend happened to list them.
   const optimized = optimizeGroupLayout({ children: repositionable, edges, rawById, sizes: sizesMap, cols, colWidth, rowHeight, timeBudgetMs: perLevelBudgetMs });
-  // CONTAINER_PADDING is baked into each child's own localX/localY here
-  // (matching onAutoLayoutGroup's single-level originX/originY) -- so
-  // assignAbsolutePositions below only ever has to add a container's own
-  // real origin to these, never a second padding offset on top.
-  //
-  // A per-level "discarded" result (see optimizeGroupLayout) used to
-  // still fall back to a plain, unordered *grid repack* of this level's
-  // own children here -- the gate only ever stopped a worse *ordering*
-  // from being used, not a worse *layout*, since a fresh grid pack in
-  // insertion order is not the same thing as this level's own current
-  // arrangement, and could easily score worse than what was already on
-  // screen. That's what let a whole recursive run regress a nested
-  // group's own score despite this exact gate already existing --
-  // verified directly against Repressillator.g. Discarded now means what
-  // it means everywhere else in this app: leave this level's own
-  // children at their current relative position instead, the same way a
-  // locked entity already does (see lockedEntityPlacements just below).
-  const packedChildren = optimized.discarded
-    ? unlockedPackable.map((c) => {
-        const footprint = sizesMap.get(c.id);
-        const localX = c.x - currentBox.x;
-        const localY = c.y - currentBox.y;
-        return { id: c.id, localX, localY, right: localX + footprint.width, bottom: localY - footprint.height };
-      })
-    : optimized.order.map((child, i) => ({
-        id: child.id,
-        localX: CONTAINER_PADDING + (i % cols) * colWidth,
-        localY: -CONTAINER_PADDING - Math.floor(i / cols) * rowHeight,
-        right: CONTAINER_PADDING + (i % cols) * colWidth + colWidth,
-        bottom: -CONTAINER_PADDING - Math.floor(i / cols) * rowHeight - rowHeight,
-      }));
 
   const lockedEntityPlacements = lockedEntities.map((c) => {
     const footprint = childFootprint(c, containerIndex, boxById);
@@ -637,6 +644,44 @@ function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById,
     return { localX, localY, right: localX + box.width, bottom: localY - box.height };
   });
 
+  // CONTAINER_PADDING is baked into each child's own localX/localY here
+  // (matching onAutoLayoutGroup's single-level originX/originY) -- so
+  // assignAbsolutePositions below only ever has to add a container's own
+  // real origin to these, never a second padding offset on top.
+  const gridPacking = optimized.order.map((child, i) => ({
+    id: child.id,
+    localX: CONTAINER_PADDING + (i % cols) * colWidth,
+    localY: -CONTAINER_PADDING - Math.floor(i / cols) * rowHeight,
+    right: CONTAINER_PADDING + (i % cols) * colWidth + colWidth,
+    bottom: -CONTAINER_PADDING - Math.floor(i / cols) * rowHeight - rowHeight,
+  }));
+
+  // A per-level "discarded" result (see optimizeGroupLayout) means "the
+  // current arrangement already scores at least as well as anything a
+  // fresh repack found" -- so it keeps every unlocked child at its own
+  // current relative position instead of force-repacking it into the
+  // grid, the same way a locked entity already does (see
+  // lockedEntityPlacements above). But "current position" can still
+  // collide: a *nested* container's own reported size can grow between
+  // when this level's neighboring positions were last set and now (its
+  // own internal layout just ran, above) -- verified directly against
+  // synSynth7.g, where several sibling groups' molecule-level layouts
+  // grew enough to overlap their neighbors even though every position
+  // involved was, individually, exactly where it already was. Discarding
+  // an *ordering* must never mean silently accepting a *collision*, so
+  // this is only ever used when it's actually still collision-free --
+  // otherwise the always-safe (if less minimal) grid pack above is used
+  // instead, regardless of what the score comparison said.
+  const currentPositionPacking = unlockedPackable.map((c) => {
+    const footprint = sizesMap.get(c.id);
+    const localX = c.x - currentBox.x;
+    const localY = c.y - currentBox.y;
+    return { id: c.id, localX, localY, right: localX + footprint.width, bottom: localY - footprint.height };
+  });
+  const keepCurrentPositions =
+    optimized.discarded && !anyOverlap([...currentPositionPacking, ...lockedEntityPlacements, ...lockedContainerBounds]);
+  const packedChildren = keepCurrentPositions ? currentPositionPacking : gridPacking;
+
   // `children` only ever holds entries assignAbsolutePositions should
   // actually move (a locked container is deliberately excluded, see
   // above) -- the bounding-box math just below additionally folds in
@@ -644,22 +689,20 @@ function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById,
   // size still actually contains it even though it's never repositioned.
   const children = [...packedChildren, ...lockedEntityPlacements];
   const allBounds = [...packedChildren, ...lockedEntityPlacements, ...lockedContainerBounds];
-  // When this level's own packing was discarded, every one of its
-  // children (packed or locked) is already sitting at its own current
-  // position -- so this container's true current size (not a freshly
-  // recomputed bounding box) is what actually belongs here. Recomputing
-  // it anyway can drift from the real footprint (this app's own
-  // CONTAINER_PADDING convention doesn't necessarily match whatever
-  // margin the container actually has), and that drift silently
-  // compounds upward: the *parent* level's own baseline-vs-candidate
-  // score compares against this container's reported size, so an
-  // inflated-but-unmoved child here still reads as "this got bigger" one
-  // level up -- verified directly against Repressillator.g, where every
-  // one of its 3 nested gene groups discarded correctly (score
-  // unchanged) yet the enclosing compartment's own baseline had already
-  // drifted up 22% purely from this, well past what its own 10% gate
-  // should ever have let through unnoticed.
-  localLayouts[rootId] = optimized.discarded
+  // When every child here truly kept its current position, this
+  // container's true current size (not a freshly recomputed bounding
+  // box) is what actually belongs here. Recomputing it anyway can drift
+  // from the real footprint (this app's own CONTAINER_PADDING convention
+  // doesn't necessarily match whatever margin the container actually
+  // has), and that drift silently compounds upward: the *parent* level's
+  // own baseline-vs-candidate score compares against this container's
+  // reported size, so an inflated-but-unmoved child here still reads as
+  // "this got bigger" one level up -- verified directly against
+  // Repressillator.g, where every one of its 3 nested gene groups
+  // discarded correctly (score unchanged) yet the enclosing compartment's
+  // own baseline had already drifted up 22% purely from this, well past
+  // what its own 10% gate should ever have let through unnoticed.
+  localLayouts[rootId] = keepCurrentPositions
     ? { children, width: currentBox.width, height: currentBox.height }
     : {
         children,
