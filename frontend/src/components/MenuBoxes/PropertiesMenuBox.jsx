@@ -134,6 +134,7 @@ export default function PropertiesMenuBox({
   onToggleFlip,
   onToggleCollapse,
   onAutoLayoutGroup,
+  onAutoLayoutGroupByFlow,
   onAutoLayoutRecursive,
   onClearLayoutLocks,
   selectedGroupScore,
@@ -397,6 +398,17 @@ export default function PropertiesMenuBox({
                 title="Lays out every nested group's own contents first, then this one, bottom-up -- everything below it rearranges, not just its own direct children."
               >
                 Auto-layout recursively
+              </Button>
+            </Grid>
+            <Grid size={12}>
+              <Button
+                fullWidth
+                size="small"
+                variant="outlined"
+                onClick={() => onAutoLayoutGroupByFlow(node.id)}
+                title="Arranges direct children top-to-bottom by information flow instead of by connector length -- inputs near the top, downstream targets near the bottom, with pools and reactions/enzymes/channels alternating rows (they only ever connect to each other, never their own kind). Deterministic: always applies, no 'would not improve' check. A locked child is left exactly where it is and excluded from the flow order -- lock a molecule to pin its own tier by hand."
+              >
+                Auto-layout by flow
               </Button>
             </Grid>
             <Grid size={12}>

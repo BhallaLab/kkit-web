@@ -5,11 +5,12 @@ moose_graph.py (which is purely about describing the live model for the
 canvas) since these are standalone analyses/exports, not graph extraction.
 """
 import math
+import re
 from collections import Counter
 
 import moose
 
-from moose_graph import build_graph, name_path
+from moose_graph import build_graph, name_path, compartment_name, _conc_scale, _rate_unit_label, _reac_orders, _stim_field
 
 
 # ---------------------------------------------------------------------
@@ -202,6 +203,31 @@ def compare_groups(root_a, root_b):
 # 2. Parameter + equation report (tabulate_model.g / model_eqns.g)
 # ---------------------------------------------------------------------
 
+def _round_sig(value, digits=4):
+    """Rounds a float to `digits` significant figures -- every unit
+    conversion this report applies (mM->uM, m^3->fL, Kf/Kb's order-scaled
+    conversion, ...) routinely produces recurring-decimal noise (e.g.
+    1000.0/3 -> 333.33333333333337) that a plain round(value, N) can't
+    fix uniformly across such different magnitudes. Bools/ints/strings
+    pass through untouched -- bool is checked first since Python's bool
+    is itself an int subclass -- and so does a non-finite/zero float,
+    since log10 has no meaningful "magnitude" for either."""
+    if isinstance(value, bool) or not isinstance(value, float):
+        return value
+    if value == 0 or not math.isfinite(value):
+        return value
+    magnitude = math.floor(math.log10(abs(value)))
+    # Python's own round(value, ndigits) (ndigits may be negative, rounding
+    # left of the decimal point) is correctly-rounded off the value's real
+    # decimal representation -- unlike multiplying by 10**k, rounding, then
+    # dividing back out, which can itself reintroduce the exact
+    # recurring-decimal float noise this function exists to remove (10**k
+    # for a large negative k, e.g. 1e-5, isn't exactly representable
+    # either, verified directly: 123456789.123 rounded that way came out
+    # 123499999.99999999, not a clean 123500000.0).
+    return round(value, digits - 1 - magnitude)
+
+
 def _equation_side(pools):
     """'2 A + B' style notation for a reaction/enzyme side -- counts
     repeated substrate/product pools (from a stoichiometry > 1 connection,
@@ -217,10 +243,79 @@ def _equation_side(pools):
     return " + ".join(f"{counts[n]} {n}" if counts[n] > 1 else n for n in order)
 
 
+def _function_inputs(f):
+    """The molecules feeding x0, x1, ... into a Function's own expr, in
+    that exact order. A Function's "x" child is a single Variable
+    element holding its whole input vector -- NOT a vec of numVars
+    separate elements (verified directly: indexing it by data-index,
+    x[0]/x[1]/..., just aliases back to the same one element every time)
+    -- so each input pool is read back off a single *repeated* "input"
+    destField instead, in MESSAGE order. Relying on message order for
+    "which slot is which" is the same assumption this file already makes
+    elsewhere for the identical reason (_equation_side's own left-to-
+    right reading of a reaction's substrate/product neighbors) -- verified
+    directly against a legacy .g SUMTOTAL-derived Function (synSynth7.g's
+    own tot_CaM_CaMKII): the two addmsg lines defining it appear in the
+    file in the same order neighbors['input'] returns them.
+
+    A Function built with zero inputs (a pure constant/time expression)
+    has no "x" child at all -- moose.element would create a bogus new one
+    if asked for a path that doesn't exist, so numVars == 0 is checked
+    first rather than trying and catching."""
+    if f.numVars == 0:
+        return []
+    x = moose.element(f.path + "/x")
+    return [moose.element(n).name for n in x.neighbors["input"]]
+
+
+def _build_functions_section(model_path):
+    """Point 14: "Stimuli" renamed to "Functions", Name AND Field columns
+    dropped (Name is this element's own synthetic "func" child name, never
+    meaningful to a reader; Field only ever describes which pool field is
+    being driven, and every Function this app creates always drives the
+    same one -- see _stim_field -- so the column never varied row to row
+    either) -- Target and Expression are what's actually informative, plus
+    a new Inputs column (see _function_inputs) so a reader can see which
+    molecules feed a summation without having to open the model. Only a
+    plain, complete "x0+x1+...+x(N-1)" expression (every one of the
+    function's own inputs, summed, nothing else) is worth collapsing to a
+    capital Sigma -- a product, a partial sum, or a constant would be
+    actively misrepresented by it, so those keep their literal expr text."""
+    funcs = [moose.element(f) for f in moose.wildcardFind(f"{model_path}/##[ISA=Function]")]
+    rows = []
+    for f in funcs:
+        target_path, _dest_field = _stim_field(f)
+        target_name = moose.element(target_path).name if target_path else ""
+        inputs = _function_inputs(f)
+        expected_sum = "+".join(f"x{i}" for i in range(len(inputs)))
+        is_plain_sum = bool(inputs) and f.expr.replace(" ", "") == expected_sum
+        expr_display = "Σ" if is_plain_sum else f.expr
+        rows.append([target_name, expr_display, ", ".join(inputs)])
+    return {
+        "title": "Functions",
+        "headers": ["Target", "Expression", "Inputs"],
+        "rows": rows,
+        "latexFormatters": {1: _latex_sigma},
+    }
+
+
 def build_report_sections(model_path):
     """A list of {title, headers, rows} sections -- a single intermediate
     form rendered to TSV/Markdown/LaTeX by the render_* functions below,
-    so the traversal logic (this function) is written exactly once."""
+    so the traversal logic (this function) is written exactly once.
+    Concentration-like fields are converted to this app's own default
+    display units (uM, s -- reusing moose_graph.py's own describe_pool/
+    describe_reac/describe_enz conversions rather than re-deriving them)
+    instead of MOOSE's native mM-based fields, so the report reads the
+    same units the live canvas already shows.
+
+    A section can carry an optional "latexFormatters": {col index:
+    formatter} -- see _render_latex -- overriding plain _latex_escape for
+    one column that needs real LaTeX notation instead (a "S + E --> P"
+    equation's arrow, or a "uM^-1.s^-1" unit's exponent). The TSV/Markdown
+    renderers below never look at this key, so those formats keep the
+    plain-ASCII text unchanged (perfectly readable there; only LaTeX
+    chokes on a bare "<=>"/"-->"/"^", see _render_latex)."""
     sections = []
 
     size = model_size(model_path)
@@ -233,11 +328,18 @@ def build_report_sections(model_path):
     compts = [moose.element(c) for c in moose.wildcardFind(f"{model_path}/##[ISA=CubeMesh]")]
     sections.append({
         "title": "Compartments",
-        "headers": ["Name", "Volume (m^3)"],
-        "rows": [[c.name, c.volume] for c in compts],
+        "headers": ["Name", "Volume (cubic microns, fL)"],
+        # 1 m^3 = 1e18 cubic microns = 1e18 fL (1 fL = 1 cubic micron,
+        # both being 1e-15 L) -- a single factor covers both unit names.
+        "rows": [[c.name, _round_sig(c.volume * 1e18)] for c in compts],
     })
 
-    groups = [moose.element(g) for g in moose.wildcardFind(f"{model_path}/##[CLASS=Neutral]")]
+    # Only Neutrals actually organizing the kinetic model itself -- kkit's
+    # own convention (this whole report is ported from GENESIS kkit's
+    # tabulate_model.g) puts every real reaction-diagram group under the
+    # compartment named "kinetics"; a bare wildcard from model_path also
+    # picks up unrelated bookkeeping Neutrals living outside it.
+    groups = [moose.element(g) for g in moose.wildcardFind(f"{model_path}/kinetics/##[CLASS=Neutral]")]
     sections.append({
         "title": "Groups",
         "headers": ["Name", "Parent"],
@@ -245,50 +347,89 @@ def build_report_sections(model_path):
     })
 
     pools = [moose.element(p) for p in moose.wildcardFind(f"{model_path}/##[ISA=PoolBase]")]
-    sections.append({
-        "title": "Pools",
-        "headers": ["Name", "concInit (mM)", "Volume (m^3)", "Buffered"],
-        "rows": [[p.name, p.concInit, p.volume, bool(p.isBuffered)] for p in pools],
-    })
+    # One table per containing compartment (see compartment_name), not one
+    # flat Pools table with a Volume column that just repeats the same
+    # parent compartment's volume on every one of its own pools' rows --
+    # that column carries no per-pool information at all, only its
+    # parent's, which the Compartments table above already states once.
+    pools_by_compt = {c.name: [] for c in compts}
+    for p in pools:
+        compt = compartment_name(p.path, model_path)
+        pools_by_compt.setdefault(compt or "(other)", []).append(p)
+    for compt_name, compt_pools in pools_by_compt.items():
+        if not compt_pools:
+            continue
+        sections.append({
+            "title": f"Pools ({compt_name})",
+            "headers": ["Name", "concInit (uM)", "Buffered"],
+            "rows": [[p.name, _round_sig(p.concInit * 1000.0), bool(p.isBuffered)] for p in compt_pools],
+        })
 
     reacs = [moose.element(r) for r in moose.wildcardFind(f"{model_path}/##[ISA=Reac]")]
+    reac_rows = []
+    for r in reacs:
+        sub_order, prd_order = _reac_orders(r)
+        # Same order-aware mM->uM scaling describe_reac already applies
+        # for the live canvas (see _conc_scale's own comment: Kf/Kb carry
+        # a *negative* concentration power, so this isn't a flat *1000).
+        kf_display = r.Kf / _conc_scale(sub_order)
+        kb_display = r.Kb / _conc_scale(prd_order)
+        # One row per reaction -- the equation already names every
+        # substrate/product, so a separate "Name" column is redundant
+        # with it, and numKb/numKf (the number.time-units twin of the
+        # concentration-based Kf/Kb just above) said nothing a reader
+        # can't already get from Kf/Kb themselves.
+        equation = f"{_equation_side(r.neighbors['sub'])} <=> {_equation_side(r.neighbors['prd'])}"
+        reac_rows.append([
+            equation,
+            _round_sig(kf_display), _rate_unit_label(sub_order, False),
+            _round_sig(kb_display), _rate_unit_label(prd_order, False),
+        ])
     sections.append({
-        "title": "Reactions (parameters)",
-        "headers": ["Name", "Kf", "Kb", "numKf", "numKb"],
-        "rows": [[r.name, r.Kf, r.Kb, r.numKf, r.numKb] for r in reacs],
-    })
-    sections.append({
-        "title": "Reactions (equations)",
-        "headers": ["Equation", "kf", "kb"],
-        "rows": [
-            [f"{_equation_side(r.neighbors['sub'])} <=> {_equation_side(r.neighbors['prd'])}",
-             r.numKf, r.numKb]
-            for r in reacs
-        ],
+        "title": "Reactions",
+        "headers": ["Equation", "Kf", "Kf unit", "Kb", "Kb unit"],
+        "rows": reac_rows,
+        "latexFormatters": {0: _latex_reac_arrow, 2: _latex_unit, 4: _latex_unit},
     })
 
     enzs = [moose.element(e) for e in moose.wildcardFind(f"{model_path}/##[ISA=EnzBase]")]
-    enz_param_rows = []
+    explicit_rows = []
+    mm_rows = []
     enz_eqn_rows = []
     for e in enzs:
         is_mm = "MMenz" in e.className
-        enz_param_rows.append([
-            e.name, "michaelis-menten" if is_mm else "explicit-complex",
-            e.Km if is_mm else e.k1, e.kcat if is_mm else e.k2,
-            "" if is_mm else e.k3,
-        ])
+        # Km/kcat/ratio are native MOOSE fields on EITHER mechanism (for
+        # explicit-complex, MOOSE derives them from k1/k2/k3 as read-only
+        # readouts -- see moose_graph.py's describe_enz, which already
+        # relies on this) -- reading them directly here avoids re-deriving
+        # kcat==k3/ratio==k2/k3 by hand.
+        km_display = _round_sig(e.Km * 1000.0)
+        kcat_display = _round_sig(e.kcat)
+        if is_mm:
+            mm_rows.append([e.name, km_display, kcat_display])
+        else:
+            explicit_rows.append([e.name, km_display, kcat_display, _round_sig(e.ratio)])
         sub_side = _equation_side(list(e.neighbors["sub"]) + [e.parent])
         prd_side = _equation_side(e.neighbors["prd"])
-        enz_eqn_rows.append([f"{sub_side} --{e.name}--> {prd_side}", e.kcat if is_mm else e.k3])
+        enz_eqn_rows.append([
+            f"{sub_side} --{e.name}--> {prd_side}",
+            "MM" if is_mm else "Mass Action",
+        ])
     sections.append({
-        "title": "Enzymes (parameters)",
-        "headers": ["Name", "Mechanism", "k1/Km", "k2/kcat", "k3"],
-        "rows": enz_param_rows,
+        "title": "Explicit-Complex Enzymes (parameters)",
+        "headers": ["Name", "Km (uM)", "kcat (1/s)", "ratio k2/k3 (dimensionless)"],
+        "rows": explicit_rows,
+    })
+    sections.append({
+        "title": "Michaelis-Menten Enzymes (parameters)",
+        "headers": ["Name", "Km (uM)", "kcat (1/s)"],
+        "rows": mm_rows,
     })
     sections.append({
         "title": "Enzymes (equations)",
-        "headers": ["Equation", "kcat/k3"],
+        "headers": ["Equation", "Type"],
         "rows": enz_eqn_rows,
+        "latexFormatters": {0: _latex_enz_arrow},
     })
 
     chans = [moose.element(c) for c in moose.wildcardFind(f"{model_path}/##[ISA=ConcChan]")]
@@ -299,23 +440,12 @@ def build_report_sections(model_path):
             [c.name, c.parent.name,
              moose.element(list(c.neighbors["in"])[0]).name if c.neighbors["in"] else "",
              moose.element(list(c.neighbors["out"])[0]).name if c.neighbors["out"] else "",
-             c.permeability]
+             _round_sig(c.permeability)]
             for c in chans
         ],
     })
 
-    stims = [moose.element(f) for f in moose.wildcardFind(f"{model_path}/##[ISA=Function]")]
-    from moose_graph import _stim_field
-    stim_rows = []
-    for f in stims:
-        target_path, dest_field = _stim_field(f)
-        target_name = moose.element(target_path).name if target_path else ""
-        stim_rows.append([f.name, target_name, dest_field or "", f.expr])
-    sections.append({
-        "title": "Stimuli",
-        "headers": ["Name", "Target", "Field", "Expression"],
-        "rows": stim_rows,
-    })
+    sections.append(_build_functions_section(model_path))
 
     return sections
 
@@ -358,8 +488,65 @@ def _latex_escape(value):
     return text
 
 
+# "<=>" and "--EnzName-->" are plain ASCII placeholders (see
+# build_report_sections/_equation_side) -- perfectly fine as-is for
+# TSV/Markdown, but LaTeX has no such ligature and _latex_escape's plain
+# per-character escaping would just print the literal dashes/angle
+# brackets rather than an actual arrow. These two formatters replace the
+# whole marker with a real math-mode arrow (\rightleftharpoons for a
+# reversible reaction, \xrightarrow{} labeled with the enzyme name for a
+# catalyzed one), while still routing each side's own text through
+# _latex_escape first -- a molecule name can itself contain an underscore
+# (e.g. "MAPK_P") that needs escaping same as any other cell.
+def _latex_reac_arrow(text):
+    if " <=> " not in text:
+        return _latex_escape(text)
+    sub, prd = text.split(" <=> ", 1)
+    return f"{_latex_escape(sub)} $\\rightleftharpoons$ {_latex_escape(prd)}"
+
+
+_ENZ_EQUATION_RE = re.compile(r"^(.*) --(.+)--> (.*)$")
+
+
+def _latex_enz_arrow(text):
+    m = _ENZ_EQUATION_RE.match(text)
+    if not m:
+        return _latex_escape(text)
+    sub, enz_name, prd = m.groups()
+    return f"{_latex_escape(sub)} $\\xrightarrow{{\\text{{{_latex_escape(enz_name)}}}}}$ {_latex_escape(prd)}"
+
+
+_UNIT_EXPONENT_RE = re.compile(r"\\textasciicircum\{\}(-?\d+)")
+
+
+def _latex_unit(text):
+    """A rate-constant unit label (see moose_graph.py's _rate_unit_label,
+    e.g. "µM^-1.s^-1") uses a bare "^" for its exponent -- _latex_escape's
+    own generic per-character escaping turns that into a literal
+    circumflex glyph (\\textasciicircum{}) followed by plain "-1" text,
+    not a real superscript. Escapes everything else the normal way first,
+    then replaces just the exponent with a proper LaTeX superscript. The
+    label's own leading micro sign (a raw Unicode µ, MICRO SIGN --
+    _MICROMOLAR's literal value) gets the same treatment for the same
+    reason: plain pdflatex has no font glyph for it without extra package
+    support, but its math-mode equivalent ($\\mu$) always renders."""
+    escaped = _UNIT_EXPONENT_RE.sub(r"$^{\1}$", _latex_escape(text))
+    return escaped.replace("µ", r"$\mu$")
+
+
+def _latex_sigma(text):
+    """The Functions table's own "Σ" summation marker (see
+    _build_functions_section) is the identical problem _latex_unit solves
+    for a bare micro sign -- a raw Unicode capital sigma has no plain-
+    pdflatex glyph either, but $\\Sigma$ always renders. Anything else in
+    this column (a function that isn't a plain summation keeps its
+    literal expr text) is just escaped normally."""
+    return r"$\Sigma$" if text == "Σ" else _latex_escape(text)
+
+
 def _render_latex(sections):
-    lines = [r"\documentclass{article}", r"\usepackage{booktabs}", r"\usepackage[margin=1in]{geometry}",
+    lines = [r"\documentclass{article}", r"\usepackage{amsmath}", r"\usepackage{booktabs}",
+             r"\usepackage[margin=1in]{geometry}",
              r"\begin{document}", r"\title{Model report}", r"\maketitle"]
     for sec in sections:
         lines.append(r"\section*{" + _latex_escape(sec["title"]) + "}")
@@ -369,8 +556,10 @@ def _render_latex(sections):
             lines.append(r"\toprule")
             lines.append(" & ".join(_latex_escape(h) for h in sec["headers"]) + r" \\")
             lines.append(r"\midrule")
+            formatters = sec.get("latexFormatters", {})
             for row in sec["rows"]:
-                lines.append(" & ".join(_latex_escape(v) for v in row) + r" \\")
+                cells = [formatters.get(i, _latex_escape)(v) for i, v in enumerate(row)]
+                lines.append(" & ".join(cells) + r" \\")
             lines.append(r"\bottomrule")
             lines.append(r"\end{tabular}")
         else:

@@ -36,6 +36,7 @@ export default function AppLayout({
   onToggleFlip,
   onToggleCollapse,
   onAutoLayoutGroup,
+  onAutoLayoutGroupByFlow,
   onAutoLayoutRecursive,
   onClearLayoutLocks,
   selectedGroupScore,
@@ -96,6 +97,7 @@ export default function AppLayout({
         onToggleFlip={onToggleFlip}
         onToggleCollapse={onToggleCollapse}
         onAutoLayoutGroup={onAutoLayoutGroup}
+        onAutoLayoutGroupByFlow={onAutoLayoutGroupByFlow}
         onAutoLayoutRecursive={onAutoLayoutRecursive}
         onClearLayoutLocks={onClearLayoutLocks}
         selectedGroupScore={selectedGroupScore}
