@@ -474,6 +474,46 @@ export function StimNode({ data, selected }) {
   );
 }
 
+// A summation Function (has one or more pool inputs feeding its own
+// expr -- see moose_graph.py's own _function_inputs/describe_stim split)
+// renders as a circle with a capital Sigma, the same general shape
+// ReacNode uses, plus TWO handle roles: an unnamed target handle (any
+// funcInput edge terminates here, exactly the same "one shared unnamed
+// handle for many edges" pattern PoolNode's own target/source handles
+// already use) for its pool inputs, and the same named "stimTip" source
+// handle StimNode uses for its own stimTarget edge to the driven pool --
+// a summation function still drives a target pool exactly the way a
+// genuine (zero-input) stim does, it just also has real incoming
+// connections worth drawing. Not itself re-connectable by dragging (both
+// handles are wired at creation time), same as StimNode/an enzyme's
+// structural parent link.
+export function FuncNode({ id, data, selected }) {
+  const flipped = !!data.flipped;
+  useFlipRemeasure(id, flipped);
+  return (
+    <div
+      style={{
+        ...baseStyle,
+        ...selectedStyle(selected),
+        background: data.color,
+        color: getContrastTextColor(data.color),
+        borderRadius: '50%',
+        textAlign: 'center',
+        fontSize: 48,
+      }}
+    >
+      <Handle type="target" position={flipped ? Position.Right : Position.Left} />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        id="stimTip"
+        style={{ ...dotHandleStyle, left: '50%', top: '95%', transform: 'translate(-50%, -50%)' }}
+      />
+      &#931;
+    </div>
+  );
+}
+
 // Groups and compartments are containers, not molecules -- rendered as a
 // box behind their contents (see App.jsx's zIndex/parentId wiring) with a
 // name label and a manual resize handle. Compartment gets a second inset
@@ -934,6 +974,7 @@ const PROXY_REAL_COMPONENT = {
   enz: EnzNode,
   concchan: ConcChanNode,
   stim: StimNode,
+  func: FuncNode,
 };
 
 // A stand-in for one specific entity that isolate mode has hidden (see
@@ -997,6 +1038,7 @@ export const nodeTypes = {
   enz: EnzNode,
   concchan: ConcChanNode,
   stim: StimNode,
+  func: FuncNode,
   // Registered as "kkitGroup", not "group" -- React Flow reserves the
   // literal type "group" for its own built-in group-node feature and
   // auto-applies a default CSS border to it (see App.jsx's

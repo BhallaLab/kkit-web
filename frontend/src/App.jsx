@@ -8,8 +8,8 @@ import {
   computeGridCells,
   computeFlipUpdates,
   optimizeGroupLayout,
-  computeFlowGroupLayout,
 } from './layoutSeed';
+import { computeFlowGroupLayout, SQUARE_FLOW_WEIGHTS } from './layoutGrid';
 import { computeLayoutScore } from './layoutScore';
 
 const API_BASE = `http://${window.location.hostname}:5001`;
@@ -108,6 +108,7 @@ const EDGE_STYLE = {
   chanIn: { stroke: 'green', strokeWidth: 1.75 },
   chanOut: { stroke: '#333', strokeWidth: 1.75 },
   stimTarget: { stroke: '#e63946', strokeDasharray: '2 2', strokeWidth: 1.75 },
+  funcInput: { stroke: 'green', strokeWidth: 1.75 },
 };
 
 // Which named Handle (see nodes.jsx) each edge type terminates on, on the
@@ -133,6 +134,10 @@ const EDITABLE_ENDPOINTS = {
   compartment: '/api/update_compartment',
   concchan: '/api/update_concchan',
   stim: '/api/update_stim',
+  // A summation function is still just a Function underneath (see
+  // moose_graph.py's own describe_stim/_function_inputs split) -- same
+  // backend endpoint, type-agnostic on that side already.
+  func: '/api/update_stim',
 };
 
 // The order-dependent fields describe_reac recomputes whenever a
@@ -505,30 +510,56 @@ function effectiveContainerBox(n, index, boxById) {
 
 // Each direct child's own footprint for grid-packing purposes -- a
 // nested container's real effective box (padded so its own border
-// doesn't sit flush against a neighbor's), or a flat AUTO_LAYOUT_CELL
-// square for a plain entity, which has no border/size concept of its own
-// to measure -- except a Pool (a "molecule", in kkit's own terms) with a
-// long name, which is given double that width. A Pool's real rendered box
-// is text-driven (see nodes.jsx's PoolNode -- padding plus a 28px font, no
-// fixed width), so a long name can render meaningfully wider than this
-// flat square; packing it into the same narrow cell every other plain
-// entity gets left it visually overlapping its neighbor once actually
-// rendered, even though the packing itself never considered that an
-// overlap. A coarse, cheap stand-in for properly measuring the rendered
-// text (which would need the same px-per-kkit-unit `scale` this function
-// doesn't have access to) -- good enough to give a long name noticeably
-// more breathing room without trying to be pixel-exact. Used for BOTH
+// doesn't sit flush against a neighbor's), or a flat `cellUnit` square
+// for a plain entity, which has no border/size concept of its own to
+// measure -- except a Pool or Enz (both name-labeled, "molecule"-like in
+// kkit's own terms) with a long name, which is given double that width.
+// A Pool's real rendered box is text-driven (see nodes.jsx's PoolNode --
+// padding plus a 28px font, no fixed width) and an Enz's own width is an
+// explicit `Math.max(ENZ_MIN_WIDTH, 24 + name.length*15)` formula (see
+// nodes.jsx's EnzNode) -- either way, a long name can render meaningfully
+// wider than this flat square; packing it into the same narrow cell
+// every other plain entity gets left it visually overlapping its
+// neighbor once actually rendered, even though the packing itself never
+// considered that an overlap (verified directly: a long-named enzyme in
+// a flow-layout group visibly overlapped its row neighbor, since only
+// pools got this treatment before). A coarse, cheap stand-in for
+// properly measuring the rendered text -- good enough to give a long
+// name noticeably more breathing room without trying to be pixel-exact.
+//
+// `cellUnit` -- the per-model, scale-aware "kkit unit" size (see
+// effectiveAutoLayoutCell below), NOT the plain AUTO_LAYOUT_CELL
+// constant directly: a fixed kkit-unit cell size stops corresponding to
+// a consistent ON-SCREEN size once `scale` (computeAutoScale, picked
+// fresh per model to fit that file's OWN native coordinate convention)
+// drifts far from its usual range -- verified directly against a real
+// file (Vinu_23Sep_with_gr.g) whose native units are roughly 200x
+// Kholodenko.g's own, forcing scale down to its floor and leaving every
+// auto-layout action's own cells far smaller on screen than an icon's
+// own fixed CSS size, reading as everything "crammed." Used for BOTH
 // onAutoLayoutGroup's own single-level packing and computeLocalLayouts'
 // per-level sizing (a nested *container*'s size there comes from its own
 // freshly-recomputed localLayouts entry instead, never this -- see
-// computeLocalLayouts' own comment -- since this would only ever read the
-// box as it stood *before* the whole operation started).
+// computeLocalLayouts' own comment -- since this would only ever read
+// the box as it stood *before* the whole operation started).
 const LONG_POOL_NAME_THRESHOLD = 10;
 
-function childFootprint(c, containerIndex, boxById) {
+// AUTO_LAYOUT_CELL (=3) was calibrated to look right at DEFAULT_SCALE
+// (=50px/unit) -- i.e. a target of roughly 3*50=150px per auto-layout
+// cell on screen. Recomputing the kkit-unit size as that SAME pixel
+// target divided by whatever `scale` THIS model actually got keeps the
+// on-screen result consistent regardless of a file's own native units,
+// instead of a fixed kkit-unit count that only happens to look right at
+// scales near the default.
+const AUTO_LAYOUT_CELL_PX_TARGET = AUTO_LAYOUT_CELL * DEFAULT_SCALE;
+function effectiveAutoLayoutCell(scale) {
+  return AUTO_LAYOUT_CELL_PX_TARGET / scale;
+}
+
+function childFootprint(c, containerIndex, boxById, cellUnit = AUTO_LAYOUT_CELL) {
   if (!CONTAINER_TYPES.includes(c.type)) {
-    const isLongPoolName = c.type === 'pool' && (c.name?.length ?? 0) > LONG_POOL_NAME_THRESHOLD;
-    return { width: isLongPoolName ? AUTO_LAYOUT_CELL * 2 : AUTO_LAYOUT_CELL, height: AUTO_LAYOUT_CELL };
+    const isLongName = (c.type === 'pool' || c.type === 'enz') && (c.name?.length ?? 0) > LONG_POOL_NAME_THRESHOLD;
+    return { width: isLongName ? cellUnit * 2 : cellUnit, height: cellUnit };
   }
   const box = effectiveContainerBox(c, containerIndex, boxById);
   return { width: box.width + CONTAINER_NESTING_PADDING, height: box.height + CONTAINER_NESTING_PADDING };
@@ -555,7 +586,7 @@ function childFootprint(c, containerIndex, boxById) {
 // necessary. The container's own *position* is what actually needed to
 // stay put (see assignAbsolutePositions/onAutoLayoutGroup, both
 // unaffected by this), not its size.
-function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, edges, perLevelBudgetMs) {
+function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, edges, perLevelBudgetMs, cellUnit = AUTO_LAYOUT_CELL) {
   const directChildren = rawNodes.filter(
     (n) => n.parentId === rootId && !(n.type === 'pool' && n.isEnzComplex)
   );
@@ -569,7 +600,7 @@ function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById,
   // below, just never gets a fresh internal layout or a new position.
   directChildren.forEach((child) => {
     if (CONTAINER_TYPES.includes(child.type) && !child.locked) {
-      computeLocalLayouts(child.id, rawNodes, rawById, containerIndex, boxById, localLayouts, edges, perLevelBudgetMs);
+      computeLocalLayouts(child.id, rawNodes, rawById, containerIndex, boxById, localLayouts, edges, perLevelBudgetMs, cellUnit);
     }
   });
   if (directChildren.length === 0) {
@@ -608,12 +639,12 @@ function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById,
         const own = localLayouts[c.id];
         return [c.id, { width: own.width + CONTAINER_NESTING_PADDING, height: own.height + CONTAINER_NESTING_PADDING }];
       }
-      return [c.id, childFootprint(c, containerIndex, boxById)];
+      return [c.id, childFootprint(c, containerIndex, boxById, cellUnit)];
     })
   );
   const unlockedSizes = unlockedPackable.map((c) => sizesMap.get(c.id));
   const { colWidth: baseColWidth, rowHeight: baseRowHeight, cols } = computeGridCells(
-    unlockedSizes.length > 0 ? unlockedSizes : [{ width: AUTO_LAYOUT_CELL, height: AUTO_LAYOUT_CELL }]
+    unlockedSizes.length > 0 ? unlockedSizes : [{ width: cellUnit, height: cellUnit }]
   );
   // Molecule-level packing keeps its own already-tuned cell size exactly
   // as-is; only a level whose repositionable children are themselves
@@ -632,7 +663,7 @@ function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById,
   const optimized = optimizeGroupLayout({ children: repositionable, edges, rawById, sizes: sizesMap, cols, colWidth, rowHeight, timeBudgetMs: perLevelBudgetMs });
 
   const lockedEntityPlacements = lockedEntities.map((c) => {
-    const footprint = childFootprint(c, containerIndex, boxById);
+    const footprint = childFootprint(c, containerIndex, boxById, cellUnit);
     const localX = c.x - currentBox.x;
     const localY = c.y - currentBox.y;
     return { id: c.id, localX, localY, right: localX + footprint.width, bottom: localY - footprint.height };
@@ -775,7 +806,7 @@ function buildFlowNodes(graph, scale, preserve = {}) {
       position: { x: relX * scale, y: -relY * scale },
       data: { ...n, color },
     };
-    if (n.type === 'pool' || n.type === 'reac' || n.type === 'enz' || n.type === 'concchan') {
+    if (n.type === 'pool' || n.type === 'reac' || n.type === 'enz' || n.type === 'concchan' || n.type === 'func') {
       node.data.flipped = preserve.flipped?.[n.id] ?? flips[n.id] ?? false;
     }
     if (n.type === 'enz' || n.type === 'concchan') {
@@ -970,6 +1001,13 @@ export default function App() {
   // auto-layout run can be undone, and running another auto-layout (or
   // undoing) replaces/clears it rather than accumulating history.
   const [autoLayoutUndoSnapshot, setAutoLayoutUndoSnapshot] = useState(null);
+  // True for the duration of any of the four layout actions below (Square/
+  // Square recursive/Flow/Randomize) -- each one is a batch of async
+  // position-update fetches followed by a refetch, so there's a real
+  // window where clicking another layout button (or the same one again)
+  // would race against work already in flight. PropertiesMenuBox disables
+  // the whole Layout section while this is true.
+  const [layoutRunning, setLayoutRunning] = useState(false);
 
   // Dose Response's whole panel state lives here (not as local state in
   // DoseResponseMenuBox) so it survives switching to another menu tab and
@@ -1108,8 +1146,9 @@ export default function App() {
     if (directChildren.length === 0) return null;
     const containerIndex = buildContainerIndex(rawNodes, rawById);
     const boxById = {};
+    const cellUnit = effectiveAutoLayoutCell(scale);
     const scoreNodes = directChildren.map((c) => {
-      const size = childFootprint(c, containerIndex, boxById);
+      const size = childFootprint(c, containerIndex, boxById, cellUnit);
       return {
         id: c.id,
         x: c.x,
@@ -1123,7 +1162,7 @@ export default function App() {
     });
     const scoreEdges = flowGraph.edges.map((e) => ({ id: e.id, source: e.source, target: e.target, type: e.data?.type }));
     return computeLayoutScore(scoreNodes, scoreEdges);
-  }, [selectedNode, flowGraph.nodes, flowGraph.edges]);
+  }, [selectedNode, flowGraph.nodes, flowGraph.edges, scale]);
 
   // An enz complex pool is never its own citizen on the canvas -- see
   // buildFlowNodes' own comment on why (no meaningful position, no edges,
@@ -1397,10 +1436,6 @@ export default function App() {
       const lockedChildren = directChildren.filter((c) => c.locked);
       if (unlockedChildren.length === 0) return;
 
-      const containerIndex = buildContainerIndex(rawNodes, rawById);
-      const boxById = {};
-      const sizes = new Map(directChildren.map((c) => [c.id, childFootprint(c, containerIndex, boxById)]));
-      const { colWidth, rowHeight, cols } = computeGridCells(unlockedChildren.map((c) => sizes.get(c.id)));
       // Anchored at the group's own *effective* box (see effectiveContainerBox),
       // not its raw x/y fields directly -- those only mean "top-left of the
       // box" for a group that's actually been explicitly sized at some point
@@ -1413,28 +1448,35 @@ export default function App() {
       // canvas instead of rearranging them roughly where they already are
       // (verified directly: children ended up scattered relative to their
       // *old* positions, not the group's own visible box).
+      setLayoutRunning(true);
+      const containerIndex = buildContainerIndex(rawNodes, rawById);
+      const boxById = {};
+      const cellUnit = effectiveAutoLayoutCell(scale);
+      const sizes = new Map(directChildren.map((c) => [c.id, childFootprint(c, containerIndex, boxById, cellUnit)]));
       const groupBox = effectiveContainerBox(group, containerIndex, boxById);
       const originX = groupBox.x + CONTAINER_PADDING;
       const originY = groupBox.y - CONTAINER_PADDING;
-      // Seed (connectivity-aware relaxation, or a radial hub-first
-      // placement, whichever scores better) plus simulated-annealing
-      // refinement against layoutScore.js's own connector-length/crossing/
-      // overlap/area score -- see layoutSeed.js's own optimizeGroupLayout
-      // and the planning discussion this shipped from. A result scoring
-      // more than 10% worse than the group's own current layout is
-      // discarded entirely below -- nothing gets sent to the backend at
-      // all in that case, not even a fallback rearrangement, so a user
-      // clicking this button can never make their own layout *worse*.
-      const optimized = optimizeGroupLayout({ children: directChildren, edges: flowGraph.edges, rawById, sizes, cols, colWidth, rowHeight });
-      if (optimized.discarded) {
-        setStatus('auto-layout would not improve this group -- left unchanged');
-        return;
-      }
-      const placements = optimized.order.map((child, i) => ({
-        child,
-        x: originX + (i % cols) * colWidth,
-        y: originY - Math.floor(i / cols) * rowHeight,
-      }));
+
+      // Item 4 (later feedback): "redo Square... almost same algorithm,
+      // just force the pool vs non-pool row structure." Square now
+      // shares Flow's own grid/swap engine (see SQUARE_FLOW_WEIGHTS'
+      // own comment) -- same alternation guarantee, same verified-
+      // improvement swap search, same discard-if-worse gate (never sent
+      // to the backend at all if it wouldn't actually improve, exactly
+      // as the old optimizeGroupLayout-based version already did), same
+      // refineFlips pass, just without Flow's own top-to-bottom bias.
+      const { positions, flips: squareFlips } = computeFlowGroupLayout({
+        children: directChildren,
+        edges: flowGraph.edges,
+        rawById,
+        sizes,
+        weights: SQUARE_FLOW_WEIGHTS,
+        cellUnit,
+      });
+      const placements = unlockedChildren.map((child) => {
+        const p = positions.get(child.id);
+        return { child, x: originX + p.x, y: originY + p.y };
+      });
       const lockedFootprints = lockedChildren.map((c) => ({ x: c.x, y: c.y, ...sizes.get(c.id) }));
 
       // Captured *before* anything is sent to the backend -- these are
@@ -1481,9 +1523,16 @@ export default function App() {
           // floor no later run could tighten back up, which is backwards
           // from what asking for a fresh layout is for: it read as dead
           // space inside the group, not "its contents rearranged".
+          const sizeById = new Map(directChildren.map((c) => [c.id, sizes.get(c.id)]));
           const leftEdges = [...placements.map((p) => p.x), ...lockedFootprints.map((f) => f.x)];
-          const rightEdges = [...placements.map((p) => p.x + colWidth), ...lockedFootprints.map((f) => f.x + f.width)];
-          const bottomEdges = [...placements.map((p) => p.y - rowHeight), ...lockedFootprints.map((f) => f.y - f.height)];
+          const rightEdges = [
+            ...placements.map((p) => p.x + sizeById.get(p.child.id).width),
+            ...lockedFootprints.map((f) => f.x + f.width),
+          ];
+          const bottomEdges = [
+            ...placements.map((p) => p.y - sizeById.get(p.child.id).height),
+            ...lockedFootprints.map((f) => f.y - f.height),
+          ];
           const topEdges = [...placements.map((p) => p.y), ...lockedFootprints.map((f) => f.y)];
           const width = Math.max(...rightEdges) - Math.min(...leftEdges) + CONTAINER_PADDING * 2;
           const height = Math.max(...topEdges) - Math.min(...bottomEdges) + CONTAINER_PADDING * 2;
@@ -1498,15 +1547,14 @@ export default function App() {
             setStatus(`error: ${res.error}`);
             return;
           }
-          // optimizeGroupLayout already computed the right flip for every
-          // reac/enz/concchan this operation touched, against the exact
-          // same final positions just committed above -- no need to
-          // re-derive it here the way a plain connectivity-aware pack
-          // used to require.
-          if (Object.keys(optimized.flips).length > 0) {
+          // computeFlowGroupLayout's own returned flips (see
+          // onAutoLayoutGroupByFlow's own matching comment) already
+          // reflect whichever grid it actually chose, verified against
+          // the real layout score -- no need to re-derive them here.
+          if (Object.keys(squareFlips).length > 0) {
             setFlowGraph((g) => ({
               ...g,
-              nodes: g.nodes.map((n) => (optimized.flips[n.id] !== undefined ? { ...n, data: { ...n.data, flipped: optimized.flips[n.id] } } : n)),
+              nodes: g.nodes.map((n) => (squareFlips[n.id] !== undefined ? { ...n, data: { ...n.data, flipped: squareFlips[n.id] } } : n)),
             }));
           }
           setAutoLayoutUndoSnapshot(undoSnapshot);
@@ -1518,9 +1566,10 @@ export default function App() {
           // disorienting even though the group's own new size is still
           // perfectly visible without it.
         })
-        .catch((err) => setStatus(`error: ${err}`));
+        .catch((err) => setStatus(`error: ${err}`))
+        .finally(() => setLayoutRunning(false));
     },
-    [flowGraph.nodes, flowGraph.edges]
+    [flowGraph.nodes, flowGraph.edges, scale]
   );
 
   // Sibling to onAutoLayoutGroup above, using computeFlowGroupLayout (a
@@ -1534,7 +1583,7 @@ export default function App() {
   // no meaningful "discard if worse" gate for it the way the grid-based
   // action has one.
   const onAutoLayoutGroupByFlow = useCallback(
-    (groupId) => {
+    (groupId, force = false) => {
       const rawNodes = flowGraph.nodes.map((n) => n.data);
       const rawById = {};
       rawNodes.forEach((n) => {
@@ -1552,14 +1601,22 @@ export default function App() {
       const unlockedChildren = directChildren.filter((c) => !c.locked);
       if (unlockedChildren.length === 0) return;
 
+      // Set before computeFlowGroupLayout's own (synchronous, occasionally
+      // slow-ish -- see layoutGrid.js's own FULL_SCORE_SIZE_LIMIT comment)
+      // call below, not just before the network round-trip that follows
+      // it -- React can't actually repaint mid-synchronous-call regardless,
+      // but this still covers the whole operation from the caller's own
+      // point of view, and is what the fetches' own async window needs.
+      setLayoutRunning(true);
       const containerIndex = buildContainerIndex(rawNodes, rawById);
       const boxById = {};
-      const sizes = new Map(directChildren.map((c) => [c.id, childFootprint(c, containerIndex, boxById)]));
+      const cellUnit = effectiveAutoLayoutCell(scale);
+      const sizes = new Map(directChildren.map((c) => [c.id, childFootprint(c, containerIndex, boxById, cellUnit)]));
       const groupBox = effectiveContainerBox(group, containerIndex, boxById);
       const originX = groupBox.x + CONTAINER_PADDING;
       const originY = groupBox.y - CONTAINER_PADDING;
 
-      const { positions } = computeFlowGroupLayout({ children: directChildren, edges: flowGraph.edges, rawById, sizes });
+      const { positions, flips: flowFlips } = computeFlowGroupLayout({ children: directChildren, edges: flowGraph.edges, rawById, sizes, force, cellUnit });
       const placements = unlockedChildren.map((child) => {
         const p = positions.get(child.id);
         return { child, x: originX + p.x, y: originY + p.y };
@@ -1619,38 +1676,142 @@ export default function App() {
             setStatus(`error: ${res.error}`);
             return;
           }
-          // computeFlowGroupLayout only decides *positions* -- flip
-          // orientation still needs its own pass, exactly the way
-          // onAutoLayoutRecursive's own whole-subtree flip recomputation
-          // works, using every repositioned reac/enz/concchan's connected
-          // pools' *final* absolute X.
-          const xById = {};
-          rawNodes.forEach((n) => {
-            xById[n.id] = n.x;
-          });
-          placements.forEach(({ child, x }) => {
-            xById[child.id] = x;
-          });
-          const lockedIds = new Set(rawNodes.filter((n) => n.locked).map((n) => n.id));
-          const candidateIds = unlockedChildren.map((c) => c.id);
-          const flips = computeFlipUpdates(candidateIds, rawById, flowGraph.edges, xById, lockedIds);
-          if (Object.keys(flips).length > 0) {
+          // computeFlowGroupLayout's own returned flips (see its own
+          // comment) already reflect whichever grid it actually chose,
+          // verified against the real layout score (layoutScore.js's
+          // refineFlips) rather than recomputed here from scratch with
+          // the plain "which side do my pools average out to" heuristic
+          // -- recomputing it here instead would silently throw away
+          // that verification and could re-introduce a flip the search
+          // had already confirmed was worse.
+          if (Object.keys(flowFlips).length > 0) {
             setFlowGraph((g) => ({
               ...g,
-              nodes: g.nodes.map((n) => (flips[n.id] !== undefined ? { ...n, data: { ...n.data, flipped: flips[n.id] } } : n)),
+              nodes: g.nodes.map((n) => (flowFlips[n.id] !== undefined ? { ...n, data: { ...n.data, flipped: flowFlips[n.id] } } : n)),
             }));
           }
           setAutoLayoutUndoSnapshot(undoSnapshot);
           refreshGraphRef.current?.();
         })
-        .catch((err) => setStatus(`error: ${err}`));
+        .catch((err) => setStatus(`error: ${err}`))
+        .finally(() => setLayoutRunning(false));
     },
-    [flowGraph.nodes, flowGraph.edges]
+    [flowGraph.nodes, flowGraph.edges, scale]
+  );
+
+  // A debugging tool, not a real layout strategy: scatters every unlocked
+  // direct child at a uniformly random position within a field roughly
+  // sized for the group's own child count (the same computeGridCells
+  // cols/colWidth/rowHeight a square layout would use, just sampled
+  // randomly within that footprint instead of packed into it) -- useful
+  // for shaking loose a layout that's stuck in some particular
+  // configuration, or for exercising the OTHER layout actions' own
+  // "does this actually improve things" gates against a deliberately bad
+  // starting point. No discard-if-worse check (there's nothing to
+  // compare against -- randomizing is never claimed to be an
+  // improvement), but same undo-snapshot/resize/refresh shape as every
+  // other layout action here, so "Undo last auto-layout" still reverts it.
+  const onRandomizeGroup = useCallback(
+    (groupId) => {
+      const rawNodes = flowGraph.nodes.map((n) => n.data);
+      const rawById = {};
+      rawNodes.forEach((n) => {
+        rawById[n.id] = n;
+      });
+      const group = rawById[groupId];
+      if (!group) return;
+      const directChildren = rawNodes.filter(
+        (n) => n.parentId === groupId && !(n.type === 'pool' && n.isEnzComplex)
+      );
+      if (directChildren.length === 0) return;
+      const unlockedChildren = directChildren.filter((c) => !c.locked);
+      const lockedChildren = directChildren.filter((c) => c.locked);
+      if (unlockedChildren.length === 0) return;
+
+      const containerIndex = buildContainerIndex(rawNodes, rawById);
+      const boxById = {};
+      const cellUnit = effectiveAutoLayoutCell(scale);
+      const sizes = new Map(directChildren.map((c) => [c.id, childFootprint(c, containerIndex, boxById, cellUnit)]));
+      const { colWidth, rowHeight, cols } = computeGridCells(unlockedChildren.map((c) => sizes.get(c.id)));
+      const rows = Math.max(1, Math.ceil(unlockedChildren.length / cols));
+      const fieldWidth = cols * colWidth;
+      const fieldHeight = rows * rowHeight;
+
+      const groupBox = effectiveContainerBox(group, containerIndex, boxById);
+      const originX = groupBox.x + CONTAINER_PADDING;
+      const originY = groupBox.y - CONTAINER_PADDING;
+      const placements = unlockedChildren.map((child) => ({
+        child,
+        x: originX + Math.random() * fieldWidth,
+        y: originY - Math.random() * fieldHeight,
+      }));
+      const lockedFootprints = lockedChildren.map((c) => ({ x: c.x, y: c.y, ...sizes.get(c.id) }));
+
+      const undoSnapshot = {
+        nodes: [
+          { id: groupId, x: group.x, y: group.y, width: group.width, height: group.height, isContainer: true },
+          ...directChildren.map((c) => ({
+            id: c.id,
+            x: c.x,
+            y: c.y,
+            width: c.width,
+            height: c.height,
+            flipped: c.flipped,
+            isContainer: CONTAINER_TYPES.includes(c.type),
+          })),
+        ],
+      };
+
+      setLayoutRunning(true);
+      Promise.all(
+        placements.map(({ child, x, y }) =>
+          fetch(`${API_BASE}/api/update_position`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: child.id, x, y }),
+          }).then((r) => r.json())
+        )
+      )
+        .then((results) => {
+          const failed = results.find((r) => r.error);
+          if (failed) throw new Error(failed.error);
+          const sizeById = new Map(directChildren.map((c) => [c.id, sizes.get(c.id)]));
+          const leftEdges = [...placements.map((p) => p.x), ...lockedFootprints.map((f) => f.x)];
+          const rightEdges = [
+            ...placements.map((p) => p.x + sizeById.get(p.child.id).width),
+            ...lockedFootprints.map((f) => f.x + f.width),
+          ];
+          const bottomEdges = [
+            ...placements.map((p) => p.y - sizeById.get(p.child.id).height),
+            ...lockedFootprints.map((f) => f.y - f.height),
+          ];
+          const topEdges = [...placements.map((p) => p.y), ...lockedFootprints.map((f) => f.y)];
+          const width = Math.max(...rightEdges) - Math.min(...leftEdges) + CONTAINER_PADDING * 2;
+          const height = Math.max(...topEdges) - Math.min(...bottomEdges) + CONTAINER_PADDING * 2;
+          return fetch(`${API_BASE}/api/update_position`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: groupId, x: groupBox.x, y: groupBox.y, width, height }),
+          }).then((r) => r.json());
+        })
+        .then((res) => {
+          if (res.error) {
+            setStatus(`error: ${res.error}`);
+            return;
+          }
+          setAutoLayoutUndoSnapshot(undoSnapshot);
+          refreshGraphRef.current?.();
+        })
+        .catch((err) => setStatus(`error: ${err}`))
+        .finally(() => setLayoutRunning(false));
+    },
+    [flowGraph.nodes, scale]
   );
 
   // Reverts whatever onAutoLayoutGroup/onAutoLayoutRecursive/
-  // onAutoLayoutGroupByFlow most recently applied, using whichever one's
-  // pre-operation snapshot it captured -- restores each touched node's
+  // onAutoLayoutGroupByFlow/onRandomizeGroup most recently applied, using
+  // whichever one's pre-operation snapshot it captured -- restores each
+  // touched node's
   // exact raw x/y (and width/height, for a
   // container) via the same /api/update_position endpoint the forward
   // operation used, then restores flips locally (frontend-only, see
@@ -1702,6 +1863,7 @@ export default function App() {
       const root = rawById[rootId];
       if (!root) return;
 
+      setLayoutRunning(true);
       // computeLocalLayouts calls optimizeGroupLayout once per nested,
       // unlocked container in the subtree -- a fixed per-call time budget
       // that's perfectly reasonable for a single "Auto-layout direct
@@ -1722,8 +1884,11 @@ export default function App() {
       const containerIndex = buildContainerIndex(rawNodes, rawById);
       const boxById = {};
       const localLayouts = {};
-      computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, flowGraph.edges, perLevelBudgetMs);
-      if (localLayouts[rootId].children.length === 0) return;
+      computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, flowGraph.edges, perLevelBudgetMs, effectiveAutoLayoutCell(scale));
+      if (localLayouts[rootId].children.length === 0) {
+        setLayoutRunning(false);
+        return;
+      }
 
       // The root of this operation keeps its own current position --
       // only its *contents* are being rearranged, so there's nothing
@@ -1807,9 +1972,10 @@ export default function App() {
           setAutoLayoutUndoSnapshot(undoSnapshot);
           refreshGraphRef.current?.();
         })
-        .catch((err) => setStatus(`error: ${err}`));
+        .catch((err) => setStatus(`error: ${err}`))
+        .finally(() => setLayoutRunning(false));
     },
-    [flowGraph.nodes, flowGraph.edges]
+    [flowGraph.nodes, flowGraph.edges, scale]
   );
 
   const nodeActions = useMemo(() => ({ onContainerResize }), [onContainerResize]);
@@ -1988,12 +2154,13 @@ export default function App() {
       const { flipped = node.data.flipped, ...backendFields } = fields;
       const endpoint = EDITABLE_ENDPOINTS[node.data.type];
       const body = { id: nodeId, fields: backendFields };
-      // A Stimulus's Save is gated on a negative-value check run against
-      // the Run panel's *current* runtime (see server.py's
-      // _check_stim_expr) -- sent along here rather than baked in at
-      // creation time, so editing later always checks against whatever
-      // duration is actually configured now.
-      if (node.data.type === 'stim') body.runtime = parseFloat(runtime) || 1;
+      // A Stimulus's (or summation Function's -- same underlying MOOSE
+      // Function, same expr field) Save is gated on a negative-value
+      // check run against the Run panel's *current* runtime (see
+      // server.py's _check_stim_expr) -- sent along here rather than
+      // baked in at creation time, so editing later always checks
+      // against whatever duration is actually configured now.
+      if (node.data.type === 'stim' || node.data.type === 'func') body.runtime = parseFloat(runtime) || 1;
       fetch(`${API_BASE}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2004,11 +2171,12 @@ export default function App() {
           if (updated.error) {
             setStatus(`error: ${updated.error}`);
             // The Properties panel doesn't stay visible if the user
-            // switches menus, so a rejected Stimulus save (most notably
-            // the negative-value check) needs a popup, not just the
-            // easy-to-miss status line -- Save simply does nothing else
-            // and the user's typed expression stays in the box to fix.
-            if (node.data.type === 'stim') window.alert(updated.error);
+            // switches menus, so a rejected Stimulus/Function save (most
+            // notably the negative-value check) needs a popup, not just
+            // the easy-to-miss status line -- Save simply does nothing
+            // else and the user's typed expression stays in the box to
+            // fix.
+            if (node.data.type === 'stim' || node.data.type === 'func') window.alert(updated.error);
             return;
           }
           // Renaming an object changes its MOOSE path, which is what we use
@@ -2859,7 +3027,9 @@ export default function App() {
       onAutoLayoutGroup={onAutoLayoutGroup}
       onAutoLayoutGroupByFlow={onAutoLayoutGroupByFlow}
       onAutoLayoutRecursive={onAutoLayoutRecursive}
+      onRandomizeGroup={onRandomizeGroup}
       onClearLayoutLocks={onClearLayoutLocks}
+      layoutRunning={layoutRunning}
       selectedGroupScore={selectedGroupScore}
       onUndoLayout={onUndoLayout}
       canUndoLayout={!!autoLayoutUndoSnapshot}

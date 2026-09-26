@@ -582,6 +582,23 @@ const PROXY_LAYOUT = {
     size: () => ({ width: 46, height: 56 }),
     handles: (w, h) => [{ id: 'stimTip', type: 'source', position: 'bottom', x: w * 0.38, y: h }],
   },
+  // A summation Function renders as a circle, same shape/size class as
+  // a Reac (nodes.jsx's FuncNode shares ReacNode's exact baseStyle/48px-
+  // font circle) -- NOT stim's own lightning-bolt box, even though it
+  // shares stim's bottom stimTip handle (centered, matching FuncNode's
+  // own `left: '50%'` CSS, unlike stim's own off-center 0.38). Missing
+  // this entry fell back to DEFAULT_PROXY_SIZE (90x36 -- a genuinely
+  // flat rectangle) with generic left/right handles that don't match
+  // FuncNode's real left-target/bottom-stimTip handles at all -- this is
+  // what read as "a large flat rectangle with no Sigma inside" once a
+  // func node's own group got collapsed under isolate mode.
+  func: {
+    size: () => ({ width: 90, height: 90 }),
+    handles: (w, h) => [
+      { type: 'target', position: 'left', x: 0, y: h / 2 },
+      { id: 'stimTip', type: 'source', position: 'bottom', x: w / 2, y: h },
+    ],
+  },
 };
 const DEFAULT_PROXY_SIZE = { width: 90, height: 36 };
 

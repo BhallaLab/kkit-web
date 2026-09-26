@@ -10,7 +10,7 @@ from collections import Counter
 
 import moose
 
-from moose_graph import build_graph, name_path, compartment_name, _conc_scale, _rate_unit_label, _reac_orders, _stim_field
+from moose_graph import build_graph, name_path, compartment_name, _conc_scale, _rate_unit_label, _reac_orders, _stim_field, _function_inputs
 
 
 # ---------------------------------------------------------------------
@@ -243,31 +243,6 @@ def _equation_side(pools):
     return " + ".join(f"{counts[n]} {n}" if counts[n] > 1 else n for n in order)
 
 
-def _function_inputs(f):
-    """The molecules feeding x0, x1, ... into a Function's own expr, in
-    that exact order. A Function's "x" child is a single Variable
-    element holding its whole input vector -- NOT a vec of numVars
-    separate elements (verified directly: indexing it by data-index,
-    x[0]/x[1]/..., just aliases back to the same one element every time)
-    -- so each input pool is read back off a single *repeated* "input"
-    destField instead, in MESSAGE order. Relying on message order for
-    "which slot is which" is the same assumption this file already makes
-    elsewhere for the identical reason (_equation_side's own left-to-
-    right reading of a reaction's substrate/product neighbors) -- verified
-    directly against a legacy .g SUMTOTAL-derived Function (synSynth7.g's
-    own tot_CaM_CaMKII): the two addmsg lines defining it appear in the
-    file in the same order neighbors['input'] returns them.
-
-    A Function built with zero inputs (a pure constant/time expression)
-    has no "x" child at all -- moose.element would create a bogus new one
-    if asked for a path that doesn't exist, so numVars == 0 is checked
-    first rather than trying and catching."""
-    if f.numVars == 0:
-        return []
-    x = moose.element(f.path + "/x")
-    return [moose.element(n).name for n in x.neighbors["input"]]
-
-
 def _build_functions_section(model_path):
     """Point 14: "Stimuli" renamed to "Functions", Name AND Field columns
     dropped (Name is this element's own synthetic "func" child name, never
@@ -286,11 +261,12 @@ def _build_functions_section(model_path):
     for f in funcs:
         target_path, _dest_field = _stim_field(f)
         target_name = moose.element(target_path).name if target_path else ""
-        inputs = _function_inputs(f)
-        expected_sum = "+".join(f"x{i}" for i in range(len(inputs)))
-        is_plain_sum = bool(inputs) and f.expr.replace(" ", "") == expected_sum
+        input_paths = _function_inputs(f)
+        input_names = [moose.element(p).name for p in input_paths]
+        expected_sum = "+".join(f"x{i}" for i in range(len(input_paths)))
+        is_plain_sum = bool(input_paths) and f.expr.replace(" ", "") == expected_sum
         expr_display = "Σ" if is_plain_sum else f.expr
-        rows.append([target_name, expr_display, ", ".join(inputs)])
+        rows.append([target_name, expr_display, ", ".join(input_names)])
     return {
         "title": "Functions",
         "headers": ["Target", "Expression", "Inputs"],

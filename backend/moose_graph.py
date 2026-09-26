@@ -416,16 +416,53 @@ def _stim_field(func):
     return None, None
 
 
+def _function_inputs(f):
+    """The PATHS of the molecules feeding x0, x1, ... into a Function's
+    own expr, in that exact order. A Function's "x" child is a single
+    Variable element holding its whole input vector -- NOT a vec of
+    numVars separate elements (verified directly: indexing it by data-
+    index, x[0]/x[1]/..., just aliases back to the same one element every
+    time) -- so each input pool is read back off a single *repeated*
+    "input" destField instead, in MESSAGE order. Relying on message order
+    for "which slot is which" is the same assumption this app already
+    makes elsewhere for the identical reason (model_tools.py's own
+    _equation_side, reading a reaction's substrate/product neighbors
+    left-to-right) -- verified directly against a legacy .g SUMTOTAL-
+    derived Function (synSynth7.g's own tot_CaM_CaMKII): the two addmsg
+    lines defining it appear in the file in the same order
+    neighbors['input'] returns them.
+
+    A Function built with zero inputs (a pure constant/time expression)
+    has no "x" child at all -- moose.element would create a bogus new one
+    if asked for a path that doesn't exist, so numVars == 0 is checked
+    first rather than trying and catching."""
+    if f.numVars == 0:
+        return []
+    x = moose.element(f.path + "/x")
+    return [moose.element(n).path for n in x.neighbors["input"]]
+
+
 def describe_stim(path):
+    """A Function is either a genuine stimulus (drives a target pool from
+    an expression with no pool inputs -- a pure constant or time-based
+    driver) or a summation function (has one or more pool inputs feeding
+    its own x0, x1, ... -- see _function_inputs). Both still drive a
+    target pool the same way (_stim_field), but only the latter has real
+    incoming connections worth drawing -- distinguished here by node type
+    ("stim" vs "func") so the frontend can render/lay each out
+    differently (see build_graph's own "funcInput" edges for the summation
+    case)."""
     f = moose.element(path)
     target_id, dest_field = _stim_field(f)
-    return _node(f, "stim", {
+    input_ids = _function_inputs(f)
+    return _node(f, "func" if input_ids else "stim", {
         "expr": f.expr,
         "targetId": target_id,
         # "conc" / "concInit" -- stripped of the "set" prefix moose's dest
         # field names carry, to match the plain field names used elsewhere
         # in this API (e.g. describe_pool's own "conc"/"concInit" keys).
         "field": dest_field[3].lower() + dest_field[4:] if dest_field else None,
+        "inputIds": input_ids,
     })
 
 
@@ -541,6 +578,8 @@ def build_graph(model_path, extra_plot_windows=None, extra_collapsed=None):
         nodes.append(node)
         if node["targetId"]:
             add_edge(f.path, node["targetId"], "stimTarget")
+        for input_id in node["inputIds"]:
+            add_edge(input_id, f.path, "funcInput")
 
     for node in nodes:
         node["parentId"] = container_parent_id(node["id"], model_path)

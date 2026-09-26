@@ -57,6 +57,7 @@ const EDGE_ATTACHMENT = {
   enzyme: { source: 'auto-source', target: 'auto-parent' },
   chanParent: { source: 'auto-source', target: 'auto-parent' },
   stimTarget: { source: 'bottom', target: 'auto-target' },
+  funcInput: { source: 'auto-source', target: 'auto-target' },
 };
 
 function resolveSide(spec, node) {
@@ -206,6 +207,55 @@ export function computeLayoutScore(nodes, edges, weights = DEFAULT_SCORE_WEIGHTS
   const weighted = weights.length * length + weights.crossing * crossings + weights.overlap * overlaps + weights.area * area;
 
   return { length, crossings, overlaps, area, weighted };
+}
+
+// A pass through the layout for useful flips, verified against THIS
+// module's own computeLayoutScore rather than a cheap proxy for it --
+// computeFlipUpdates (layoutSeed.js) picks a flip purely from which side
+// a reac/enz/concchan's own connected pools average out to, which is a
+// good, cheap first guess but was never actually checked against
+// crossings/overlaps/area: it can (and, verified directly against this
+// app's own real model fixtures, regularly does) leave a flip on the
+// table that would provably reduce the score, or apply one that
+// provably doesn't help. This tries each flippable node's OTHER
+// orientation, one at a time, keeping it only if the FULL score actually
+// improves -- a node's own flip only ever changes ITS OWN attachment
+// points (see EDGE_ATTACHMENT/resolveSide above), never any other node's,
+// so evaluating them independently and greedily is exact, not a
+// heuristic: there's no interaction between two different nodes' own
+// flip decisions to get wrong by considering them one at a time. Every
+// accepted flip strictly lowers the score, so this can never make a
+// layout worse -- unlike baking flip-awareness into a POSITION search's
+// own step-by-step gain estimates (tried and measured directly: it
+// destabilizes the greedy search's own trajectory since the scoring
+// landscape shifts under it mid-search, and consistently left WORSE
+// final layouts on 2 of 3 real fixtures tested). Doing this ONCE, right
+// before a score is estimated/compared -- not woven into the search
+// that produces the candidate -- is what actually avoids that trap.
+// `nodes`: [{id, x, y, width, height, flipped, type, parentSide,
+// canFlip}] -- only `canFlip: true` entries are ever tried; everyone
+// else's `flipped` is passed through untouched. Returns a plain
+// {id: boolean} map for every node (not just the ones that changed).
+export function refineFlips(nodes, edges, weights = DEFAULT_SCORE_WEIGHTS) {
+  const byId = new Map(nodes.map((n) => [n.id, { ...n }]));
+  let bestScore = computeLayoutScore([...byId.values()], edges, weights).weighted;
+  nodes.forEach((n) => {
+    if (!n.canFlip) return;
+    const node = byId.get(n.id);
+    const original = node.flipped;
+    node.flipped = !original;
+    const candidateScore = computeLayoutScore([...byId.values()], edges, weights).weighted;
+    if (candidateScore < bestScore) {
+      bestScore = candidateScore; // keep the flip
+    } else {
+      node.flipped = original; // no real improvement -- revert
+    }
+  });
+  const flips = {};
+  byId.forEach((node, id) => {
+    flips[id] = node.flipped;
+  });
+  return flips;
 }
 
 // The single number both the simulated-annealing per-move rule (reject

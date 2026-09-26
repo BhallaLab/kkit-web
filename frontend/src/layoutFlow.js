@@ -1,34 +1,22 @@
-// Sugiyama-style layered/hierarchical layout: greedy feedback-arc-set
-// (cycle breaking) -> longest-path layering -> barycenter within-layer
-// ordering -> coordinate assignment. Pure, no React/backend deps -- same
-// testing/reuse rationale as layoutScore.js/layoutSeed.js (independently
-// testable from a bare `node script.mjs`, safe to call from a tight loop).
+// Two pure graph-order primitives shared by the grid-based flow layout
+// (layoutGrid.js): cycle-breaking and longest-path depth. Both used
+// purely as RANKING functions there (a sort key and a loss-function
+// input), not to assign rows the way an earlier version of this file's
+// own assignLayers/orderWithinLayers/assignFlowCoordinates did -- that
+// whole layered-row coordinate model is gone, replaced by a fixed grid
+// with alternation enforced structurally (see layoutGrid.js's own
+// module comment). Kept as their own file (rather than folded into
+// layoutGrid.js directly) for the same testing/reuse rationale as
+// layoutScore.js/layoutSeed.js: pure, no React/backend deps,
+// independently testable from a bare `node script.mjs`.
 //
-// Coordinate convention matches layoutScore.js exactly: raw kkit units,
-// Y-up, a node's x/y is its top-left corner.
-//
-// Deliberately generic over "nodes + directed edges" -- the same four
-// functions serve both the molecule-level layout (pool <-> reac/enz/
-// concchan/stim is an exactly bipartite graph by schema, so alternating
-// rows fall straight out of layering with no special-casing) and,
-// eventually, the group-level layout (a collapsed group-to-group
-// digraph). Callers own which edges count as "flow" for a given level --
-// e.g. an enzyme's own structural link to its host pool is not a flow
-// edge and should be filtered out before calling in here, the same way
-// layoutScore.js's own module comment leaves node sizing to its callers.
-
-const DEFAULT_NODE_SIZE = 3;
-
-function nodeWidth(size) {
-  return size?.width > 0 ? size.width : DEFAULT_NODE_SIZE;
-}
-function nodeHeight(size) {
-  return size?.height > 0 ? size.height : DEFAULT_NODE_SIZE;
-}
+// Deliberately generic over "nodes + directed edges", not specific to
+// the pool/non-pool bipartite schema -- layoutGrid.js's own callers own
+// which edges count as "flow" for a given level.
 
 // Real reaction networks routinely have feedback loops (autoinhibition,
 // feedback phosphorylation, the repressilator's own 3-node cycle) --
-// longest-path layering needs an acyclic graph to work on, so this picks
+// longest-path depth needs an acyclic graph to work on, so this picks
 // which edges to treat as "backward" (against the flow) first. Eades-Lin-
 // Smyth greedy heuristic: repeatedly strip every current sink to the back
 // of the order and every current source to the front; when neither
@@ -116,17 +104,20 @@ export function greedyFeedbackArcSet(ids, edges) {
   return { order, backEdgeIndices };
 }
 
-// Longest-path layering over the acyclic (forward-edges-only) graph --
-// layer(v) = 0 for a source, else 1 + max(layer(predecessor)). Taking the
-// *longest* incoming path (not shortest, not first-found) is what keeps
-// every edge pointing strictly downward instead of occasionally skipping
-// backward -- a node with dependencies at very different depths always
-// settles below its deepest one. `pinnedLayers` (nodeId -> layer number)
-// lets a locked node's layer stand as a fixed point instead of being
-// computed -- its own successors still layer normally off of it, only its
-// own value is overridden (mirrors how `locked` already means "trust the
-// user" everywhere else in this app).
-export function assignLayers(ids, edges, backEdgeIndices, pinnedLayers = new Map()) {
+// Longest-path depth over the acyclic (forward-edges-only) graph --
+// depth(v) = 0 for a source, else 1 + max(depth(predecessor)). Taking
+// the *longest* incoming path (not shortest, not first-found) is what
+// keeps every edge pointing toward increasing depth instead of
+// occasionally skipping backward -- a node with dependencies at very
+// different depths always settles below its deepest one. Purely a
+// ranking output now (a sort key and a loss-function input for
+// layoutGrid.js -- see its own flowTerm/initial-placement comments), not
+// a row assignment -- callers needing "push this node toward the front/
+// back" (an isolated node, a detected output boundary, ...) adjust the
+// returned depth value directly afterward rather than pinning it during
+// the computation, since nothing downstream needs the recursion itself
+// to respect that override.
+export function computeFlowDepth(ids, edges, backEdgeIndices) {
   const idSet = new Set(ids);
   const preds = new Map(ids.map((id) => [id, []]));
   const succs = new Map(ids.map((id) => [id, []]));
@@ -164,10 +155,6 @@ export function assignLayers(ids, edges, backEdgeIndices, pinnedLayers = new Map
   // First pass: plain longest-path over the forward-only graph.
   const firstPass = new Map();
   topoOrder.forEach((id) => {
-    if (pinnedLayers.has(id)) {
-      firstPass.set(id, pinnedLayers.get(id));
-      return;
-    }
     const ps = preds.get(id);
     firstPass.set(id, ps.length === 0 ? 0 : Math.max(...ps.map((p) => firstPass.get(p) ?? 0)) + 1);
   });
@@ -181,13 +168,12 @@ export function assignLayers(ids, edges, backEdgeIndices, pinnedLayers = new Map
   // of exactly this), forms a cycle with its own shared pools, and FAS
   // has to cut *something* to break it. A back edge into such a node
   // still carries real information even though it couldn't be used for
-  // the acyclic pass itself -- floor its layer at one past whatever that
-  // predecessor's own (first-pass) layer already was, rather than leaving
-  // it stranded at 0 as if it were a true source (which, left uncorrected,
-  // mixes a non-pool in with genuine layer-0 input pools). A second full
-  // pass -- not just patching the affected nodes in isolation -- lets
-  // that corrected floor cascade to everything downstream of it too,
-  // using `firstPass` (not the being-built `layerOf`) as the floor's own
+  // the acyclic pass itself -- floor its depth at one past whatever that
+  // predecessor's own (first-pass) depth already was, rather than leaving
+  // it stranded at 0 as if it were a true source. A second full pass --
+  // not just patching the affected nodes in isolation -- lets that
+  // corrected floor cascade to everything downstream of it too, using
+  // `firstPass` (not the being-built `depthOf`) as the floor's own
   // source so this can never cycle back on itself.
   const floors = new Map();
   edges.forEach((e, i) => {
@@ -198,139 +184,10 @@ export function assignLayers(ids, edges, backEdgeIndices, pinnedLayers = new Map
     if ((floors.get(e.target) ?? -1) < floor) floors.set(e.target, floor);
   });
 
-  const layerOf = new Map();
+  const depthOf = new Map();
   topoOrder.forEach((id) => {
-    if (pinnedLayers.has(id)) {
-      layerOf.set(id, pinnedLayers.get(id));
-      return;
-    }
     const ps = preds.get(id);
-    layerOf.set(id, ps.length === 0 ? floors.get(id) ?? 0 : Math.max(...ps.map((p) => layerOf.get(p) ?? 0)) + 1);
+    depthOf.set(id, ps.length === 0 ? floors.get(id) ?? 0 : Math.max(...ps.map((p) => depthOf.get(p) ?? 0)) + 1);
   });
-  return layerOf;
-}
-
-// Classic median/barycenter crossing-reduction sweep: within each row,
-// reorder nodes by the average position (in its own current order) of
-// their neighbors in the adjacent row, alternating top-down and
-// bottom-up passes over several iterations. Uses *every* edge (including
-// back edges) for this, not just the forward ones layering used -- a
-// feedback edge still draws a real line on screen that benefits from
-// being kept short/uncrossed, even though it doesn't get a say in which
-// row anything lands on. A node with no neighbors in the reference row
-// keeps its current position (stable sort), so unrelated nodes don't get
-// shuffled for no reason.
-export function orderWithinLayers(ids, layerOf, edges, iterations = 4) {
-  const idSet = new Set(ids);
-  const byLayer = new Map();
-  ids.forEach((id) => {
-    const l = layerOf.get(id) ?? 0;
-    if (!byLayer.has(l)) byLayer.set(l, []);
-    byLayer.get(l).push(id);
-  });
-  const layers = [...byLayer.keys()].sort((a, b) => a - b);
-
-  const orderOf = new Map();
-  layers.forEach((l) => {
-    byLayer.get(l).forEach((id, i) => orderOf.set(id, i));
-  });
-
-  const neighbors = new Map(ids.map((id) => [id, []]));
-  edges.forEach((e) => {
-    if (e.source === e.target) return;
-    if (!idSet.has(e.source) || !idSet.has(e.target)) return;
-    neighbors.get(e.source).push(e.target);
-    neighbors.get(e.target).push(e.source);
-  });
-
-  function sweepLayer(l, refLayer) {
-    const row = [...byLayer.get(l)].sort((a, b) => orderOf.get(a) - orderOf.get(b));
-    const scored = row.map((id) => {
-      const neigh = neighbors.get(id).filter((n) => (layerOf.get(n) ?? -1) === refLayer);
-      const key = neigh.length === 0 ? orderOf.get(id) : neigh.reduce((sum, n) => sum + orderOf.get(n), 0) / neigh.length;
-      return { id, key };
-    });
-    scored.sort((a, b) => a.key - b.key);
-    scored.forEach((s, i) => orderOf.set(s.id, i));
-  }
-
-  for (let iter = 0; iter < iterations; iter++) {
-    for (let li = 1; li < layers.length; li++) sweepLayer(layers[li], layers[li - 1]);
-    for (let li = layers.length - 2; li >= 0; li--) sweepLayer(layers[li], layers[li + 1]);
-  }
-  return orderOf;
-}
-
-// Turns (layer, order-within-layer) into real positions.
-//
-// The cross axis (left-right for a top-to-bottom flow, or up-down for a
-// left-to-right one -- see `orientation`) uses ONE uniform pitch for
-// EVERY tier, not each tier's own content width -- this is what makes a
-// hex/brick pattern actually interlock: every tier shares the same
-// rhythm, so an odd tier shifted by exactly half that pitch nestles
-// between the tier above and below it regardless of how many items
-// either one holds. A per-tier content-driven width (the original
-// design) breaks this the moment two tiers have different item counts --
-// each tier ends up independently centered/left-packed at its own scale,
-// so the "offset" stops meaning anything consistent and reads as
-// arbitrary rather than a grid (verified directly against a real,
-// unevenly-populated group). No centering is applied for the same
-// reason: every tier already shares the same slot 0 origin, so a shorter
-// tier is simply shorter, not re-centered against the longest one.
-//
-// `orientation: 'horizontal'` swaps which axis is "layer" (flow
-// direction) and which is "position within a tier" -- for a graph that
-// naturally layers into many tiers with few items each, stacking tiers
-// top-to-bottom produces an unusably tall, narrow result; turning the
-// same layering sideways (tiers become columns, flow runs left-to-right)
-// keeps the same information and reads far better. Which orientation to
-// pick is the caller's call (it depends on the layer count vs. typical
-// tier size, which this module has no opinion on) -- this only executes
-// the choice once made.
-export function assignFlowCoordinates({ ids, layerOf, orderOf, sizes, hexOffset = false, colGap = 2, rowGap = 3, orientation = 'vertical' }) {
-  const byLayer = new Map();
-  ids.forEach((id) => {
-    const l = layerOf.get(id) ?? 0;
-    if (!byLayer.has(l)) byLayer.set(l, []);
-    byLayer.get(l).push(id);
-  });
-  const layers = [...byLayer.keys()].sort((a, b) => a - b);
-  layers.forEach((l) => {
-    byLayer.get(l).sort((a, b) => (orderOf.get(a) ?? 0) - (orderOf.get(b) ?? 0));
-  });
-
-  const vertical = orientation !== 'horizontal';
-  const crossSize = (id) => (vertical ? nodeWidth(sizes.get(id)) : nodeHeight(sizes.get(id)));
-  const mainSize = (id) => (vertical ? nodeHeight(sizes.get(id)) : nodeWidth(sizes.get(id)));
-
-  const crossPitch = Math.max(...ids.map(crossSize)) + colGap;
-  const hexShift = hexOffset ? crossPitch / 2 : 0;
-
-  const positions = new Map();
-  let mainPos = 0;
-  layers.forEach((l, li) => {
-    const row = byLayer.get(l);
-    const crossOffset = li % 2 === 1 ? hexShift : 0;
-    row.forEach((id, i) => {
-      const cross = crossOffset + i * crossPitch;
-      positions.set(id, vertical ? { x: cross, y: mainPos } : { x: mainPos, y: -cross });
-    });
-    const extent = Math.max(...row.map(mainSize));
-    mainPos += vertical ? -(extent + rowGap) : extent + rowGap;
-  });
-  return positions;
-}
-
-// Top-level orchestrator wiring all four stages together -- see each
-// stage's own comment for why it exists. `edges` should already be
-// filtered by the caller to whatever this level considers a "flow" edge
-// (e.g. an enzyme's structural link to its host pool is excluded at the
-// molecule level; a group's structural containment has no analogue at
-// all). `pinnedLayers` carries forward a locked node's fixed row, if any.
-export function computeFlowLayout({ ids, edges, sizes, pinnedLayers = new Map(), hexOffset = false, colGap = 2, rowGap = 3, orientation = 'vertical', iterations = 4 }) {
-  const { backEdgeIndices } = greedyFeedbackArcSet(ids, edges);
-  const layerOf = assignLayers(ids, edges, backEdgeIndices, pinnedLayers);
-  const orderOf = orderWithinLayers(ids, layerOf, edges, iterations);
-  const positions = assignFlowCoordinates({ ids, layerOf, orderOf, sizes, hexOffset, colGap, rowGap, orientation });
-  return { positions, layerOf, backEdgeIndices };
+  return depthOf;
 }

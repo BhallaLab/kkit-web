@@ -84,7 +84,7 @@ function initialFieldsFor(node) {
   // expr is free text (a muParser-style expression, function of t), not a
   // number -- kept as a plain string rather than run through
   // formatNumber/parseFloat the way every other editable field is.
-  if (node.type === 'stim') fields.expr = node.data.expr ?? '';
+  if (node.type === 'stim' || node.type === 'func') fields.expr = node.data.expr ?? '';
   fields.flipped = !!node.data.flipped;
   if (node.data.type === 'group' || node.data.type === 'compartment') {
     fields.collapsed = !!node.data.collapsed;
@@ -124,6 +124,7 @@ function titleFor(node) {
   if (node.type === 'compartment') return 'Compartment';
   if (node.type === 'concchan') return 'Concentration Channel';
   if (node.type === 'stim') return 'Stimulus';
+  if (node.type === 'func') return 'Function';
   return `Enzyme (${node.data.mechanism})`;
 }
 
@@ -136,7 +137,9 @@ export default function PropertiesMenuBox({
   onAutoLayoutGroup,
   onAutoLayoutGroupByFlow,
   onAutoLayoutRecursive,
+  onRandomizeGroup,
   onClearLayoutLocks,
+  layoutRunning,
   selectedGroupScore,
   onUndoLayout,
   canUndoLayout,
@@ -262,12 +265,12 @@ export default function PropertiesMenuBox({
           </Grid>
         ))}
 
-        {node.type === 'stim' && (
+        {(node.type === 'stim' || node.type === 'func') && (
           <>
             <Grid size={12}>
               <TextField
                 fullWidth
-                label="Expression (function of t, in seconds)"
+                label={node.type === 'func' ? 'Expression (x0, x1, ... are its own pool inputs)' : 'Expression (function of t, in seconds)'}
                 size="small"
                 multiline
                 minRows={2}
@@ -366,6 +369,11 @@ export default function PropertiesMenuBox({
 
         {(node.data.type === 'group' || node.data.type === 'compartment') && (
           <Grid size={12} container spacing={1}>
+            <Grid size={12}>
+              <Typography variant="overline" color="text.secondary">
+                Layout
+              </Typography>
+            </Grid>
             {selectedGroupScore && (
               <Grid size={12}>
                 <TextField
@@ -384,9 +392,11 @@ export default function PropertiesMenuBox({
                 fullWidth
                 size="small"
                 variant="outlined"
+                disabled={layoutRunning}
                 onClick={() => onAutoLayoutGroup(node.id)}
+                title="Packs direct children into a compact grid, alternating pool and non-pool rows (like Flow), refined against connector length/crossings/overlap/area -- discards the result and leaves the group unchanged if it wouldn't actually improve on the current layout."
               >
-                Auto-layout direct children
+                Square
               </Button>
             </Grid>
             <Grid size={6}>
@@ -394,21 +404,35 @@ export default function PropertiesMenuBox({
                 fullWidth
                 size="small"
                 variant="outlined"
+                disabled={layoutRunning}
                 onClick={() => onAutoLayoutRecursive(node.id)}
-                title="Lays out every nested group's own contents first, then this one, bottom-up -- everything below it rearranges, not just its own direct children."
+                title="Same as Square, but bottom-up through every nested group's own contents first, then this one -- everything below it rearranges, not just its own direct children."
               >
-                Auto-layout recursively
+                Square recursive
               </Button>
             </Grid>
-            <Grid size={12}>
+            <Grid size={6}>
               <Button
                 fullWidth
                 size="small"
                 variant="outlined"
+                disabled={layoutRunning}
                 onClick={() => onAutoLayoutGroupByFlow(node.id)}
-                title="Arranges direct children top-to-bottom by information flow instead of by connector length -- inputs near the top, downstream targets near the bottom, with pools and reactions/enzymes/channels alternating rows (they only ever connect to each other, never their own kind). Deterministic: always applies, no 'would not improve' check. A locked child is left exactly where it is and excluded from the flow order -- lock a molecule to pin its own tier by hand."
+                title="Arranges direct children top-to-bottom by information flow instead of by connector length -- inputs near the top, downstream targets near the bottom, with pools and reactions/enzymes/channels alternating rows (they only ever connect to each other, never their own kind). Discards the result and leaves the group unchanged if it wouldn't actually improve on the current layout. A locked child is left exactly where it is and excluded from the flow order -- lock a molecule to pin its own tier by hand."
               >
-                Auto-layout by flow
+                Flow
+              </Button>
+            </Grid>
+            <Grid size={6}>
+              <Button
+                fullWidth
+                size="small"
+                variant="outlined"
+                disabled={layoutRunning}
+                onClick={() => onAutoLayoutGroupByFlow(node.id, true)}
+                title="Same as Flow, but always applies the result even if it scores worse than the current layout on the plain connector-length/crossings/overlap/area metric -- a cramped Square packing can score deceptively well on that metric purely by being cramped, which can otherwise block Flow's own alternating, more readable structure from ever being applied."
+              >
+                Force Flow
               </Button>
             </Grid>
             <Grid size={12}>
@@ -416,7 +440,19 @@ export default function PropertiesMenuBox({
                 fullWidth
                 size="small"
                 variant="outlined"
-                disabled={!canUndoLayout}
+                disabled={layoutRunning}
+                onClick={() => onRandomizeGroup(node.id)}
+                title="Debugging tool: scatters direct children at entirely random positions -- not a real layout strategy, useful for exercising the other layout actions from a deliberately bad starting point."
+              >
+                Randomize
+              </Button>
+            </Grid>
+            <Grid size={12}>
+              <Button
+                fullWidth
+                size="small"
+                variant="outlined"
+                disabled={!canUndoLayout || layoutRunning}
                 onClick={onUndoLayout}
                 title="Reverts whatever the last auto-layout action (on this group or any other) just changed -- only the most recent run can be undone."
               >
@@ -429,6 +465,7 @@ export default function PropertiesMenuBox({
                 size="small"
                 variant="outlined"
                 color="warning"
+                disabled={layoutRunning}
                 onClick={() => onClearLayoutLocks(node.id)}
                 title="Clears the 'manually positioned/oriented' flag on this group and everything inside it -- a manual drag, resize, or flip toggle sets that flag automatically so auto-layout leaves it alone; use this if you actually want auto-layout to touch everything here again."
               >
