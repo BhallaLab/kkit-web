@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { applyNodeChanges, applyEdgeChanges } from '@xyflow/react';
 import AppLayout from './AppLayout';
 import { RAINBOW_16, resolveGroupColor } from './colorUtils';
-import { computeCollapsedView, computeIsolateView, avoidObstacles } from './collapseView';
+import {
+  computeCollapsedView,
+  computeDetailedConnectView,
+  computeIsolatedView,
+  computeDecoratedView,
+  avoidObstacles,
+} from './collapseView';
 import {
   AUTO_LAYOUT_CELL,
   computeGridCells,
@@ -99,6 +105,11 @@ function computeAutoScale(graph) {
 
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, TARGET_NEIGHBOR_SPACING_PX / median));
 }
+
+// The 4 visualization modes (see the visualMode state below) in cycling
+// order -- also, as this exact ordering, what the floating panel's own
+// 4-way toggle button steps through.
+const VISUAL_MODES = ['groupConnect', 'detailedConnect', 'isolated', 'decorated'];
 
 const EDGE_STYLE = {
   substrate: { stroke: 'green', strokeWidth: 1.75 },
@@ -1126,15 +1137,17 @@ export default function App() {
   // showing -- lifted up here (rather than local state in MainDisplay) so a
   // completed run can switch to it, not just the user clicking the tab.
   const [displayTab, setDisplayTab] = useState(0);
-  // Design section 6's "isolate mode" -- an on/off toggle, separate from
-  // any individual group's own collapsed flag, that hides every collapsed
-  // group entirely (icon and all) and replaces whatever it connected to
-  // with per-entity proxy stand-ins (see collapseView.js's
-  // computeIsolateView). "The expanded group(s)" isolate mode shows is
-  // read directly off the same per-group collapsed flag every other view
-  // already uses -- there's no separate group-picker UI here.
-  const [isolateMode, setIsolateMode] = useState(false);
-  const onToggleIsolateMode = useCallback(() => setIsolateMode((v) => !v), []);
+  // Design section 6's 4-way visualization mode -- which of
+  // computeCollapsedView/computeDetailedConnectView/computeIsolatedView/
+  // computeDecoratedView (collapseView.js) actually decides what's shown,
+  // independent of any individual group's own collapsed flag (read
+  // directly off the same per-group flag every mode already uses -- no
+  // separate group-picker UI here). Cycled through the floating panel's
+  // own 4-way toggle button (see MainDisplay.jsx).
+  const [visualMode, setVisualMode] = useState('groupConnect');
+  const onCycleVisualMode = useCallback(() => {
+    setVisualMode((m) => VISUAL_MODES[(VISUAL_MODES.indexOf(m) + 1) % VISUAL_MODES.length]);
+  }, []);
   // Per-aggregate-edge bend point (see moveEdgeVia below) -- keyed by the
   // synthetic `aggregate-<a>-<b>` id computeCollapsedView assigns each
   // time it runs, not stored on any real flowGraph.edges entry, since an
@@ -1354,15 +1367,20 @@ export default function App() {
     return ids;
   }, [flowGraph.nodes]);
   const displayGraph = useMemo(() => {
-    const view = isolateMode
-      ? computeIsolateView(canvasGraph.nodes, canvasGraph.edges, collapsedIds)
-      : computeCollapsedView(canvasGraph.nodes, canvasGraph.edges, collapsedIds);
+    const VIEW_FN = {
+      groupConnect: computeCollapsedView,
+      detailedConnect: computeDetailedConnectView,
+      isolated: computeIsolatedView,
+      decorated: computeDecoratedView,
+    };
+    const view = VIEW_FN[visualMode](canvasGraph.nodes, canvasGraph.edges, collapsedIds);
     // Aggregate edges have no backing entry in flowGraph.edges (see
     // moveEdgeVia) -- their bend point is applied here instead, as a
     // cheap post-process over whatever computeCollapsedView just
     // synthesized, keyed by its own deterministic `aggregate-<a>-<b>` id.
-    // A no-op lookup under isolate mode, which never produces aggregate
-    // edges in the first place -- harmless, not worth special-casing out.
+    // A no-op lookup under every OTHER mode, none of which ever produce
+    // aggregate edges in the first place -- harmless, not worth special-
+    // casing out.
     const edgesWithAggregateVia =
       Object.keys(aggregateVia).length === 0
         ? view.edges
@@ -1373,10 +1391,10 @@ export default function App() {
     // any user-dragged or aggregate via is already in place, since it
     // only ever supplies a default, never overrides one.
     return { ...view, edges: avoidObstacles(view.nodes, edgesWithAggregateVia) };
-  }, [canvasGraph.nodes, canvasGraph.edges, collapsedIds, isolateMode, aggregateVia]);
+  }, [canvasGraph.nodes, canvasGraph.edges, collapsedIds, visualMode, aggregateVia]);
 
   const onNodeClick = useCallback((event, node) => {
-    // A proxy (isolate mode -- see collapseView.js's computeIsolateView) is
+    // A proxy (Decorated mode -- see collapseView.js's computeDecoratedView) is
     // a synthetic stand-in for one specific hidden entity, not a real node
     // of its own -- clicking it opens *that* entity's own Properties
     // (still fully present in flowGraph.nodes, just not currently
@@ -2083,6 +2101,13 @@ export default function App() {
           }
           setAutoLayoutUndoSnapshot(undoSnapshot);
           refreshGraphRef.current?.();
+          // Unlike the single-level layout actions above (which leave the
+          // viewport alone -- see their own "deliberately not bumping"
+          // comment), a RECURSIVE layout can move everything below the
+          // selected group, often well outside whatever's currently in
+          // view -- the user's own later request: auto Fit View afterward
+          // so the result is actually visible without a manual re-fit.
+          setLoadGeneration((g) => g + 1);
         })
         .catch((err) => setStatus(`error: ${err}`))
         .finally(() => setLayoutRunning(false));
@@ -2191,6 +2216,8 @@ export default function App() {
           }
           setAutoLayoutUndoSnapshot(undoSnapshot);
           refreshGraphRef.current?.();
+          // See onAutoLayoutRecursive's own matching comment just above.
+          setLoadGeneration((g) => g + 1);
         })
         .catch((err) => setStatus(`error: ${err}`))
         .finally(() => setLayoutRunning(false));
@@ -3343,8 +3370,8 @@ export default function App() {
       onToggleFlip={onToggleFlip}
       onToggleCollapse={onToggleCollapse}
       onSetAllCollapsed={onSetAllCollapsed}
-      isolateMode={isolateMode}
-      onToggleIsolateMode={onToggleIsolateMode}
+      visualMode={visualMode}
+      onCycleVisualMode={onCycleVisualMode}
       onAutoLayoutGroup={onAutoLayoutGroup}
       onAutoLayoutGroupByFlow={onAutoLayoutGroupByFlow}
       onAutoLayoutRecursive={onAutoLayoutRecursive}

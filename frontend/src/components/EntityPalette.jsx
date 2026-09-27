@@ -1,9 +1,5 @@
-import { Box, IconButton, Tooltip, Typography } from '@mui/material';
+import { Box } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
-import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
-import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
-import VisibilityIcon from '@mui/icons-material/Visibility';
-import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import { ENZ_CLIP_PATH_RIGHT, STIM_CLIP_PATH } from '../nodes';
 import PlotSquiggleIcon from '../PlotSquiggleIcon';
 import { PLOT_WINDOW_COLORS } from '../colorUtils';
@@ -329,9 +325,6 @@ export default function EntityPalette({
   onAddEnz,
   onUnplot,
   canAddEnz,
-  onSetAllCollapsed,
-  isolateMode,
-  onToggleIsolateMode,
 }) {
   return (
     <Box
@@ -401,61 +394,11 @@ export default function EntityPalette({
 
       <Box sx={{ flexGrow: 1 }} />
 
-      {/* Collapse/Expand bulk-set every group/compartment's own collapsed
-          flag at once -- a one-time action, not a separate overriding
-          mode, so each group's own Properties toggle stays independently
-          adjustable afterward (see App.jsx's onSetAllCollapsed). Isolate is
-          a genuinely persistent toggle, not a one-shot action -- it's the
-          separate "show only expanded groups, with proxy stand-ins for
-          what they connect to" state (App.jsx's isolateMode), so its own
-          icon reflects current state rather than firing-and-forgetting
-          like the first two. (An earlier version also had a plain "hide
-          the icon, drop the connection" toggle alongside this one -- since
-          isolate mode does everything that one did and more, it was
-          dropped rather than kept as a second, narrower way to say the
-          same thing.) All three as compact IconButtons in a labeled,
-          bordered group -- full-width text Buttons here ate too much of
-          the palette's horizontal space once the rest of the icon row is
-          also visible. */}
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 0.25,
-          px: 1,
-          py: 0.5,
-          border: 1,
-          borderColor: 'divider',
-          borderRadius: 1,
-          flexShrink: 0,
-        }}
-      >
-        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 'bold', mr: 0.5 }}>
-          Groups
-        </Typography>
-        <Tooltip title="Collapse every group/compartment into a single icon">
-          <IconButton size="small" onClick={() => onSetAllCollapsed(true)}>
-            <UnfoldLessIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-        <Tooltip title="Expand every group/compartment">
-          <IconButton size="small" onClick={() => onSetAllCollapsed(false)}>
-            <UnfoldMoreIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-        <Tooltip
-          title={
-            isolateMode
-              ? 'Isolating: showing only expanded groups (their external connections become proxy stand-ins) -- click to turn off'
-              : 'Isolate: show only expanded groups, with proxy stand-ins for what they connect to'
-          }
-        >
-          <IconButton size="small" onClick={onToggleIsolateMode} color={isolateMode ? 'primary' : 'default'}>
-            {isolateMode ? <VisibilityOffIcon fontSize="small" /> : <VisibilityIcon fontSize="small" />}
-          </IconButton>
-        </Tooltip>
-      </Box>
-
+      {/* The collapse-all/expand-all toggle and the 4-way visualization
+          mode toggle used to live here -- moved into the floating panel
+          inside the layout view itself (see MainDisplay.jsx's own
+          Controls/ControlButton usage), alongside React Flow's own zoom/
+          Fit View/Lock buttons, since they're all visualization controls. */}
       <TrashTarget onUnplot={onUnplot} />
     </Box>
   );

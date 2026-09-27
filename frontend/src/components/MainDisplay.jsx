@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Tabs, Tab } from '@mui/material';
-import { ReactFlow, ReactFlowProvider, Background, Controls, useReactFlow, useNodesInitialized } from '@xyflow/react';
+import { ReactFlow, ReactFlowProvider, Background, Controls, ControlButton, useReactFlow, useNodesInitialized } from '@xyflow/react';
+import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
+import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
 import '@xyflow/react/dist/style.css';
 import { nodeTypes } from '../nodes';
 import BendableEdge from '../BendableEdge';
@@ -10,6 +12,82 @@ import PlotsPanel from './PlotsPanel';
 import EntityPalette from './EntityPalette';
 
 const edgeTypes = { default: BendableEdge };
+
+// The user's own later request: move the visualization-mode controls out
+// of the palette bar above the canvas and into this floating panel
+// instead, alongside React Flow's own zoom/Fit View/Lock buttons -- see
+// <Controls> below. Every icon here is a plain inline SVG (no MUI icon
+// matches these shapes) sized to sit comfortably in a Controls button.
+function GroupConnectIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+      <rect x="1" y="8" width="8" height="8" rx="1" />
+      <rect x="15" y="8" width="8" height="8" rx="1" />
+      <line x1="9" y1="12" x2="15" y2="12" />
+    </svg>
+  );
+}
+
+function DetailedConnectIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+      <rect x="1" y="4" width="8" height="16" rx="1" />
+      <rect x="15" y="4" width="8" height="16" rx="1" />
+      <line x1="5" y1="9" x2="19" y2="9" />
+      <line x1="5" y1="15" x2="19" y2="15" />
+      <circle cx="5" cy="9" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="5" cy="15" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="19" cy="9" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="19" cy="15" r="1.3" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function IsolatedIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+      <rect x="6" y="6" width="12" height="12" rx="1" />
+      <circle cx="10" cy="10" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="14" cy="10" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="10" cy="14" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="14" cy="14" r="1.3" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function DecoratedIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+      <rect x="8" y="8" width="8" height="8" rx="1" />
+      <circle cx="10.5" cy="10.5" r="1" fill="currentColor" stroke="none" />
+      <circle cx="13.5" cy="13.5" r="1" fill="currentColor" stroke="none" />
+      <line x1="8" y1="8" x2="2" y2="2" />
+      <line x1="16" y1="8" x2="22" y2="2" />
+      <line x1="8" y1="16" x2="2" y2="22" />
+      <line x1="16" y1="16" x2="22" y2="22" />
+      <line x1="12" y1="8" x2="12" y2="1" />
+      <circle cx="2" cy="2" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="22" cy="2" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="2" cy="22" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="22" cy="22" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="1" r="1.4" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+const VISUAL_MODE_ICON = {
+  groupConnect: <GroupConnectIcon />,
+  detailedConnect: <DetailedConnectIcon />,
+  isolated: <IsolatedIcon />,
+  decorated: <DecoratedIcon />,
+};
+
+const VISUAL_MODE_TITLE = {
+  groupConnect: 'GroupConnect: inter-group connections shown as summary lines (only meaningful once inner groups are collapsed) -- click to cycle mode',
+  detailedConnect: 'DetailedConnect: every real pool/non-pool connection shown even across group boundaries; collapsed groups shown without connections -- click to cycle mode',
+  isolated: 'Isolated: only connections fully within one expanded group are shown; collapsed groups shown without connections -- click to cycle mode',
+  decorated: 'Decorated: proxy icons decorate each expanded group to show what its contents connect to; collapsed groups shown without connections -- click to cycle mode',
+};
 
 // How long to wait for useNodesInitialized before fitting anyway -- see
 // the fallback-timeout note below. Comfortably longer than any real
@@ -116,8 +194,31 @@ function Canvas({
   onEdgesChange,
   loadGeneration,
   onCanvasDrop,
+  onSetAllCollapsed,
+  visualMode,
+  onCycleVisualMode,
 }) {
   const { screenToFlowPosition } = useReactFlow();
+  // Purely local UI memory for which icon the expand/collapse-all toggle
+  // shows next -- onSetAllCollapsed itself is a one-shot bulk action, not
+  // a persisted mode (see App.jsx's own comment on it), so there's
+  // nothing authoritative to derive this from; the user's own later note
+  // that individual groups can still be toggled independently afterward
+  // means this is only ever a starting nudge, not a source of truth.
+  const [allCollapsed, setAllCollapsedLocal] = useState(false);
+  const handleToggleAllCollapsed = useCallback(() => {
+    // A state updater function must stay pure -- calling another
+    // component's own setter (onSetAllCollapsed, which ultimately reaches
+    // App.jsx's setFlowGraph) from inside one is what actually triggered
+    // "Cannot update a component while rendering a different component"
+    // (verified directly). Reading the current `allCollapsed` from the
+    // closure instead and firing both setters as plain, separate
+    // statements avoids that entirely -- safe here since this only ever
+    // runs from a click handler, never anywhere staleness could matter.
+    const next = !allCollapsed;
+    setAllCollapsedLocal(next);
+    onSetAllCollapsed(next);
+  }, [allCollapsed, onSetAllCollapsed]);
 
   const handleDragOver = useCallback((event) => {
     event.preventDefault();
@@ -159,7 +260,22 @@ function Canvas({
           onDrop={handleDrop}
           onDragOver={handleDragOver}
           deleteKeyCode={['Backspace', 'Delete']}
-          minZoom={0.005}
+          // The user's own later bug report: Fit View (and even plain
+          // mouse-wheel/trackpad zoom) didn't zoom out enough to include a
+          // root compartment's own label for a model with a very large
+          // native coordinate scale (Vinu_23Sep_with_gr.g) -- verified
+          // directly that the viewport was landing on EXACTLY 0.005, this
+          // prop's own old floor, not some smaller value fitView's own
+          // bounds math actually wanted: the label sits *above* the
+          // container's own box (see nodes.jsx's ContainerNode, `bottom:
+          // '100%'`), which grows however far outside whatever box
+          // React Flow itself measures, so a model whose real content
+          // already needs to be zoomed out close to this floor has no
+          // room left for fitView to additionally back off far enough to
+          // include it -- lowering the floor itself is what actually
+          // gives it that room, for both Fit View and manual zoom alike
+          // (both are capped by this exact same prop).
+          minZoom={0.0002}
           maxZoom={2}
           fitView
           fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
@@ -182,7 +298,17 @@ function Canvas({
           autoPanOnNodeDrag={false}
         >
           <Background />
-          <Controls />
+          <Controls>
+            <ControlButton
+              onClick={handleToggleAllCollapsed}
+              title={allCollapsed ? 'Expand every group/compartment' : 'Collapse every group/compartment'}
+            >
+              {allCollapsed ? <UnfoldMoreIcon fontSize="small" /> : <UnfoldLessIcon fontSize="small" />}
+            </ControlButton>
+            <ControlButton onClick={onCycleVisualMode} title={VISUAL_MODE_TITLE[visualMode]}>
+              {VISUAL_MODE_ICON[visualMode]}
+            </ControlButton>
+          </Controls>
           <FitViewOnLoad generation={loadGeneration} />
         </ReactFlow>
       </NodeActionsContext.Provider>
@@ -212,8 +338,8 @@ export default function MainDisplay({
   onAddEnz,
   onUnplot,
   onSetAllCollapsed,
-  isolateMode,
-  onToggleIsolateMode,
+  visualMode,
+  onCycleVisualMode,
   selectedNode,
   displayTab,
   setDisplayTab,
@@ -251,9 +377,6 @@ export default function MainDisplay({
           onAddEnz={onAddEnz}
           onUnplot={onUnplot}
           canAddEnz={canAddEnz}
-          onSetAllCollapsed={onSetAllCollapsed}
-          isolateMode={isolateMode}
-          onToggleIsolateMode={onToggleIsolateMode}
         />
         <Box sx={{ flexGrow: 1, position: 'relative' }}>
           <ReactFlowProvider>
@@ -270,6 +393,9 @@ export default function MainDisplay({
               onEdgesChange={onEdgesChange}
               loadGeneration={loadGeneration}
               onCanvasDrop={onCanvasDrop}
+              onSetAllCollapsed={onSetAllCollapsed}
+              visualMode={visualMode}
+              onCycleVisualMode={onCycleVisualMode}
             />
           </ReactFlowProvider>
         </Box>

@@ -1029,11 +1029,11 @@ const PROXY_REAL_COMPONENT = {
   genfunc: GenFuncNode,
 };
 
-// A stand-in for one specific entity that isolate mode has hidden (see
-// collapseView.js's computeIsolateView) -- rendered as the *real* node
+// A stand-in for one specific entity that Decorated mode has hidden (see
+// collapseView.js's computeDecoratedView) -- rendered as the *real* node
 // component it represents (same shape, same size, same color/flip/etc,
 // via data.realType and the rest of the real entity's own data that
-// computeIsolateView already carried over), not a generic placeholder, so
+// computeDecoratedView already carried over), not a generic placeholder, so
 // it reads as "the actual thing, just relocated" -- wrapped in a dashed
 // outline (decorative only -- an outline never participates in layout, so
 // it can't change the wrapped component's own measured size) plus a

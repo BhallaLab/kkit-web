@@ -663,7 +663,19 @@ function hashAngle(id) {
   return (((hash % 360) + 360) % 360) * (Math.PI / 180);
 }
 
-export function computeIsolateView(nodes, edges, collapsedIds) {
+// The user's own later naming for this mode is "Decorated" (proxy icons
+// decorate an expanded group with what its contents connect to) --
+// renamed from this function's own original "isolate view" name to match,
+// now one of four visualization modes (see computeCollapsedView/
+// GroupConnect, computeDetailedConnectView/DetailedConnect,
+// computeIsolatedView/Isolated, all below or above). Also since renamed:
+// a collapsed group itself now stays visible as a bare, connection-free
+// icon (matching what the other three modes already do) instead of being
+// removed from the node list entirely -- `isHidden` (used for the EDGE/
+// proxy logic below) still treats it as a boundary to redirect around,
+// same as before; only `visibleNodes` itself changed, to stop excluding
+// the collapsed group's own node alongside its hidden descendants.
+export function computeDecoratedView(nodes, edges, collapsedIds) {
   const byId = {};
   nodes.forEach((n) => {
     byId[n.id] = n;
@@ -671,7 +683,7 @@ export function computeIsolateView(nodes, edges, collapsedIds) {
 
   const isHidden = (id) => collapsedIds.has(id) || outermostCollapsedAncestor(id, byId, collapsedIds) !== null;
 
-  const visibleNodes = nodes.filter((n) => !isHidden(n.id));
+  const visibleNodes = nodes.filter((n) => outermostCollapsedAncestor(n.id, byId, collapsedIds) === null);
 
   // One proxy per (hidden entity, anchor group) pair -- several edges from
   // the same hidden entity into the same group converge on the one proxy
@@ -825,6 +837,52 @@ export function computeIsolateView(nodes, edges, collapsedIds) {
   });
 
   return { nodes: [...visibleNodes, ...proxyNodes], edges: resultEdges };
+}
+
+// DetailedConnect: every real connection between two VISIBLE entities is
+// shown exactly as-is, regardless of how many group boundaries it crosses
+// (no aggregation, no redirect to a group's own handle the way
+// computeCollapsedView's GroupConnect does) -- a group is purely an
+// organizational box here, invisible to edge routing. An entity hidden
+// inside a collapsed group has no detail left to show, so any edge
+// touching one is dropped outright rather than summarized or redirected;
+// a collapsed group itself stays visible as a bare, connection-free icon,
+// same as the other three modes.
+export function computeDetailedConnectView(nodes, edges, collapsedIds) {
+  if (collapsedIds.size === 0) return { nodes, edges };
+  const byId = {};
+  nodes.forEach((n) => {
+    byId[n.id] = n;
+  });
+  const isHiddenDescendant = (id) => outermostCollapsedAncestor(id, byId, collapsedIds) !== null;
+  const visibleNodes = nodes.filter((n) => !isHiddenDescendant(n.id));
+  const visibleEdges = edges.filter((e) => !isHiddenDescendant(e.source) && !isHiddenDescendant(e.target));
+  return { nodes: visibleNodes, edges: visibleEdges };
+}
+
+// Isolated: the simplest of the four -- only a connection fully within
+// one immediate group (both ends sharing the exact same parentId, group
+// or plain top-level compartment alike) is shown at all; anything that
+// crosses to a different parent, expanded or collapsed, is dropped with
+// no proxy or redirect standing in for it (unlike Decorated's own proxy
+// stand-ins, or GroupConnect's aggregate/individual redirects). A
+// collapsed group stays visible as a bare, connection-free icon, same as
+// the other three modes -- its own hidden descendants are excluded from
+// both the node and edge lists the same way every other mode excludes
+// them.
+export function computeIsolatedView(nodes, edges, collapsedIds) {
+  const byId = {};
+  nodes.forEach((n) => {
+    byId[n.id] = n;
+  });
+  const isHiddenDescendant = (id) => outermostCollapsedAncestor(id, byId, collapsedIds) !== null;
+  const visibleNodes = nodes.filter((n) => !isHiddenDescendant(n.id));
+  const visibleIds = new Set(visibleNodes.map((n) => n.id));
+  const visibleEdges = edges.filter((e) => {
+    if (!visibleIds.has(e.source) || !visibleIds.has(e.target)) return false;
+    return (byId[e.source]?.parentId ?? null) === (byId[e.target]?.parentId ?? null);
+  });
+  return { nodes: visibleNodes, edges: visibleEdges };
 }
 
 // -- Obstacle-avoiding default bend point ---------------------------------
