@@ -25,9 +25,15 @@ import { resolveGroupColor } from './colorUtils';
 // actually sit, computed fresh each time from the real nearest-neighbor
 // gaps between them. Falls back to MIN_PAVEMENT when there's nothing to
 // measure (0 or 1 collapsed group -- no neighbor gap exists at all).
-const PAVEMENT_FRACTION = 0.22;
-const MIN_PAVEMENT = 4;
-const MAX_PAVEMENT = 40;
+// The user's own later feedback: the pavement wasn't wide enough -- lines
+// were passing too close to group block icons. Raised across the board
+// (not just the fraction): a tight layout's own nearest-neighbor gaps can
+// still be small even after this, so MIN_PAVEMENT is what actually
+// guarantees real clearance in that case, not just a bigger fraction of
+// whatever gap already existed.
+const PAVEMENT_FRACTION = 0.35;
+const MIN_PAVEMENT = 14;
+const MAX_PAVEMENT = 60;
 
 // The gap between two boxes along whichever axis they're actually
 // *neighbors* on -- only meaningful (and only returned) when their extent
@@ -104,7 +110,11 @@ function outermostCollapsedAncestor(nodeId, byId, collapsedIds) {
 // that. A case-5/5.1 edge (only one side collapsed) keeps its own real
 // style, since it's still fundamentally one real connection, not a
 // summary of several.
-const AGGREGATE_EDGE_STYLE = { stroke: '#555', strokeWidth: 4 };
+// strokeWidth raised (the user's own later feedback: "need heavier lines
+// to connect between groups") -- kept identical to assignAggregatePorts'
+// own per-pair style just below, since this is only its fallback for the
+// rare case a route wasn't actually computed.
+const AGGREGATE_EDGE_STYLE = { stroke: '#555', strokeWidth: 7 };
 
 // `collapsedIds`: Set of currently-collapsed group/compartment node ids.
 // Returns the node/edge lists to actually render -- collapsed groups
@@ -435,7 +445,7 @@ function assignAggregatePorts(aggPairs, byId, allObstacles, pavement) {
       sourceHandle: portA.id,
       targetHandle: portB.id,
       via,
-      style: { stroke: color, strokeWidth: 4 },
+      style: { stroke: color, strokeWidth: 7 },
     });
   });
 

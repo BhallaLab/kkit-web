@@ -3,6 +3,7 @@ import { Box, Tabs, Tab } from '@mui/material';
 import { ReactFlow, ReactFlowProvider, Background, Controls, ControlButton, useReactFlow, useNodesInitialized } from '@xyflow/react';
 import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
+import ZoomInMapIcon from '@mui/icons-material/ZoomInMap';
 import '@xyflow/react/dist/style.css';
 import { nodeTypes } from '../nodes';
 import BendableEdge from '../BendableEdge';
@@ -197,8 +198,21 @@ function Canvas({
   onSetAllCollapsed,
   visualMode,
   onCycleVisualMode,
+  selectedNodeId,
 }) {
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, fitView } = useReactFlow();
+  // Only enabled once the selected node is actually part of what's
+  // currently rendered -- a plain entity hidden inside a collapsed group,
+  // or something no longer selected at all, has no on-screen box for
+  // fitView's own `nodes` filter to fit to.
+  const selectedNodeVisible = !!selectedNodeId && flowGraph.nodes.some((n) => n.id === selectedNodeId);
+  const handleZoomToSelected = useCallback(() => {
+    if (!selectedNodeId) return;
+    // A smaller padding than the whole-model Fit View above (0.2) -- the
+    // user's own later request was specifically that the selected group
+    // "occupies most of the view area", not just any old fit.
+    fitView({ nodes: [{ id: selectedNodeId }], padding: 0.08, duration: 300, maxZoom: 12 });
+  }, [selectedNodeId, fitView]);
   // Purely local UI memory for which icon the expand/collapse-all toggle
   // shows next -- onSetAllCollapsed itself is a one-shot bulk action, not
   // a persisted mode (see App.jsx's own comment on it), so there's
@@ -276,7 +290,15 @@ function Canvas({
           // gives it that room, for both Fit View and manual zoom alike
           // (both are capped by this exact same prop).
           minZoom={0.0002}
-          maxZoom={2}
+          // Raised from 2 -- the new "zoom to selected group" action (see
+          // Canvas's own handleZoomToSelected) needs real headroom to
+          // zoom a small, tightly-sized collapsed group icon in enough to
+          // actually fill most of the view; the pane's own zoom ceiling
+          // is a hard limit fitView can't exceed regardless of its own
+          // maxZoom option, so raising it here is what actually gives
+          // that action (and, incidentally, plain manual zoom-in) the
+          // room it needs.
+          maxZoom={12}
           fitView
           fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
           // Off by default in React Flow -- without it, every node/edge
@@ -307,6 +329,13 @@ function Canvas({
             </ControlButton>
             <ControlButton onClick={onCycleVisualMode} title={VISUAL_MODE_TITLE[visualMode]}>
               {VISUAL_MODE_ICON[visualMode]}
+            </ControlButton>
+            <ControlButton
+              onClick={handleZoomToSelected}
+              disabled={!selectedNodeVisible}
+              title="Zoom to the selected group, filling most of the view"
+            >
+              <ZoomInMapIcon fontSize="small" />
             </ControlButton>
           </Controls>
           <FitViewOnLoad generation={loadGeneration} />
@@ -396,6 +425,7 @@ export default function MainDisplay({
               onSetAllCollapsed={onSetAllCollapsed}
               visualMode={visualMode}
               onCycleVisualMode={onCycleVisualMode}
+              selectedNodeId={selectedNode?.id}
             />
           </ReactFlowProvider>
         </Box>
