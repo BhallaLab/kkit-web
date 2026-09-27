@@ -9,7 +9,7 @@ import {
   computeFlipUpdates,
   optimizeGroupLayout,
 } from './layoutSeed';
-import { computeFlowGroupLayout, SQUARE_FLOW_WEIGHTS } from './layoutGrid';
+import { computeFlowGroupLayout, computeUniformFlowLayout, DEFAULT_FLOW_WEIGHTS, SQUARE_FLOW_WEIGHTS } from './layoutGrid';
 import { computeLayoutScore } from './layoutScore';
 
 const API_BASE = `http://${window.location.hostname}:5001`;
@@ -742,6 +742,113 @@ function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById,
       };
 }
 
+// Recurse Flow's own sibling to computeLocalLayouts above -- same bottom-
+// up recursion (nested containers get their own fresh layout first, this
+// level's own direct children are packed once that's done), same locked-
+// container/locked-entity bookkeeping, but a different packing algorithm
+// per level, and no per-level time budget (computeFlowGroupLayout/
+// computeUniformFlowLayout are already bounded by their own MAX_CYCLES/
+// MAX_INNER_STEPS_SAFETY_CAP, not an SA search that needs one):
+//
+// - Every NESTED level (isRoot false) is packed with the plain Flow
+//   engine (computeFlowGroupLayout, DEFAULT_FLOW_WEIGHTS) -- alternating
+//   pool/non-pool rows, exactly like the single-level "Flow" button --
+//   the user's own step 1 ("first apply Flow to each of the inner
+//   groups").
+// - The outermost level (isRoot true, the group this action was actually
+//   invoked on) is packed with computeUniformFlowLayout instead -- its
+//   own direct children are, by this point, ALL groups (the caller
+//   refuses the whole operation up front otherwise, see
+//   onAutoLayoutRecursiveFlow's own comment), so there is no pool/non-
+//   pool split to alternate between; a group is neither. The user's own
+//   step 3.
+//
+// Unlike optimizeGroupLayout, both packers already run their own
+// discard-if-worse gate internally (falling back to the current on-
+// screen relative positions when nothing improves) -- so there's no
+// separate "keepCurrentPositions"/collision-safety-net branch here the
+// way computeLocalLayouts needs one for optimizeGroupLayout's own
+// "discarded" flag; the returned `positions` already reflect whichever
+// of "freshly packed" or "unchanged" actually won.
+//
+// `flipsOut` accumulates every level's own VERIFIED flips (each
+// computeFlowGroupLayout call already found these, checking the real
+// layout score -- see layoutScore.js's refineFlips) into one flat map
+// the caller applies once at the end, instead of re-deriving them
+// afterward with the cruder plain heuristic the Square-recursive action
+// still uses (see its own onAutoLayoutRecursive).
+function computeLocalFlowLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, flipsOut, edges, cellUnit = AUTO_LAYOUT_CELL, isRoot = true) {
+  const directChildren = rawNodes.filter(
+    (n) => n.parentId === rootId && !(n.type === 'pool' && n.isEnzComplex)
+  );
+  directChildren.forEach((child) => {
+    if (CONTAINER_TYPES.includes(child.type) && !child.locked) {
+      computeLocalFlowLayouts(child.id, rawNodes, rawById, containerIndex, boxById, localLayouts, flipsOut, edges, cellUnit, false);
+    }
+  });
+  if (directChildren.length === 0) {
+    const currentBox = effectiveContainerBox(rawById[rootId], containerIndex, boxById);
+    localLayouts[rootId] = { children: [], width: currentBox.width, height: currentBox.height };
+    return;
+  }
+
+  const currentBox = effectiveContainerBox(rawById[rootId], containerIndex, boxById);
+  const lockedContainers = directChildren.filter((c) => CONTAINER_TYPES.includes(c.type) && c.locked);
+  const repositionable = directChildren.filter((c) => !(CONTAINER_TYPES.includes(c.type) && c.locked));
+  const unlockedPackable = repositionable.filter((c) => !c.locked);
+  const lockedEntities = repositionable.filter((c) => c.locked);
+
+  // Same sizing convention as computeLocalLayouts -- see its own comment.
+  const sizesMap = new Map(
+    repositionable.map((c) => {
+      if (CONTAINER_TYPES.includes(c.type) && !c.locked) {
+        const own = localLayouts[c.id];
+        return [c.id, { width: own.width + CONTAINER_NESTING_PADDING, height: own.height + CONTAINER_NESTING_PADDING }];
+      }
+      return [c.id, childFootprint(c, containerIndex, boxById, cellUnit)];
+    })
+  );
+
+  const { positions, flips } = isRoot
+    ? computeUniformFlowLayout({ children: repositionable, edges, rawById, sizes: sizesMap })
+    : computeFlowGroupLayout({ children: repositionable, edges, rawById, sizes: sizesMap, weights: DEFAULT_FLOW_WEIGHTS, cellUnit });
+  if (flips) Object.assign(flipsOut, flips);
+
+  // CONTAINER_PADDING is baked into each child's own localX/localY here --
+  // same convention computeLocalLayouts/onAutoLayoutGroupByFlow already
+  // use (see either one's own comment) -- so assignAbsolutePositions only
+  // ever has to add a container's own real origin to these.
+  const packedChildren = unlockedPackable.map((c) => {
+    const p = positions.get(c.id);
+    const footprint = sizesMap.get(c.id);
+    const localX = CONTAINER_PADDING + p.x;
+    const localY = -CONTAINER_PADDING + p.y;
+    return { id: c.id, localX, localY, right: localX + footprint.width, bottom: localY - footprint.height };
+  });
+
+  const lockedEntityPlacements = lockedEntities.map((c) => {
+    const footprint = childFootprint(c, containerIndex, boxById, cellUnit);
+    const localX = c.x - currentBox.x;
+    const localY = c.y - currentBox.y;
+    return { id: c.id, localX, localY, right: localX + footprint.width, bottom: localY - footprint.height };
+  });
+
+  const lockedContainerBounds = lockedContainers.map((c) => {
+    const box = effectiveContainerBox(c, containerIndex, boxById);
+    const localX = c.x - currentBox.x;
+    const localY = c.y - currentBox.y;
+    return { localX, localY, right: localX + box.width, bottom: localY - box.height };
+  });
+
+  const children = [...packedChildren, ...lockedEntityPlacements];
+  const allBounds = [...packedChildren, ...lockedEntityPlacements, ...lockedContainerBounds];
+  localLayouts[rootId] = {
+    children,
+    width: Math.max(...allBounds.map((b) => b.right)) - Math.min(...allBounds.map((b) => b.localX)) + CONTAINER_PADDING * 2,
+    height: Math.max(...allBounds.map((b) => b.localY)) - Math.min(...allBounds.map((b) => b.bottom)) + CONTAINER_PADDING * 2,
+  };
+}
+
 // Turns each container's own locally-relative child placements into real
 // ones, given `originX`/`originY` -- that container's own real, final
 // top-left corner -- and recurses into every nested container using its
@@ -1439,7 +1546,7 @@ export default function App() {
   // one off of. Ends with a full refreshGraph (not a local patch) since
   // it touches an unbounded number of nodes at once.
   const onAutoLayoutGroup = useCallback(
-    (groupId) => {
+    (groupId, { force = false, randomizeItems = false, randomizeBlanks = false } = {}) => {
       const rawNodes = flowGraph.nodes.map((n) => n.data);
       const rawById = {};
       rawNodes.forEach((n) => {
@@ -1498,6 +1605,10 @@ export default function App() {
       // to the backend at all if it wouldn't actually improve, exactly
       // as the old optimizeGroupLayout-based version already did), same
       // refineFlips pass, just without Flow's own top-to-bottom bias.
+      // `force`/`randomizeItems`/`randomizeBlanks` (a later request,
+      // mirroring Flow's own Force option and adding Rand Square/Rand
+      // Flow) thread straight through -- see computeFlowGroupLayout's
+      // own comments on each.
       const { positions, flips: squareFlips } = computeFlowGroupLayout({
         children: directChildren,
         edges: flowGraph.edges,
@@ -1505,6 +1616,9 @@ export default function App() {
         sizes,
         weights: SQUARE_FLOW_WEIGHTS,
         cellUnit,
+        force,
+        randomizeItems,
+        randomizeBlanks,
       });
       const placements = unlockedChildren.map((child) => {
         const p = positions.get(child.id);
@@ -1616,7 +1730,7 @@ export default function App() {
   // no meaningful "discard if worse" gate for it the way the grid-based
   // action has one.
   const onAutoLayoutGroupByFlow = useCallback(
-    (groupId, force = false) => {
+    (groupId, { force = false, randomizeItems = false, randomizeBlanks = false } = {}) => {
       const rawNodes = flowGraph.nodes.map((n) => n.data);
       const rawById = {};
       rawNodes.forEach((n) => {
@@ -1649,7 +1763,16 @@ export default function App() {
       const originX = groupBox.x + CONTAINER_PADDING;
       const originY = groupBox.y - CONTAINER_PADDING;
 
-      const { positions, flips: flowFlips } = computeFlowGroupLayout({ children: directChildren, edges: flowGraph.edges, rawById, sizes, force, cellUnit });
+      const { positions, flips: flowFlips } = computeFlowGroupLayout({
+        children: directChildren,
+        edges: flowGraph.edges,
+        rawById,
+        sizes,
+        force,
+        cellUnit,
+        randomizeItems,
+        randomizeBlanks,
+      });
       const placements = unlockedChildren.map((child) => {
         const p = positions.get(child.id);
         return { child, x: originX + p.x, y: originY + p.y };
@@ -1732,117 +1855,8 @@ export default function App() {
     [flowGraph.nodes, flowGraph.edges, scale]
   );
 
-  // A debugging tool, not a real layout strategy: scatters every unlocked
-  // direct child at a uniformly random position within a field roughly
-  // sized for the group's own child count (the same computeGridCells
-  // cols/colWidth/rowHeight a square layout would use, just sampled
-  // randomly within that footprint instead of packed into it) -- useful
-  // for shaking loose a layout that's stuck in some particular
-  // configuration, or for exercising the OTHER layout actions' own
-  // "does this actually improve things" gates against a deliberately bad
-  // starting point. No discard-if-worse check (there's nothing to
-  // compare against -- randomizing is never claimed to be an
-  // improvement), but same undo-snapshot/resize/refresh shape as every
-  // other layout action here, so "Undo last auto-layout" still reverts it.
-  const onRandomizeGroup = useCallback(
-    (groupId) => {
-      const rawNodes = flowGraph.nodes.map((n) => n.data);
-      const rawById = {};
-      rawNodes.forEach((n) => {
-        rawById[n.id] = n;
-      });
-      const group = rawById[groupId];
-      if (!group) return;
-      const directChildren = rawNodes.filter(
-        (n) => n.parentId === groupId && !(n.type === 'pool' && n.isEnzComplex)
-      );
-      if (directChildren.length === 0) return;
-      const unlockedChildren = directChildren.filter((c) => !c.locked);
-      const lockedChildren = directChildren.filter((c) => c.locked);
-      if (unlockedChildren.length === 0) return;
-
-      const containerIndex = buildContainerIndex(rawNodes, rawById);
-      const boxById = {};
-      const cellUnit = effectiveAutoLayoutCell(scale);
-      const sizes = new Map(directChildren.map((c) => [c.id, childFootprint(c, containerIndex, boxById, cellUnit)]));
-      const { colWidth, rowHeight, cols } = computeGridCells(unlockedChildren.map((c) => sizes.get(c.id)));
-      const rows = Math.max(1, Math.ceil(unlockedChildren.length / cols));
-      const fieldWidth = cols * colWidth;
-      const fieldHeight = rows * rowHeight;
-
-      const groupBox = effectiveContainerBox(group, containerIndex, boxById);
-      const originX = groupBox.x + CONTAINER_PADDING;
-      const originY = groupBox.y - CONTAINER_PADDING;
-      const placements = unlockedChildren.map((child) => ({
-        child,
-        x: originX + Math.random() * fieldWidth,
-        y: originY - Math.random() * fieldHeight,
-      }));
-      const lockedFootprints = lockedChildren.map((c) => ({ x: c.x, y: c.y, ...sizes.get(c.id) }));
-
-      const undoSnapshot = {
-        nodes: [
-          { id: groupId, x: group.x, y: group.y, width: group.width, height: group.height, isContainer: true },
-          ...directChildren.map((c) => ({
-            id: c.id,
-            x: c.x,
-            y: c.y,
-            width: c.width,
-            height: c.height,
-            flipped: c.flipped,
-            isContainer: CONTAINER_TYPES.includes(c.type),
-          })),
-        ],
-      };
-
-      setLayoutRunning(true);
-      Promise.all(
-        placements.map(({ child, x, y }) =>
-          fetch(`${API_BASE}/api/update_position`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: child.id, x, y }),
-          }).then((r) => r.json())
-        )
-      )
-        .then((results) => {
-          const failed = results.find((r) => r.error);
-          if (failed) throw new Error(failed.error);
-          const sizeById = new Map(directChildren.map((c) => [c.id, sizes.get(c.id)]));
-          const leftEdges = [...placements.map((p) => p.x), ...lockedFootprints.map((f) => f.x)];
-          const rightEdges = [
-            ...placements.map((p) => p.x + sizeById.get(p.child.id).width),
-            ...lockedFootprints.map((f) => f.x + f.width),
-          ];
-          const bottomEdges = [
-            ...placements.map((p) => p.y - sizeById.get(p.child.id).height),
-            ...lockedFootprints.map((f) => f.y - f.height),
-          ];
-          const topEdges = [...placements.map((p) => p.y), ...lockedFootprints.map((f) => f.y)];
-          const width = Math.max(...rightEdges) - Math.min(...leftEdges) + CONTAINER_PADDING * 2;
-          const height = Math.max(...topEdges) - Math.min(...bottomEdges) + CONTAINER_PADDING * 2;
-          return fetch(`${API_BASE}/api/update_position`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: groupId, x: groupBox.x, y: groupBox.y, width, height }),
-          }).then((r) => r.json());
-        })
-        .then((res) => {
-          if (res.error) {
-            setStatus(`error: ${res.error}`);
-            return;
-          }
-          setAutoLayoutUndoSnapshot(undoSnapshot);
-          refreshGraphRef.current?.();
-        })
-        .catch((err) => setStatus(`error: ${err}`))
-        .finally(() => setLayoutRunning(false));
-    },
-    [flowGraph.nodes, scale]
-  );
-
   // Reverts whatever onAutoLayoutGroup/onAutoLayoutRecursive/
-  // onAutoLayoutGroupByFlow/onRandomizeGroup most recently applied, using
+  // onAutoLayoutGroupByFlow/onAutoLayoutRecursiveFlow most recently applied, using
   // whichever one's pre-operation snapshot it captured -- restores each
   // touched node's
   // exact raw x/y (and width/height, for a
@@ -2000,6 +2014,114 @@ export default function App() {
             setFlowGraph((g) => ({
               ...g,
               nodes: g.nodes.map((n) => (flips[n.id] !== undefined ? { ...n, data: { ...n.data, flipped: flips[n.id] } } : n)),
+            }));
+          }
+          setAutoLayoutUndoSnapshot(undoSnapshot);
+          refreshGraphRef.current?.();
+        })
+        .catch((err) => setStatus(`error: ${err}`))
+        .finally(() => setLayoutRunning(false));
+    },
+    [flowGraph.nodes, flowGraph.edges, scale]
+  );
+
+  // Recurse Flow -- see computeLocalFlowLayouts' own comment for the
+  // three-part design (Flow at every nested level, refuse unless the
+  // outermost level is all groups, a uniform square array for that
+  // outermost level). No per-level time budget to divide up here (unlike
+  // onAutoLayoutRecursive above) -- see computeLocalFlowLayouts' own
+  // comment on why.
+  const onAutoLayoutRecursiveFlow = useCallback(
+    (rootId) => {
+      const rawNodes = flowGraph.nodes.map((n) => n.data);
+      const rawById = {};
+      rawNodes.forEach((n) => {
+        rawById[n.id] = n;
+      });
+      const root = rawById[rootId];
+      if (!root) return;
+
+      // The user's own explicit stipulation: the outermost level has no
+      // pool/non-pool split to alternate between, only because every one
+      // of its own direct children is assumed to be a group itself --
+      // refuse outright rather than silently guessing at a mixed level
+      // (a plain pool/reaction sitting next to a nested group has no
+      // sensible "square array" position among boxes it isn't the same
+      // kind of thing as).
+      const directChildren = rawNodes.filter(
+        (n) => n.parentId === rootId && !(n.type === 'pool' && n.isEnzComplex)
+      );
+      if (directChildren.length === 0) return;
+      if (directChildren.some((c) => !CONTAINER_TYPES.includes(c.type))) {
+        setStatus('error: Recurse Flow requires every direct child of the selected group to be a group or compartment itself');
+        return;
+      }
+
+      setLayoutRunning(true);
+      const containerIndex = buildContainerIndex(rawNodes, rawById);
+      const boxById = {};
+      const localLayouts = {};
+      const flipsOut = {};
+      computeLocalFlowLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, flipsOut, flowGraph.edges, effectiveAutoLayoutCell(scale));
+      if (localLayouts[rootId].children.length === 0) {
+        setLayoutRunning(false);
+        return;
+      }
+
+      const rootBox = effectiveContainerBox(root, containerIndex, boxById);
+      const positionUpdates = [];
+      const resizeUpdates = [
+        { id: rootId, x: rootBox.x, y: rootBox.y, width: localLayouts[rootId].width, height: localLayouts[rootId].height },
+      ];
+      assignAbsolutePositions(rootId, rootBox.x, rootBox.y, rawById, localLayouts, positionUpdates, resizeUpdates);
+
+      const touchedIds = new Set([...positionUpdates.map((u) => u.id), ...resizeUpdates.map((u) => u.id)]);
+      const undoSnapshot = {
+        nodes: [...touchedIds].map((id) => {
+          const n = rawById[id];
+          return { id, x: n.x, y: n.y, width: n.width, height: n.height, flipped: n.flipped, isContainer: CONTAINER_TYPES.includes(n.type) };
+        }),
+      };
+
+      const resizedIds = new Set(resizeUpdates.map((u) => u.id));
+      Promise.all(
+        positionUpdates
+          .filter((u) => !resizedIds.has(u.id))
+          .map((u) =>
+            fetch(`${API_BASE}/api/update_position`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: u.id, x: u.x, y: u.y }),
+            }).then((r) => r.json())
+          )
+      )
+        .then((results) => {
+          const failed = results.find((r) => r.error);
+          if (failed) throw new Error(failed.error);
+          return Promise.all(
+            resizeUpdates.map((u) =>
+              fetch(`${API_BASE}/api/update_position`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(u),
+              }).then((r) => r.json())
+            )
+          );
+        })
+        .then((results) => {
+          const failed = results.find((r) => r.error);
+          if (failed) {
+            setStatus(`error: ${failed.error}`);
+            return;
+          }
+          // Each level's own VERIFIED flips (see computeLocalFlowLayouts'
+          // own comment) are applied directly -- no need to re-derive
+          // them afterward with the plain heuristic the way
+          // onAutoLayoutRecursive above still does for Square.
+          if (Object.keys(flipsOut).length > 0) {
+            setFlowGraph((g) => ({
+              ...g,
+              nodes: g.nodes.map((n) => (flipsOut[n.id] !== undefined ? { ...n, data: { ...n.data, flipped: flipsOut[n.id] } } : n)),
             }));
           }
           setAutoLayoutUndoSnapshot(undoSnapshot);
@@ -3060,7 +3182,7 @@ export default function App() {
       onAutoLayoutGroup={onAutoLayoutGroup}
       onAutoLayoutGroupByFlow={onAutoLayoutGroupByFlow}
       onAutoLayoutRecursive={onAutoLayoutRecursive}
-      onRandomizeGroup={onRandomizeGroup}
+      onAutoLayoutRecursiveFlow={onAutoLayoutRecursiveFlow}
       onClearLayoutLocks={onClearLayoutLocks}
       layoutRunning={layoutRunning}
       selectedGroupScore={selectedGroupScore}

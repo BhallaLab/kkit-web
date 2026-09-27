@@ -58,6 +58,15 @@ const EDGE_ATTACHMENT = {
   chanParent: { source: 'auto-source', target: 'auto-parent' },
   stimTarget: { source: 'bottom', target: 'auto-target' },
   funcInput: { source: 'auto-source', target: 'auto-target' },
+  // Recurse Flow's own outer, all-groups level (see layoutGrid.js's
+  // computeUniformFlowLayout/buildGroupRollupEdges) -- a derived edge
+  // between two sibling group boxes, standing in for however many real
+  // edges actually cross between their contents. Never flipped (a group
+  // has no flip concept), so 'auto-source'/'auto-target' always resolve
+  // to the same fixed left-to-right pairing -- a reasonable generic
+  // approximation, and this only ever feeds an internal score/ordering
+  // decision, never an actually-drawn connector.
+  rollup: { source: 'auto-source', target: 'auto-target' },
 };
 
 // The user's own later feedback: halve the LENGTH cost of an enzyme's own

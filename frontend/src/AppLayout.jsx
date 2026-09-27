@@ -38,7 +38,7 @@ export default function AppLayout({
   onAutoLayoutGroup,
   onAutoLayoutGroupByFlow,
   onAutoLayoutRecursive,
-  onRandomizeGroup,
+  onAutoLayoutRecursiveFlow,
   onClearLayoutLocks,
   layoutRunning,
   selectedGroupScore,
@@ -101,7 +101,7 @@ export default function AppLayout({
         onAutoLayoutGroup={onAutoLayoutGroup}
         onAutoLayoutGroupByFlow={onAutoLayoutGroupByFlow}
         onAutoLayoutRecursive={onAutoLayoutRecursive}
-        onRandomizeGroup={onRandomizeGroup}
+        onAutoLayoutRecursiveFlow={onAutoLayoutRecursiveFlow}
         onClearLayoutLocks={onClearLayoutLocks}
         layoutRunning={layoutRunning}
         selectedGroupScore={selectedGroupScore}

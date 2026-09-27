@@ -9,6 +9,7 @@ import {
   Grid,
   Divider,
   Chip,
+  Tooltip,
 } from '@mui/material';
 import { RAINBOW_16 } from '../../colorUtils';
 
@@ -137,7 +138,7 @@ export default function PropertiesMenuBox({
   onAutoLayoutGroup,
   onAutoLayoutGroupByFlow,
   onAutoLayoutRecursive,
-  onRandomizeGroup,
+  onAutoLayoutRecursiveFlow,
   onClearLayoutLocks,
   layoutRunning,
   selectedGroupScore,
@@ -376,18 +377,19 @@ export default function PropertiesMenuBox({
             </Grid>
             {selectedGroupScore && (
               <Grid size={12}>
-                <TextField
-                  fullWidth
-                  label="Layout score"
-                  size="small"
-                  value={formatNumber(selectedGroupScore.weighted)}
-                  slotProps={{ input: { readOnly: true } }}
-                  variant="filled"
-                  helperText="Lower is better -- weighted total of connector length, crossings, icon overlaps, and footprint area. Same score auto-layout itself uses to judge a candidate."
-                />
+                <Tooltip title="Lower is better -- weighted total of connector length, crossings, icon overlaps, and footprint area. Same score auto-layout itself uses to judge a candidate.">
+                  <TextField
+                    fullWidth
+                    label="Layout score"
+                    size="small"
+                    value={formatNumber(selectedGroupScore.weighted)}
+                    slotProps={{ input: { readOnly: true } }}
+                    variant="filled"
+                  />
+                </Tooltip>
               </Grid>
             )}
-            <Grid size={6}>
+            <Grid size={3}>
               <Button
                 fullWidth
                 size="small"
@@ -399,7 +401,31 @@ export default function PropertiesMenuBox({
                 Square
               </Button>
             </Grid>
-            <Grid size={6}>
+            <Grid size={3}>
+              <Button
+                fullWidth
+                size="small"
+                variant="outlined"
+                disabled={layoutRunning}
+                onClick={() => onAutoLayoutGroup(node.id, { force: true })}
+                title="Same as Square, but always applies the freshly-packed result even if it scores worse than the current layout on the connector-length/crossings/overlap/area metric."
+              >
+                Force Square
+              </Button>
+            </Grid>
+            <Grid size={3}>
+              <Button
+                fullWidth
+                size="small"
+                variant="outlined"
+                disabled={layoutRunning}
+                onClick={() => onAutoLayoutGroup(node.id, { randomizeItems: true })}
+                title="Same as Square, but starts the search from a random initial placement (still respecting pool/non-pool rows) instead of the usual flow/name-based ordering -- useful for escaping a local optimum a deterministic start keeps landing in."
+              >
+                Rand Square
+              </Button>
+            </Grid>
+            <Grid size={3}>
               <Button
                 fullWidth
                 size="small"
@@ -408,10 +434,10 @@ export default function PropertiesMenuBox({
                 onClick={() => onAutoLayoutRecursive(node.id)}
                 title="Same as Square, but bottom-up through every nested group's own contents first, then this one -- everything below it rearranges, not just its own direct children."
               >
-                Square recursive
+                Recurse Square
               </Button>
             </Grid>
-            <Grid size={6}>
+            <Grid size={3}>
               <Button
                 fullWidth
                 size="small"
@@ -423,31 +449,43 @@ export default function PropertiesMenuBox({
                 Flow
               </Button>
             </Grid>
-            <Grid size={6}>
+            <Grid size={3}>
               <Button
                 fullWidth
                 size="small"
                 variant="outlined"
                 disabled={layoutRunning}
-                onClick={() => onAutoLayoutGroupByFlow(node.id, true)}
+                onClick={() => onAutoLayoutGroupByFlow(node.id, { force: true })}
                 title="Same as Flow, but always applies the result even if it scores worse than the current layout on the plain connector-length/crossings/overlap/area metric -- a cramped Square packing can score deceptively well on that metric purely by being cramped, which can otherwise block Flow's own alternating, more readable structure from ever being applied."
               >
                 Force Flow
               </Button>
             </Grid>
-            <Grid size={12}>
+            <Grid size={3}>
               <Button
                 fullWidth
                 size="small"
                 variant="outlined"
                 disabled={layoutRunning}
-                onClick={() => onRandomizeGroup(node.id)}
-                title="Debugging tool: scatters direct children at entirely random positions -- not a real layout strategy, useful for exercising the other layout actions from a deliberately bad starting point."
+                onClick={() => onAutoLayoutGroupByFlow(node.id, { randomizeItems: true, randomizeBlanks: true })}
+                title="Same as Flow, but starts from a random initial placement -- items AND each row's own blank slot are shuffled, not just item order -- instead of the usual flow-ordered start."
               >
-                Randomize
+                Rand Flow
               </Button>
             </Grid>
-            <Grid size={12}>
+            <Grid size={3}>
+              <Button
+                fullWidth
+                size="small"
+                variant="outlined"
+                disabled={layoutRunning}
+                onClick={() => onAutoLayoutRecursiveFlow(node.id)}
+                title="Bottom-up: every nested group gets its own Flow layout first, then this group's own direct children -- which must all be groups/compartments themselves, or this refuses -- are arranged as a plain square array (a group is neither a pool nor a non-pool, so no row alternation applies at this level)."
+              >
+                Recurse Flow
+              </Button>
+            </Grid>
+            <Grid size={6}>
               <Button
                 fullWidth
                 size="small"
@@ -456,10 +494,10 @@ export default function PropertiesMenuBox({
                 onClick={onUndoLayout}
                 title="Reverts whatever the last auto-layout action (on this group or any other) just changed -- only the most recent run can be undone."
               >
-                Undo last auto-layout
+                Undo Layout
               </Button>
             </Grid>
-            <Grid size={12}>
+            <Grid size={6}>
               <Button
                 fullWidth
                 size="small"
@@ -469,7 +507,7 @@ export default function PropertiesMenuBox({
                 onClick={() => onClearLayoutLocks(node.id)}
                 title="Clears the 'manually positioned/oriented' flag on this group and everything inside it -- a manual drag, resize, or flip toggle sets that flag automatically so auto-layout leaves it alone; use this if you actually want auto-layout to touch everything here again."
               >
-                Clear layout locks (this group and everything inside it)
+                Unlock Placed Items
               </Button>
             </Grid>
           </Grid>

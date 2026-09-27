@@ -20,13 +20,17 @@
 
 import { greedyFeedbackArcSet, computeFlowDepth } from './layoutFlow.js';
 import { computeLayoutScore, DEFAULT_SCORE_WEIGHTS, refineFlips } from './layoutScore.js';
-import { AUTO_LAYOUT_CELL, computeFlipUpdates } from './layoutSeed.js';
+import { AUTO_LAYOUT_CELL, computeFlipUpdates, computeGridCells } from './layoutSeed.js';
 
 // Which edge types represent actual material/information flow -- same
 // scope the previous layered design used, plus funcInput (a summation
 // function's own real incoming connections -- see moose_graph.py's
-// describe_stim/_function_inputs split, and nodes.jsx's FuncNode).
-const FLOW_EDGE_TYPES = new Set(['substrate', 'product', 'chanIn', 'chanOut', 'stimTarget', 'funcInput']);
+// describe_stim/_function_inputs split, and nodes.jsx's FuncNode), plus
+// rollup (Recurse Flow's own outer, all-groups level -- see
+// buildGroupRollupEdges -- a derived stand-in for a real edge type,
+// synthesized fresh each call rather than ever appearing in the model's
+// own graph).
+const FLOW_EDGE_TYPES = new Set(['substrate', 'product', 'chanIn', 'chanOut', 'stimTarget', 'funcInput', 'rollup']);
 
 // Item 3: grid spacing calibrated to fit an icon plus a typical name with
 // 50% to spare. Rather than inventing a fresh calibration from scratch,
@@ -511,18 +515,27 @@ function distributeSlotCounts(totalSlots, numRows) {
   return Array.from({ length: numRows }, (_, i) => base + (i < extra ? 1 : 0));
 }
 
-function fillSide(grid, sortedIds, rows, numCols, isWide) {
-  // One blank reserved at the same column (the OVERALL grid's own
-  // midpoint, shared by every row regardless of which side it belongs
-  // to, for a visually consistent "blank column" down the whole grid)
-  // in every row of this side BEFORE any entity is placed -- item 7/8's
+function fillSide(grid, sortedIds, rows, numCols, isWide, randomizeBlanks = false) {
+  // One blank reserved per row BEFORE any entity is placed -- item 7/8's
   // "intersperse a blank in the middle of each row, to simplify
   // shuffling." Reserving it up front (rather than inserting it after
   // the fact once a row's real content is known) means placement only
   // ever has to skip over an already-blank cell, never overwrite one
   // that was already given to a real entity.
-  const blankCol = Math.floor(numCols / 2);
-  rows.forEach((row) => grid.setBlank(row, blankCol));
+  //
+  // Normally every row shares the SAME column (the overall grid's own
+  // midpoint), for a visually consistent "blank column" down the whole
+  // grid. Rand Flow (the user's own later request, distinct from Rand
+  // Square: "picks items AND BLANKS at random") instead gives each row
+  // its own independently randomized blank column -- part of genuinely
+  // starting the swap-search from an arbitrary arrangement rather than
+  // one that still has a deliberately tidy blank column running through
+  // it.
+  const sharedBlankCol = Math.floor(numCols / 2);
+  const blankColByRow = new Map(
+    rows.map((row) => [row, randomizeBlanks ? Math.floor(Math.random() * numCols) : sharedBlankCol])
+  );
+  rows.forEach((row) => grid.setBlank(row, blankColByRow.get(row)));
 
   const totalSlots = sortedIds.reduce((sum, id) => sum + (isWide(id) ? 2 : 1), 0);
   const rowTargets = distributeSlotCounts(totalSlots, rows.length);
@@ -533,13 +546,33 @@ function fillSide(grid, sortedIds, rows, numCols, isWide) {
   let placedInRow = 0;
 
   function skipBlank() {
-    if (col === blankCol) col += 1;
+    if (col === blankColByRow.get(row)) col += 1;
   }
 
   sortedIds.forEach((id) => {
     const wide = isWide(id);
+    const cost = wide ? 2 : 1;
     skipBlank();
-    if (placedInRow >= rowTargets[rowIdx] && rowIdx < rows.length - 1) {
+    // Advance BEFORE placing whenever this item would overshoot the
+    // current row's own target, but only once the row already has at
+    // least one real item in it -- an empty row still takes its first
+    // item regardless of overshoot (a lone wide item can legitimately
+    // consume an entire row's target on its own), which is what
+    // guarantees every row gets real content in the first place. The
+    // OLD check here (`placedInRow >= rowTargets[rowIdx]`, comparing
+    // only what was already placed, never the INCOMING item's own cost)
+    // let a wide item silently overshoot a row that still had room left
+    // by its narrow-only accounting -- fine on its own, but the slots it
+    // ate were still counted against the FIXED total the later rows were
+    // relying on, so enough of that overshoot compounding across earlier
+    // rows could starve a LATER row down to zero real items entirely --
+    // an alternation-breaking empty row, not just uneven packing.
+    // Verified directly: Rand Square/Rand Flow's own shuffled initial
+    // order (unlike the deterministic sort key, which never happened to
+    // trigger this for this app's existing test fixtures) hit this
+    // reliably on Repressilator.g's own lac_gene group, several long
+    // reaction names in a row emptying out its very last non-pool row.
+    if (placedInRow > 0 && placedInRow + cost > rowTargets[rowIdx] && rowIdx < rows.length - 1) {
       rowIdx += 1;
       row = rows[rowIdx];
       col = 0;
@@ -548,10 +581,10 @@ function fillSide(grid, sortedIds, rows, numCols, isWide) {
     }
     // A wide entity's own SECOND cell landing exactly on the reserved
     // blank would silently overwrite it -- shift one more column first.
-    if (wide && col + 1 === blankCol) col += 1;
+    if (wide && col + 1 === blankColByRow.get(row)) col += 1;
     grid.setEntity(row, col, id, wide);
-    col += wide ? 2 : 1;
-    placedInRow += wide ? 2 : 1;
+    col += cost;
+    placedInRow += cost;
   });
 }
 
@@ -587,7 +620,19 @@ function orderNonPoolsByPoolConnection(sortedPoolIds, sortedNonPoolIds, edges) {
   return ordered;
 }
 
-function buildInitialGrid({ ids, edges, rawById, sizes, longNameWidth }) {
+// Fisher-Yates -- used only by the "Rand Square"/"Rand Flow" initial-
+// placement option (see computeFlowGroupLayout's own `randomizeItems`/
+// `randomizeBlanks`), never by the deterministic sort-key ordering below.
+function shuffled(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function buildInitialGrid({ ids, edges, rawById, sizes, longNameWidth, randomizeItems = false, randomizeBlanks = false }) {
   const pools = ids.filter((id) => rawById[id]?.type === 'pool');
   const nonPools = ids.filter((id) => rawById[id]?.type !== 'pool');
   const isWide = (id) => (sizes.get(id)?.width ?? 0) > longNameWidth;
@@ -596,23 +641,39 @@ function buildInitialGrid({ ids, edges, rawById, sizes, longNameWidth }) {
 
   const { numCols, rowsPerSide } = computeGridDimensions(pools.length, nonPools.length, numWidePools, numWideNonPools);
 
-  const { flowOrder } = computeFlowOrderAndBias(ids, edges, rawById);
-  const seriesClusters = detectSeriesClusters(ids, rawById);
-  const phosphoKey = computePhosphoKey(ids, rawById, seriesClusters);
-  const sortKey = (id) => [flowOrder.get(id) ?? 0, phosphoKey.get(id) ?? 0];
-  const compareSortKey = (a, b) => {
-    const ka = sortKey(a);
-    const kb = sortKey(b);
-    return ka[0] - kb[0] || ka[1] - kb[1];
-  };
-
-  const sortedPools = [...pools].sort(compareSortKey);
-  const sortedNonPools = orderNonPoolsByPoolConnection(sortedPools, [...nonPools].sort(compareSortKey), edges);
+  // Rand Square/Rand Flow (the user's own later request): initial
+  // placement order is a plain shuffle instead of the flow/phospho sort
+  // key below -- still respecting the pool/non-pool row split itself
+  // (that's structural, see this module's own header comment, not
+  // something either ordering choice touches), just skipping the
+  // "sequential/flow-ordered" starting guess so the swap-search below
+  // starts from a genuinely arbitrary arrangement instead. Non-pools
+  // are shuffled independently too rather than via
+  // orderNonPoolsByPoolConnection, which is itself a deliberate initial
+  // guess this option exists to bypass.
+  let sortedPools;
+  let sortedNonPools;
+  if (randomizeItems) {
+    sortedPools = shuffled(pools);
+    sortedNonPools = shuffled(nonPools);
+  } else {
+    const { flowOrder } = computeFlowOrderAndBias(ids, edges, rawById);
+    const seriesClusters = detectSeriesClusters(ids, rawById);
+    const phosphoKey = computePhosphoKey(ids, rawById, seriesClusters);
+    const sortKey = (id) => [flowOrder.get(id) ?? 0, phosphoKey.get(id) ?? 0];
+    const compareSortKey = (a, b) => {
+      const ka = sortKey(a);
+      const kb = sortKey(b);
+      return ka[0] - kb[0] || ka[1] - kb[1];
+    };
+    sortedPools = [...pools].sort(compareSortKey);
+    sortedNonPools = orderNonPoolsByPoolConnection(sortedPools, [...nonPools].sort(compareSortKey), edges);
+  }
 
   const grid = makeGrid();
   const poolRowIndices = Array.from({ length: rowsPerSide }, (_, i) => 2 * i + 1);
   const nonPoolRowIndices = Array.from({ length: rowsPerSide }, (_, i) => 2 * i);
-  fillSide(grid, sortedPools, poolRowIndices, numCols, isWide);
+  fillSide(grid, sortedPools, poolRowIndices, numCols, isWide, randomizeBlanks);
   // A long-named entity gets the same double-cell treatment on EITHER
   // side, not just pools -- an enzyme's own real rendered width also
   // grows with name length (see App.jsx's childFootprint, which now
@@ -620,7 +681,7 @@ function buildInitialGrid({ ids, edges, rawById, sizes, longNameWidth }) {
   // long-named pool already gets); this used to hardcode `() => false`
   // for the non-pool side, so a long-named enzyme's neighbor got no
   // extra room at all and visibly overlapped it once rendered.
-  fillSide(grid, sortedNonPools, nonPoolRowIndices, numCols, isWide);
+  fillSide(grid, sortedNonPools, nonPoolRowIndices, numCols, isWide, randomizeBlanks);
 
   return { grid, numCols, numRows: Math.max(...poolRowIndices, ...nonPoolRowIndices, 0) + 1 };
 }
@@ -636,11 +697,14 @@ function buildInitialGrid({ ids, edges, rawById, sizes, longNameWidth }) {
 // one uniform pitch for the whole grid (not content-driven per row) is
 // what makes an odd row's half-shift actually nestle consistently
 // between the rows above and below it regardless of how full any
-// particular row is.
-function gridToPixels(grid, numRows, cellPitch, rowPitch) {
+// particular row is. `useOffset = false` (Recurse Flow's own outer,
+// all-groups level -- see computeUniformFlowLayout) turns this off
+// entirely: the user's own explicit stipulation for that level was a
+// genuinely square, unoffset array, not this module's usual hex pattern.
+function gridToPixels(grid, numRows, cellPitch, rowPitch, useOffset = true) {
   const positions = new Map();
   for (let row = 0; row < numRows; row++) {
-    const shift = row % 2 === 1 ? cellPitch / 2 : 0;
+    const shift = useOffset && row % 2 === 1 ? cellPitch / 2 : 0;
     const y = -row * rowPitch;
     for (const id of grid.entityIds()) {
       const p = grid.posOf(id);
@@ -740,8 +804,8 @@ function computeAspectTerm(grid, numRows) {
   return maxRowLength / Math.max(1, numRows);
 }
 
-function computeTotalLoss({ ids, edges, rawById, sizes, grid, numRows, seriesClusters, inputBias, lockedFlipped, weights, cellPitch, rowPitch }) {
-  const positions = gridToPixels(grid, numRows, cellPitch, rowPitch);
+function computeTotalLoss({ ids, edges, rawById, sizes, grid, numRows, seriesClusters, inputBias, lockedFlipped, weights, cellPitch, rowPitch, useOffset = true }) {
+  const positions = gridToPixels(grid, numRows, cellPitch, rowPitch, useOffset);
   const xById = {};
   ids.forEach((id) => {
     xById[id] = positions.get(id)?.x ?? 0;
@@ -944,7 +1008,7 @@ function trySwapStep(grid, ids, rawById, lockedIds, positions, neighborsOf, numC
   return [bestId, partnerId];
 
   function shift(row) {
-    return row % 2 === 1 ? scoreCtx.cellPitch / 2 : 0;
+    return scoreCtx.useOffset !== false && row % 2 === 1 ? scoreCtx.cellPitch / 2 : 0;
   }
 
   // Sum of distance from `pos` to each of `neighborIds`' own CURRENT
@@ -992,7 +1056,14 @@ function trySwapStep(grid, ids, rawById, lockedIds, positions, neighborsOf, numC
   // this entity.
   function bestCandidateFor(bestId) {
     const own = grid.posOf(bestId);
-    const category = categoryOf(bestId, rawById);
+    // `scoreCtx.categoryFn` (Recurse Flow's own outer, all-groups level --
+    // see computeUniformFlowLayout) overrides the usual pool/non-pool
+    // split with a function that returns the SAME constant for every id,
+    // collapsing "same category" below to "every occupied row" -- a
+    // genuinely uniform grid with no row-category restriction at all,
+    // without needing a second copy of this whole search.
+    const categoryFn = scoreCtx.categoryFn ?? categoryOf;
+    const category = categoryFn(bestId, rawById);
     const ownPos = positions.get(bestId);
     const ownNeighbors = neighborsOf.get(bestId) ?? [];
     const ownCostBefore = costAt(ownPos, ownNeighbors);
@@ -1015,13 +1086,16 @@ function trySwapStep(grid, ids, rawById, lockedIds, positions, neighborsOf, numC
     const canMoveToBlank = ownRowCount > 1;
 
     // Legal partners: every other cell of the SAME category (occupied by
-    // another entity of that category, or blank) -- see rowCategory's own
-    // comment: a pool can only ever be at an odd row, so every candidate
-    // considered here already IS that category by construction, nothing
-    // to filter beyond "not bestId's own cell."
-    const candidateRows = category === 'pool'
-      ? [...new Set(ids.filter((i) => categoryOf(i, rawById) === 'pool').map((i) => grid.posOf(i)?.row).filter((r) => r !== undefined))]
-      : [...new Set(ids.filter((i) => categoryOf(i, rawById) !== 'pool').map((i) => grid.posOf(i)?.row).filter((r) => r !== undefined))];
+    // another entity of that category, or blank) -- a pool can only ever
+    // be at an odd row, so every candidate considered here already IS
+    // that category by construction, nothing to filter beyond "not
+    // bestId's own cell." When categoryFn is the uniform one above, every
+    // id shares the same category, so this reduces to "every row anyone
+    // occupies" -- the whole grid, exactly as a genuinely uniform layout
+    // needs.
+    const candidateRows = [
+      ...new Set(ids.filter((i) => categoryFn(i, rawById) === category).map((i) => grid.posOf(i)?.row).filter((r) => r !== undefined)),
+    ];
 
     let bestKey = null;
     let bestGain = 0;
@@ -1141,7 +1215,18 @@ function cloneGrid(grid, ids, numRows, numCols) {
 // Top-level orchestrator
 // ---------------------------------------------------------------------
 
-export function computeFlowGroupLayout({ children, edges, rawById, sizes, weights = DEFAULT_FLOW_WEIGHTS, maxCycles = MAX_CYCLES, force = false, cellUnit = AUTO_LAYOUT_CELL }) {
+export function computeFlowGroupLayout({
+  children,
+  edges,
+  rawById,
+  sizes,
+  weights = DEFAULT_FLOW_WEIGHTS,
+  maxCycles = MAX_CYCLES,
+  force = false,
+  cellUnit = AUTO_LAYOUT_CELL,
+  randomizeItems = false,
+  randomizeBlanks = false,
+}) {
   const unlocked = children.filter((c) => !c.locked);
   const ids = unlocked.map((c) => c.id);
   const idSet = new Set(ids);
@@ -1157,7 +1242,7 @@ export function computeFlowGroupLayout({ children, edges, rawById, sizes, weight
   // convention pushes `scale` far from its usual range.
   const { cellPitch, rowPitch, longNameWidth } = derivePitches(cellUnit);
 
-  const { grid, numRows, numCols } = buildInitialGrid({ ids, edges: localEdges, rawById, sizes, longNameWidth });
+  const { grid, numRows, numCols } = buildInitialGrid({ ids, edges: localEdges, rawById, sizes, longNameWidth, randomizeItems, randomizeBlanks });
   const startingGrid = cloneGrid(grid, ids, numRows, numCols);
   // Item 9's own flip pass now happens inside computeTotalLoss itself
   // (see its own comment, and layoutScore.js's refineFlips) -- every
@@ -1279,4 +1364,180 @@ export function computeFlowGroupLayout({ children, edges, rawById, sizes, weight
   else if (finalGrid === startingGrid) flips = startingFlips;
   else flips = Object.fromEntries(ids.map((id) => [id, lockedFlipped(id)]));
   return { positions, flips };
+}
+
+// ---------------------------------------------------------------------
+// Recurse Flow's own outer, all-groups level
+// ---------------------------------------------------------------------
+
+// Walks `entityId` up its own `parentId` chain until it reaches a member
+// of `idSet` -- used to find which of THIS level's direct group children
+// a deeply-nested entity (a pool several groups down, say) actually
+// belongs to. A bounded guard, not an infinite loop, is the only realistic
+// defense against a corrupt/cyclic parentId chain (never actually
+// expected -- containment is a tree -- but cheap insurance is worth it
+// for something that walks caller-supplied data).
+function ancestorAmong(entityId, idSet, rawById) {
+  let cur = entityId;
+  let guard = 0;
+  while (cur && guard++ < 64) {
+    if (idSet.has(cur)) return cur;
+    cur = rawById[cur]?.parentId;
+  }
+  return null;
+}
+
+// A real edge never connects two group boxes directly -- it connects the
+// molecules/reactions nested inside them, arbitrarily deep. This derives
+// one stand-in edge per real, flow-relevant edge that actually crosses
+// between two different children of `ids` (dropping anything that stays
+// entirely inside one group, or that doesn't resolve to two of `ids` at
+// all), which is what gives computeUniformFlowLayout's flow ordering and
+// distance/crossing scoring something real to work with -- see
+// layoutScore.js's own EDGE_ATTACHMENT.rollup.
+function buildGroupRollupEdges(ids, allEdges, rawById) {
+  const idSet = new Set(ids);
+  const rolled = [];
+  allEdges.forEach((e, i) => {
+    if (!FLOW_EDGE_TYPES.has(e.data?.type)) return;
+    const sourceGroup = ancestorAmong(e.source, idSet, rawById);
+    const targetGroup = ancestorAmong(e.target, idSet, rawById);
+    if (!sourceGroup || !targetGroup || sourceGroup === targetGroup) return;
+    rolled.push({ id: `rollup-${i}`, source: sourceGroup, target: targetGroup, data: { type: 'rollup' } });
+  });
+  return rolled;
+}
+
+// Recurse Flow's own outer level (see App.jsx's onAutoLayoutRecursiveFlow):
+// once every nested group has already been laid out via Flow, bottom-up
+// (this module's usual computeFlowGroupLayout, called once per nested
+// group -- see App.jsx's own recursive driver), the level being placed
+// HERE is the recursion's own root, whose direct children are ALL groups
+// themselves (App.jsx refuses the whole operation otherwise). A group is
+// neither a "pool" nor a "non-pool" in any structural sense -- there is
+// nothing to alternate between -- so this is a distinct, simpler sibling
+// to computeFlowGroupLayout: one uniform category, a genuinely square
+// (not the hex/brick half-row offset) grid sized to each child's own
+// real, highly variable footprint (see computeGridCells -- the same
+// content-aware sizing computeLocalLayouts' plain square packer already
+// uses, for the same reason: unlike a fixed molecule-icon cell, a
+// group's own box can be almost any size). buildGroupRollupEdges above is
+// what gives the flow ordering and the distance/crossing scoring
+// something real to work with, since no real edge ever connects two
+// group boxes directly.
+export function computeUniformFlowLayout({ children, edges, rawById, sizes, weights = DEFAULT_FLOW_WEIGHTS, maxCycles = MAX_CYCLES, force = false }) {
+  const unlocked = children.filter((c) => !c.locked);
+  const ids = unlocked.map((c) => c.id);
+  const localEdges = buildGroupRollupEdges(ids, edges, rawById);
+  const lockedFlipped = () => false; // a group has no flip concept
+  const seriesClusters = detectSeriesClusters(ids, rawById); // always empty for group names in practice -- harmless
+  const { flowOrder, inputBias } = computeFlowOrderAndBias(ids, localEdges, rawById);
+
+  // Content-aware, uniform cell size (every child gets the LARGEST
+  // child's own footprint, not its own real size) -- see this function's
+  // own header comment on why a fixed molecule-icon pitch is wrong here.
+  // `cols = ceil(sqrt(N))` is a genuinely square arrangement, per the
+  // user's own explicit stipulation.
+  const { colWidth, rowHeight, cols } = computeGridCells(
+    ids.map((id) => sizes.get(id) ?? { width: AUTO_LAYOUT_CELL, height: AUTO_LAYOUT_CELL })
+  );
+  const numCols = cols;
+  const numRows = Math.max(1, Math.ceil(ids.length / numCols));
+  // Every id shares this same category -- see trySwapStep's own
+  // categoryFn comment on how that collapses its usual pool/non-pool
+  // split into "every occupied row is a legal candidate."
+  const categoryFn = () => 'group';
+
+  function placeInOrder(orderedIds) {
+    const g = makeGrid();
+    orderedIds.forEach((id, i) => g.setEntity(Math.floor(i / numCols), i % numCols, id, false));
+    // Every leftover cell in the grid's own rectangle (whenever N isn't an
+    // exact multiple of numCols) is marked blank, not left unset -- an
+    // unset cell is invisible to the swap search entirely (see
+    // trySwapStep's own bestCandidateFor: `if (!cell) continue`), so
+    // leaving it unset would silently waste that space rather than
+    // making it usable.
+    for (let r = 0; r < numRows; r++) {
+      for (let c = 0; c < numCols; c++) {
+        if (!g.get(r, c)) g.setBlank(r, c);
+      }
+    }
+    return g;
+  }
+
+  const sortedIds = [...ids].sort((a, b) => (flowOrder.get(a) ?? 0) - (flowOrder.get(b) ?? 0));
+  const grid = placeInOrder(sortedIds);
+  const startingGrid = cloneGrid(grid, ids, numRows, numCols);
+
+  const scoreArgs = {
+    ids,
+    edges: localEdges,
+    rawById,
+    sizes,
+    seriesClusters,
+    inputBias,
+    lockedFlipped,
+    weights,
+    cellPitch: colWidth,
+    rowPitch: rowHeight,
+    useOffset: false,
+  };
+  const startingResult = computeTotalLoss({ ...scoreArgs, grid, numRows });
+  let startingLoss = startingResult.total;
+  const startingDisplayScore = startingResult.displayWeighted;
+
+  let bestGrid = cloneGrid(grid, ids, numRows, numCols);
+  let bestNumRows = numRows;
+  let bestDisplayScore = startingDisplayScore;
+
+  let previousCycleLoss = startingLoss;
+  for (let cycle = 0; cycle < maxCycles; cycle++) {
+    const positions = gridToPixels(grid, numRows, colWidth, rowHeight, false);
+    const neighborsOf = buildNeighborIndex(ids, localEdges);
+    const triedThisCycle = new Set();
+    const innerStepsCap = MAX_INNER_STEPS_SAFETY_CAP(ids.length);
+    const scoreCtx = { sizes, lockedFlipped, localEdges, cellPitch: colWidth, rowPitch: rowHeight, useOffset: false, categoryFn };
+    for (let step = 0; step < innerStepsCap; step++) {
+      const swapped = trySwapStep(grid, ids, rawById, new Set(), positions, neighborsOf, numCols, triedThisCycle, scoreCtx);
+      if (!swapped) break;
+      swapped.forEach((id) => triedThisCycle.add(id));
+      const updated = gridToPixels(grid, numRows, colWidth, rowHeight, false);
+      swapped.forEach((id) => positions.set(id, updated.get(id)));
+    }
+
+    const { total, displayWeighted } = computeTotalLoss({ ...scoreArgs, grid, numRows });
+    if (displayWeighted < bestDisplayScore) {
+      bestDisplayScore = displayWeighted;
+      bestGrid = cloneGrid(grid, ids, numRows, numCols);
+      bestNumRows = numRows;
+    }
+    const improvement = previousCycleLoss > 0 ? (previousCycleLoss - total) / previousCycleLoss : 0;
+    previousCycleLoss = total;
+    if (improvement < TERMINATION_CRITERION) break;
+  }
+
+  // Same discard-if-worse gate as computeFlowGroupLayout (see its own
+  // comment) -- no flips to track here, a group has no flip concept.
+  let finalGrid = null;
+  let finalNumRows = null;
+  let onScreenPositions = null;
+  if (force) {
+    finalGrid = bestGrid;
+    finalNumRows = bestNumRows;
+  } else {
+    const hasRealOnScreenLayout = new Set(ids.map((id) => `${rawById[id]?.x ?? 0},${rawById[id]?.y ?? 0}`)).size > 1;
+    const onScreen = hasRealOnScreenLayout ? computeCurrentDisplayScore(ids, rawById, sizes, localEdges, lockedFlipped) : null;
+    const floorScore = onScreen ? onScreen.weighted : Infinity;
+    if (bestDisplayScore <= floorScore) {
+      finalGrid = bestGrid;
+      finalNumRows = bestNumRows;
+    } else if (startingDisplayScore <= floorScore) {
+      finalGrid = startingGrid;
+      finalNumRows = numRows;
+    } else {
+      onScreenPositions = onScreen.positions;
+    }
+  }
+  const positions = finalGrid ? gridToPixels(finalGrid, finalNumRows, colWidth, rowHeight, false) : onScreenPositions;
+  return { positions };
 }
