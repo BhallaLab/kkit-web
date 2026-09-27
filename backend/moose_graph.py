@@ -52,7 +52,22 @@ def _info(path):
     return {
         "x": info.x,
         "y": info.y,
-        "color": info.color,
+        # An Annotator info element that exists (this branch) but whose
+        # own .color was never explicitly written can come back as an
+        # empty string, not "white" the way create_info's own default
+        # would give it -- the frontend's own CSS then sees
+        # `background: ''` (silently ignored, no fill at all) while the
+        # entity's own name text still renders on top, reading as "an
+        # icon with no icon, just its name" (verified directly: this is
+        # what nodes.jsx's EnzNode -- and, to the same degree, any other
+        # node type whose own background comes straight from this field
+        # -- was showing for exactly the entities whose info element
+        # existed without ever having a color set on it). The `not
+        # moose.exists(...)` branch above already treats "no info at
+        # all" as "white" -- this keeps "info exists but color was never
+        # set" consistent with that, rather than passing the empty value
+        # straight through unexamined.
+        "color": info.color or "white",
         "textColor": info.textColor,
         "notes": info.notes,
         # Annotator's own native width/height fields ("typically display

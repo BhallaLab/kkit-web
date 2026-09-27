@@ -262,21 +262,17 @@ export function ReacNode({ id, data, selected }) {
 export const ENZ_CLIP_PATH_RIGHT = 'polygon(0% 25%, 65% 25%, 65% 0%, 100% 50%, 65% 100%, 65% 75%, 0% 75%)';
 const ENZ_CLIP_PATH_LEFT = 'polygon(100% 25%, 35% 25%, 35% 0%, 0% 50%, 35% 100%, 35% 75%, 100% 75%)';
 
-// A fixed 110px shaft was tight enough that anything longer than a short
-// name got clipped by the arrowhead notch (the clip-path's own shape, not
-// text overflow CSS, so there was nothing to just enable). Grown from name
-// length instead, the same rough per-character estimate PoolNode's own
-// (also text-driven) size uses -- the clip-path polygon is defined in
-// percentages of the box, so a wider box just stretches the same arrow
-// shape proportionally rather than needing new geometry.
+// A fixed shaft, same size for every enzyme regardless of name -- the
+// user's own later feedback: no name is drawn on the icon at all
+// anymore (see this component's own render, just the arrow shape), so
+// there's nothing left to size the box around.
 const ENZ_HEIGHT = 80;
-const ENZ_MIN_WIDTH = 110;
+const ENZ_WIDTH = 110;
 
 export function EnzNode({ id, data, selected }) {
   const flipped = !!data.flipped;
   const parentSide = data.parentSide === 'top' ? 'top' : 'bottom';
   useFlipRemeasure(id, flipped, parentSide);
-  const width = Math.max(ENZ_MIN_WIDTH, 24 + (data.name?.length ?? 0) * 15);
 
   // An enzyme's hidden complex pool is plotted via *this* icon (see
   // App.jsx's handleCanvasDrop/handleUnplot) rather than needing its own
@@ -294,28 +290,16 @@ export function EnzNode({ id, data, selected }) {
     // The clip-path lives on an inner decorative layer, not this outer
     // container -- otherwise it would also clip away the substrate/product
     // triangles, which deliberately protrude outside the visible shape.
-    // Box scaled up along with the doubled font size below -- otherwise
-    // the bigger name text would get clipped by the arrowhead shape.
-    <div style={{ position: 'relative', boxSizing: 'border-box', width, height: ENZ_HEIGHT }}>
+    <div style={{ position: 'relative', boxSizing: 'border-box', width: ENZ_WIDTH, height: ENZ_HEIGHT }}>
       <div
         style={{
           position: 'absolute',
           inset: 0,
           background: data.color,
-          color: getContrastTextColor(data.color),
-          fontWeight: 'bold',
-          fontSize: 26,
           clipPath: flipped ? ENZ_CLIP_PATH_LEFT : ENZ_CLIP_PATH_RIGHT,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          paddingLeft: flipped ? 14 : 4,
-          paddingRight: flipped ? 4 : 14,
           ...selectedGlow(selected),
         }}
-      >
-        {data.name}
-      </div>
+      />
       <SubstrateHandle flipped={flipped} />
       <ProductHandle flipped={flipped} />
       {/* The structural link to the enzyme's own real parent molecule --
@@ -739,8 +723,13 @@ function usePortsRemeasure(id, ports) {
 // underneath to obscure), or a larger label sized close to a Pool's own
 // name text and moved *outside* the box while expanded, so it never sits
 // on top of that container's real contents.
-const BADGE_FONT_SIZE = 7;
-const EXPANDED_LABEL_FONT_SIZE = POOL_FONT_SIZE + 2;
+// The user's own later feedback: group labels 1.5x larger in both
+// collapsed (BADGE_FONT_SIZE) and expanded (EXPANDED_LABEL_FONT_SIZE)
+// mode -- multiplying each of their own prior values rather than
+// picking fresh ones, to keep whatever relative sizing (root vs.
+// collapsed vs. expanded, and vs. POOL_FONT_SIZE) was already tuned.
+const BADGE_FONT_SIZE = 7 * 1.5;
+const EXPANDED_LABEL_FONT_SIZE = (POOL_FONT_SIZE + 2) * 1.5;
 
 function ContainerNode({ id, data, selected, doubleWalled, parentId }) {
   const { onContainerResize } = useContext(NodeActionsContext);

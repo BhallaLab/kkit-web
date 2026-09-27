@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { applyNodeChanges, applyEdgeChanges } from '@xyflow/react';
 import AppLayout from './AppLayout';
-import { RAINBOW_16 } from './colorUtils';
+import { RAINBOW_16, resolveGroupColor } from './colorUtils';
 import { computeCollapsedView, computeIsolateView, avoidObstacles } from './collapseView';
 import {
   AUTO_LAYOUT_CELL,
@@ -512,20 +512,19 @@ function effectiveContainerBox(n, index, boxById) {
 // nested container's real effective box (padded so its own border
 // doesn't sit flush against a neighbor's), or a flat `cellUnit` square
 // for a plain entity, which has no border/size concept of its own to
-// measure -- except a Pool or Enz (both name-labeled, "molecule"-like in
-// kkit's own terms) with a long name, which is given double that width.
-// A Pool's real rendered box is text-driven (see nodes.jsx's PoolNode --
-// padding plus a 28px font, no fixed width) and an Enz's own width is an
-// explicit `Math.max(ENZ_MIN_WIDTH, 24 + name.length*15)` formula (see
-// nodes.jsx's EnzNode) -- either way, a long name can render meaningfully
-// wider than this flat square; packing it into the same narrow cell
-// every other plain entity gets left it visually overlapping its
-// neighbor once actually rendered, even though the packing itself never
-// considered that an overlap (verified directly: a long-named enzyme in
-// a flow-layout group visibly overlapped its row neighbor, since only
-// pools got this treatment before). A coarse, cheap stand-in for
-// properly measuring the rendered text -- good enough to give a long
-// name noticeably more breathing room without trying to be pixel-exact.
+// measure -- except a Pool with a long name, which is given double that
+// width. A Pool's real rendered box is text-driven (see nodes.jsx's
+// PoolNode -- padding plus a 28px font, no fixed width), so a long name
+// can render meaningfully wider than this flat square; packing it into
+// the same narrow cell every other plain entity gets left it visually
+// overlapping its neighbor once actually rendered, even though the
+// packing itself never considered that an overlap (verified directly: a
+// long-named pool in a flow-layout group visibly overlapped its row
+// neighbor). A coarse, cheap stand-in for properly measuring the
+// rendered text -- good enough to give a long name noticeably more
+// breathing room without trying to be pixel-exact. An Enz's own box is a
+// fixed size regardless of name (see nodes.jsx's EnzNode -- no name is
+// drawn on the icon at all), so it doesn't need this treatment.
 //
 // `cellUnit` -- the per-model, scale-aware "kkit unit" size (see
 // effectiveAutoLayoutCell below), NOT the plain AUTO_LAYOUT_CELL
@@ -558,7 +557,7 @@ function effectiveAutoLayoutCell(scale) {
 
 function childFootprint(c, containerIndex, boxById, cellUnit = AUTO_LAYOUT_CELL) {
   if (!CONTAINER_TYPES.includes(c.type)) {
-    const isLongName = (c.type === 'pool' || c.type === 'enz') && (c.name?.length ?? 0) > LONG_POOL_NAME_THRESHOLD;
+    const isLongName = c.type === 'pool' && (c.name?.length ?? 0) > LONG_POOL_NAME_THRESHOLD;
     return { width: isLongName ? cellUnit * 2 : cellUnit, height: cellUnit };
   }
   const box = effectiveContainerBox(c, containerIndex, boxById);
@@ -789,10 +788,44 @@ function buildFlowNodes(graph, scale, preserve = {}) {
   // newly-added pool never reuses a color already assigned to an existing
   // one (matches the original refreshGraph behavior this replaced).
   let poolIndex = Object.keys(preserve.color ?? {}).length;
+  // Pool colors are needed by an enzyme (below) before every pool's own
+  // node has necessarily been visited yet in the main pass -- a pool can
+  // come after its own enzyme in graph.nodes -- so they're resolved in
+  // their own pass first, in the same encounter order the main pass would
+  // otherwise use, keeping poolIndex's own assignment identical to before.
+  const poolColorById = {};
+  graph.nodes.forEach((n) => {
+    if (n.type === 'pool') poolColorById[n.id] = preserve.color?.[n.id] ?? RAINBOW_16[poolIndex++ % 16];
+  });
   const nodes = graph.nodes.map((n) => {
     const isContainer = CONTAINER_TYPES.includes(n.type);
+    // A Pool's own color is always auto-assigned from RAINBOW_16 (real,
+    // valid CSS), and a container resolves its own raw value itself (see
+    // ContainerNode/resolveGroupColor). An enzyme instead adopts its own
+    // parent pool's color verbatim (the user's own request -- an enzyme
+    // reads as visually "belonging to" the molecule it's attached to
+    // rather than carrying an independent color of its own), falling back
+    // to its own raw color (still resolved, see below) only if its parent
+    // isn't a real pool for some reason. Every OTHER entity type
+    // (reac/concchan/stim/func) used to pass `n.color` straight through
+    // unvalidated -- a legacy .g file's own raw color is often a bare
+    // GENESIS-palette index ("27", not real CSS -- see resolveGroupColor's
+    // own comment), which silently fails as a CSS `background` value: the
+    // shape renders with no fill at all while the entity's own name text
+    // still shows on top of it, which is exactly what read as "an enzyme
+    // with no icon, just its name" on some models. resolveGroupColor
+    // already solves this generically (verbatim for real CSS, a derived
+    // hue for a numeric index, null only for a genuinely absent/'white'
+    // value) -- reused here rather than duplicating that logic for
+    // entities.
     const color =
-      n.type === 'pool' ? preserve.color?.[n.id] ?? RAINBOW_16[poolIndex++ % 16] : n.color;
+      n.type === 'pool'
+        ? poolColorById[n.id]
+        : isContainer
+          ? n.color
+          : n.type === 'enz' && poolColorById[n.parentPoolId]
+            ? poolColorById[n.parentPoolId]
+            : resolveGroupColor(n.color, n.id) ?? n.color;
 
     const parentBox = n.parentId ? boxById[n.parentId] : null;
     const ownX = isContainer ? boxById[n.id].x : n.x;

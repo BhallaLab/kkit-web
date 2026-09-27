@@ -561,9 +561,10 @@ const PROXY_LAYOUT = {
     ],
   },
   enz: {
-    // Matches nodes.jsx's EnzNode own text-driven width estimate -- an
-    // enzyme's name is rendered at the same rough size/weight as a Pool's.
-    size: (name) => ({ width: Math.max(110, 24 + name.length * 15), height: 80 }),
+    // Matches nodes.jsx's EnzNode own fixed size -- no name is drawn on
+    // the icon anymore, so every enzyme (including this proxy stand-in
+    // for one) is the same size regardless of name length.
+    size: () => ({ width: 110, height: 80 }),
     handles: (w, h) => [
       { id: 'substrate', type: 'target', position: 'left', x: 0, y: h / 2 },
       { id: 'product', type: 'source', position: 'right', x: w, y: h / 2 },

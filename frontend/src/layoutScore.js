@@ -60,6 +60,23 @@ const EDGE_ATTACHMENT = {
   funcInput: { source: 'auto-source', target: 'auto-target' },
 };
 
+// The user's own later feedback: halve the LENGTH cost of an enzyme's own
+// structural link to its parent pool (the "enzyme" edge type above,
+// enzSite), to encourage an enzyme to sit close to its substrate/product
+// instead -- an enzyme has three connections (parent, substrate, product);
+// weighting all three equally in the length sum gives the parent link
+// just as much pull as the other two, when what actually matters for
+// readability is the reaction it's drawing (substrate -> product), not
+// how far it sits from its own parent molecule. Only the LENGTH term is
+// discounted -- a parent connector that crosses something or overlaps an
+// icon is still exactly as disruptive regardless of its own length, so
+// crossings/overlaps aren't touched by this. Applies wherever
+// computeLayoutScore itself is used, so both Square (via
+// SQUARE_FLOW_WEIGHTS) and Flow (layoutGrid.js's own computeTotalLoss/
+// computeCurrentDisplayScore) share this automatically -- same engine,
+// same length calculation, no per-action duplication needed.
+const LENGTH_WEIGHT_BY_TYPE = { enzyme: 0.5 };
+
 function resolveSide(spec, node) {
   if (spec === 'bottom') return 'bottom';
   if (spec === 'auto-parent') return node.parentSide === 'top' ? 'top' : 'bottom';
@@ -164,6 +181,7 @@ export function computeLayoutScore(nodes, edges, weights = DEFAULT_SCORE_WEIGHTS
     segments.push({
       source: e.source,
       target: e.target,
+      type: e.type,
       p1: attachmentPoint(sourceNode, sourceSide),
       p2: attachmentPoint(targetNode, targetSide),
     });
@@ -171,7 +189,7 @@ export function computeLayoutScore(nodes, edges, weights = DEFAULT_SCORE_WEIGHTS
 
   let length = 0;
   segments.forEach((s) => {
-    length += Math.hypot(s.p2.x - s.p1.x, s.p2.y - s.p1.y);
+    length += (LENGTH_WEIGHT_BY_TYPE[s.type] ?? 1) * Math.hypot(s.p2.x - s.p1.x, s.p2.y - s.p1.y);
   });
 
   // Only counted between edges that don't share an endpoint -- two edges
