@@ -134,10 +134,11 @@ const EDITABLE_ENDPOINTS = {
   compartment: '/api/update_compartment',
   concchan: '/api/update_concchan',
   stim: '/api/update_stim',
-  // A summation function is still just a Function underneath (see
-  // moose_graph.py's own describe_stim/_function_inputs split) -- same
-  // backend endpoint, type-agnostic on that side already.
+  // A summation/general function is still just a Function underneath
+  // (see moose_graph.py's own describe_stim three-way classification) --
+  // same backend endpoint, type-agnostic on that side already.
   func: '/api/update_stim',
+  genfunc: '/api/update_stim',
 };
 
 // The order-dependent fields describe_reac recomputes whenever a
@@ -159,6 +160,16 @@ function mergeReacUpdate(nodes, reacUpdate) {
     if (key in reacUpdate) patch[key] = reacUpdate[key];
   });
   return nodes.map((n) => (n.id === reacUpdate.id ? { ...n, data: { ...n.data, ...patch } } : n));
+}
+
+// A funcInput connect/disconnect (see add_edge/remove_edge's own comment)
+// can change the target function's own numVars/expr -- patched in the
+// same way mergeReacUpdate patches a reac's own order-dependent fields,
+// rather than a full graph refetch for what's usually a single quick drag.
+function mergeFuncUpdate(nodes, funcUpdate) {
+  if (!funcUpdate) return nodes;
+  const patch = { expr: funcUpdate.expr, numInputs: funcUpdate.numInputs, inputIds: funcUpdate.inputIds };
+  return nodes.map((n) => (n.id === funcUpdate.id ? { ...n, data: { ...n.data, ...patch } } : n));
 }
 
 // Mirrors kkit's ADDMSGARROW pairing rules (xreac.g/xpool.g/xenz.g): which
@@ -187,6 +198,13 @@ function edgeTypeForConnection(conn, nodeTypeById) {
   }
   if (conn.sourceHandle === 'chanOut' && sourceType === 'concchan' && targetType === 'pool') {
     return 'chanOut';
+  }
+  // A summation/general function's own input handle is unnamed (see
+  // nodes.jsx's FuncNode/GenFuncNode -- one shared target handle, same
+  // pattern PoolNode's own target/source handles already use), so unlike
+  // substrate/chanIn there's no targetHandle id to check here.
+  if (sourceType === 'pool' && (targetType === 'func' || targetType === 'genfunc')) {
+    return 'funcInput';
   }
   return null;
 }
@@ -946,7 +964,7 @@ function buildFlowNodes(graph, scale, preserve = {}) {
       position: { x: relX * scale, y: -relY * scale },
       data: { ...n, color },
     };
-    if (n.type === 'pool' || n.type === 'reac' || n.type === 'enz' || n.type === 'concchan' || n.type === 'func') {
+    if (n.type === 'pool' || n.type === 'reac' || n.type === 'enz' || n.type === 'concchan' || n.type === 'func' || n.type === 'genfunc') {
       node.data.flipped = preserve.flipped?.[n.id] ?? flips[n.id] ?? false;
     }
     if (n.type === 'enz' || n.type === 'concchan') {
@@ -1379,9 +1397,56 @@ export default function App() {
 
   const onPaneClick = useCallback(() => setSelectedNodeId(null), []);
 
-  const onNodesChange = useCallback((changes) => {
-    setFlowGraph((g) => ({ ...g, nodes: applyNodeChanges(changes, g.nodes) }));
-  }, []);
+  // The user's own later bug report: pressing Delete/Backspace on a
+  // selected pool/reaction/etc removed it from the canvas but left it
+  // fully intact in the backend model -- unlike dragging it onto the
+  // trash icon or the "Delete Selected" button (see onNodeDragStop/
+  // handleDeleteSelected below), both of which call /api/delete_node and
+  // refresh. This used to be a plain passthrough (every change, remove
+  // included, went straight to applyNodeChanges), so React Flow's own
+  // built-in `deleteKeyCode` handling (see MainDisplay.jsx) removed a
+  // node from local state ONLY, with no backend call and no confirm-
+  // before-deleting-a-container dialog. A 'remove' change is now instead
+  // routed through the SAME confirm + /api/delete_node + refresh flow as
+  // every other delete path, mirroring onEdgesChange's own already-
+  // correct handling of an edge 'remove' change just below -- a
+  // cancelled confirm drops the change entirely (nothing removed
+  // locally, matching cancel), everything else still passes straight
+  // through untouched.
+  const onNodesChange = useCallback(
+    (changes) => {
+      const passThrough = [];
+      changes.forEach((change) => {
+        if (change.type !== 'remove') {
+          passThrough.push(change);
+          return;
+        }
+        const node = flowGraph.nodes.find((n) => n.id === change.id);
+        if (!node) {
+          passThrough.push(change);
+          return;
+        }
+        if (!confirmContainerDelete(node, flowGraph.nodes)) return;
+        fetch(`${API_BASE}/api/delete_node`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: node.id }),
+        })
+          .then((r) => r.json())
+          .then((res) => {
+            if (res.error) {
+              setStatus(`error: ${res.error}`);
+              return;
+            }
+            setSelectedNodeId((sel) => (sel === node.id ? null : sel));
+            refreshGraphRef.current?.();
+          })
+          .catch((err) => setStatus(`error: ${err}`));
+      });
+      setFlowGraph((g) => ({ ...g, nodes: applyNodeChanges(passThrough, g.nodes) }));
+    },
+    [flowGraph.nodes]
+  );
 
   // A node dragged onto the palette's trash icon is deleted instead of
   // repositioned -- the trash icon lives outside the React Flow canvas
@@ -2182,10 +2247,15 @@ export default function App() {
     (conn) => {
       const edgeType = edgeTypeForConnection(conn, nodeTypeById);
       if (!edgeType) return;
+      // add_edge's own funcInput handling needs to know whether to auto-
+      // maintain the target's expr as a plain sum (a 'func' node) or leave
+      // a user-authored one alone (a 'genfunc' node) -- see its own
+      // comment; moose itself can't tell the two apart at connect time.
+      const kind = edgeType === 'funcInput' ? (nodeTypeById[conn.target] === 'genfunc' ? 'general' : 'sum') : undefined;
       fetch(`${API_BASE}/api/add_edge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: conn.source, to: conn.target, type: edgeType }),
+        body: JSON.stringify({ from: conn.source, to: conn.target, type: edgeType, kind }),
       })
         .then((r) => r.json())
         .then((res) => {
@@ -2201,7 +2271,7 @@ export default function App() {
             const existing = g.edges.find(
               (e) => e.source === conn.source && e.target === conn.target && e.data.type === edgeType
             );
-            const nodes = mergeReacUpdate(g.nodes, res.reacUpdate);
+            const nodes = mergeFuncUpdate(mergeReacUpdate(g.nodes, res.reacUpdate), res.funcUpdate);
             if (existing) {
               return {
                 nodes,
@@ -2243,10 +2313,18 @@ export default function App() {
         const decrementOnly = (edge.data.stoich ?? 1) > 1;
         if (!decrementOnly) passThrough.push(change);
 
+        // remove_edge's own funcInput branch needs the same 'sum'/
+        // 'general' distinction add_edge's does -- see its own comment.
+        const kind =
+          edge.data.type === 'funcInput'
+            ? nodeTypeById[edge.target] === 'genfunc'
+              ? 'general'
+              : 'sum'
+            : undefined;
         fetch(`${API_BASE}/api/remove_edge`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from: edge.source, to: edge.target, type: edge.data.type }),
+          body: JSON.stringify({ from: edge.source, to: edge.target, type: edge.data.type, kind }),
         })
           .then((r) => r.json())
           .then((res) => {
@@ -2255,7 +2333,7 @@ export default function App() {
               return;
             }
             setFlowGraph((g) => ({
-              nodes: mergeReacUpdate(g.nodes, res.reacUpdate),
+              nodes: mergeFuncUpdate(mergeReacUpdate(g.nodes, res.reacUpdate), res.funcUpdate),
               edges: decrementOnly
                 ? g.edges.map((e) =>
                     e.id === edge.id ? { ...e, data: { ...e.data, stoich: res.stoich } } : e
@@ -2267,7 +2345,7 @@ export default function App() {
       });
       setFlowGraph((g) => ({ ...g, edges: applyEdgeChanges(passThrough, g.edges) }));
     },
-    [flowGraph.edges]
+    [flowGraph.edges, nodeTypeById]
   );
 
   const selectEdge = useCallback((edgeId) => {
@@ -2331,7 +2409,7 @@ export default function App() {
             // the easy-to-miss status line -- Save simply does nothing
             // else and the user's typed expression stays in the box to
             // fix.
-            if (node.data.type === 'stim' || node.data.type === 'func') window.alert(updated.error);
+            if (node.data.type === 'stim' || node.data.type === 'func' || node.data.type === 'genfunc') window.alert(updated.error);
             return;
           }
           // Renaming an object changes its MOOSE path, which is what we use
@@ -2780,6 +2858,70 @@ export default function App() {
     [refreshGraph, scale, runtime]
   );
 
+  // A summation function is created immediately wired to the pool it's
+  // dropped on (same conc/concInit auto-pick as createStimOnPool), but
+  // with zero pool inputs of its own yet -- the user wires those
+  // afterward by dragging a connection from another pool onto its own
+  // input handle (see edgeTypeForConnection/onConnect's own 'funcInput'
+  // handling), which is also what actually gives it a real expr (see
+  // create_sumfunc's own comment).
+  const createSumFuncOnPool = useCallback(
+    (poolNode) => {
+      const n = ++creationCounter.current;
+      const x = poolNode.data.x;
+      const y = poolNode.data.y + (2 * POOL_HEIGHT_PX) / scale;
+      fetch(`${API_BASE}/api/create_sumfunc`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetId: poolNode.id, name: `sum${n}`, x, y }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.error) {
+            setStatus(`error: ${res.error}`);
+            window.alert(res.error);
+            return;
+          }
+          refreshGraph();
+          setSelectedNodeId(res.id);
+          setActiveMenu('Properties');
+        })
+        .catch((err) => setStatus(`error: ${err}`));
+    },
+    [refreshGraph, scale]
+  );
+
+  // A general function is created with a default 2-slot capacity (see
+  // create_genfunc/PropertiesMenuBox's own numInputs field) and a
+  // harmless "0" placeholder expr -- the user wires its inputs the same
+  // way createSumFuncOnPool's own do, then edits both numInputs and expr
+  // via Properties.
+  const createGenFuncOnPool = useCallback(
+    (poolNode) => {
+      const n = ++creationCounter.current;
+      const x = poolNode.data.x;
+      const y = poolNode.data.y + (2 * POOL_HEIGHT_PX) / scale;
+      fetch(`${API_BASE}/api/create_genfunc`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetId: poolNode.id, numInputs: 2, name: `func${n}`, x, y }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.error) {
+            setStatus(`error: ${res.error}`);
+            window.alert(res.error);
+            return;
+          }
+          refreshGraph();
+          setSelectedNodeId(res.id);
+          setActiveMenu('Properties');
+        })
+        .catch((err) => setStatus(`error: ${err}`));
+    },
+    [refreshGraph, scale]
+  );
+
   // Drop target for the Add menu's drag-and-drop icons -- position arrives
   // in on-screen flow-pixel space (from React Flow's screenToFlowPosition),
   // so it's converted back to kkit layout units the same way toFlowGraph's
@@ -2835,6 +2977,28 @@ export default function App() {
           return;
         }
         createStimOnPool(hitNode);
+      } else if (type === 'sumfunc') {
+        const hitNode = flowGraph.nodes.find((n) => n.id === hitNodeId);
+        if (!hitNode || hitNode.type !== 'pool') {
+          setStatus('drop the summation function icon onto an existing pool');
+          return;
+        }
+        if (hitNode.data.isEnzComplex) {
+          setStatus("an enzyme's complex pool can't be connected to anything");
+          return;
+        }
+        createSumFuncOnPool(hitNode);
+      } else if (type === 'genfunc') {
+        const hitNode = flowGraph.nodes.find((n) => n.id === hitNodeId);
+        if (!hitNode || hitNode.type !== 'pool') {
+          setStatus('drop the general function icon onto an existing pool');
+          return;
+        }
+        if (hitNode.data.isEnzComplex) {
+          setStatus("an enzyme's complex pool can't be connected to anything");
+          return;
+        }
+        createGenFuncOnPool(hitNode);
       } else if (type === 'plot1' || type === 'plot2') {
         const window = type === 'plot1' ? 1 : 2;
         const hitNode = flowGraph.nodes.find((n) => n.id === hitNodeId);
@@ -2879,6 +3043,8 @@ export default function App() {
       createEnzOnPool,
       createConcChanOnPool,
       createStimOnPool,
+      createSumFuncOnPool,
+      createGenFuncOnPool,
     ]
   );
 

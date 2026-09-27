@@ -498,6 +498,68 @@ export function FuncNode({ id, data, selected }) {
   );
 }
 
+// A general function -- same shape/handle roles as FuncNode (a summation
+// function) just above, but with a user-authored expr instead of an
+// always-exact "x0+x1+..." one, and a DECLARED (not just "however many
+// are wired") input count -- see moose_graph.py's describe_stim's own
+// three-way classification and PropertiesMenuBox's own numInputs field.
+// Every pool input still shares the SAME single target handle (moose
+// itself has no reliable way to address "connect specifically to x2" --
+// see add_edge's own funcInput comment -- so a genuinely separate named
+// handle per slot would promise more positional precision than actually
+// exists); the small numInputs badge is what actually conveys "this many
+// slots, referred to as x0, x1, ... in the order you connect them" (see
+// its own title/tooltip).
+export function GenFuncNode({ id, data, selected }) {
+  const flipped = !!data.flipped;
+  useFlipRemeasure(id, flipped);
+  const numInputs = data.numInputs ?? 0;
+  return (
+    <div
+      style={{
+        ...baseStyle,
+        ...selectedStyle(selected),
+        position: 'relative',
+        background: data.color,
+        color: getContrastTextColor(data.color),
+        borderRadius: '50%',
+        textAlign: 'center',
+        fontSize: 32,
+      }}
+    >
+      <Handle type="target" position={flipped ? Position.Right : Position.Left} />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        id="stimTip"
+        style={{ ...dotHandleStyle, left: '50%', top: '95%', transform: 'translate(-50%, -50%)' }}
+      />
+      <div
+        title={`Handles ${numInputs} input${numInputs === 1 ? '' : 's'} -- connect a pool to the left/right dot, referred to in the expression above as x0, x1, ... in the order they're connected`}
+        style={{
+          position: 'absolute',
+          top: -10,
+          right: -10,
+          minWidth: 18,
+          height: 18,
+          padding: '0 3px',
+          borderRadius: 9,
+          background: '#333',
+          color: '#fff',
+          fontSize: 11,
+          fontWeight: 'bold',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {numInputs}
+      </div>
+      f(x)
+    </div>
+  );
+}
+
 // Groups and compartments are containers, not molecules -- rendered as a
 // box behind their contents (see App.jsx's zIndex/parentId wiring) with a
 // name label and a manual resize handle. Compartment gets a second inset
@@ -964,6 +1026,7 @@ const PROXY_REAL_COMPONENT = {
   concchan: ConcChanNode,
   stim: StimNode,
   func: FuncNode,
+  genfunc: GenFuncNode,
 };
 
 // A stand-in for one specific entity that isolate mode has hidden (see
@@ -1028,6 +1091,7 @@ export const nodeTypes = {
   concchan: ConcChanNode,
   stim: StimNode,
   func: FuncNode,
+  genfunc: GenFuncNode,
   // Registered as "kkitGroup", not "group" -- React Flow reserves the
   // literal type "group" for its own built-in group-node feature and
   // auto-applies a default CSS border to it (see App.jsx's

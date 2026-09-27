@@ -4,6 +4,12 @@
 // what a freshly-loaded model's molecules are colored with.
 export const RAINBOW_16 = Array.from({ length: 16 }, (_, i) => `hsl(${i * 22.5}, 70%, 50%)`);
 
+// 8 evenly-spaced shades of grey, white to black inclusive (both
+// endpoints included, so 7 equal steps between them) -- the user's own
+// later request, alongside RAINBOW_16's own colored swatches in the
+// properties panel's color picker.
+export const GRAYSCALE_8 = Array.from({ length: 8 }, (_, i) => `hsl(0, 0%, ${100 - i * (100 / 7)}%)`);
+
 // Accent colors distinguishing the two Plots-tab windows -- used by the
 // palette's two plot icons and by the matching on-canvas badge, independent
 // of a molecule's own (rainbow) color, which the actual plotted trace still

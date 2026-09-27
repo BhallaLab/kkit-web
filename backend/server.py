@@ -28,6 +28,7 @@ from moose_graph import (
     name_path,
     normalize_color,
     _stim_field,
+    _function_inputs,
     _reac_orders,
     _conc_scale,
     rescale_reac_for_order_change,
@@ -1063,6 +1064,48 @@ def add_edge():
     elif edge_type == "chanOut":
         moose.connect(moose.element(from_id), "out", moose.element(to_id), "reac")
         stoich = sum(1 for n in moose.element(from_id).neighbors["out"] if n.path == to_id)
+    elif edge_type == "funcInput":
+        func = moose.element(to_id)
+        if func.className != "Function":
+            return jsonify({"error": "funcInput target must be a function"}), 400
+        # A Function's own "x" child holds its WHOLE input vector as a
+        # single element (see _function_inputs' own docstring) -- every
+        # new input just connects to that same element again, with order
+        # (not a per-slot index) the only thing distinguishing "which x_i
+        # is which" on read-back.
+        x = moose.element(func.path + "/x")
+        moose.connect(moose.element(from_id), "nOut", x, "input")
+        # _function_inputs' own numVars==0 guard (see its docstring --
+        # needed to avoid moose fabricating a bogus "x" child for a
+        # genuine zero-input stim) means it can never see a connection
+        # just made while numVars is STILL 0 -- true for a summation
+        # function's very first input (it starts at 0 and only ever grows
+        # via this same branch, see below) and, defensively, for a general
+        # function too, if it somehow still has numVars==0 when a
+        # connection reaches it. Bumping to 1 first unblocks the read;
+        # both branches below immediately reconcile numVars to whatever
+        # the read-back actually found anyway.
+        if func.numVars == 0:
+            func.numVars = 1
+        input_ids = _function_inputs(func)
+        kind = body.get("kind")
+        if kind == "sum":
+            # A summation function's own numVars/expr are ALWAYS kept in
+            # lockstep with however many inputs are actually wired -- see
+            # describe_stim's own classifier, which relies on this never
+            # drifting apart.
+            func.numVars = len(input_ids)
+            func.expr = "+".join(f"x{i}" for i in range(len(input_ids)))
+        elif kind == "general":
+            # A general function's own numVars is a separately declared
+            # capacity (see update_stim's own numInputs handling) -- only
+            # grown here if the new connection actually exceeds whatever
+            # was already declared, never shrunk.
+            if len(input_ids) > func.numVars:
+                func.numVars = len(input_ids)
+        else:
+            return jsonify({"error": f"unsupported funcInput kind: {kind}"}), 400
+        stoich = 1  # never a parallel/stoichiometric connection the way substrate/product can be
     else:
         return jsonify({"error": f"unsupported edge type: {edge_type}"}), 400
 
@@ -1073,12 +1116,18 @@ def add_edge():
         )
         reac_update = describe_reac(reac_elem.path)
 
+    # A funcInput connection can change the target function's own numVars/
+    # expr (see the branch above) -- reported back the same way reacUpdate
+    # is, so the frontend can patch that one node's data without a full
+    # graph refetch.
+    func_update = describe_stim(to_id) if edge_type == "funcInput" else None
+
     # Connecting an already-connected reac/enz-pool pair again (kkit's way of
     # expressing stoichiometry > 1, e.g. "2A -> B") adds another separate
     # message rather than erroring or being a no-op -- reporting the new
     # total lets the frontend update one edge's label instead of drawing a
     # second, fully-overlapping edge.
-    return jsonify({"ok": True, "stoich": stoich, "reacUpdate": reac_update})
+    return jsonify({"ok": True, "stoich": stoich, "reacUpdate": reac_update, "funcUpdate": func_update})
 
 
 _EDGE_SRC_FIELD = {
@@ -1091,6 +1140,33 @@ _EDGE_SRC_FIELD = {
 def remove_edge():
     body = request.json or {}
     from_id, to_id, edge_type = body.get("from"), body.get("to"), body.get("type")
+    if edge_type == "funcInput":
+        err = _validate_edge_ids(from_id, to_id)
+        if err:
+            return jsonify({"error": err}), 400
+        func = moose.element(to_id)
+        pool_id = from_id
+        deleted = False
+        for m in moose.element(pool_id).msgOut:
+            msg = moose.element(m)
+            if "input" in msg.destFieldsOnE2 and moose.element(msg.e2).parent.path == func.path:
+                moose.delete(msg)
+                deleted = True
+                break
+        if not deleted:
+            return jsonify({"error": "connection not found"}), 404
+        input_ids = _function_inputs(func)
+        # A summation function's own expr/numVars stay in lockstep with
+        # whatever's actually wired (see add_edge's own matching comment);
+        # a general function's own declared capacity (numInputs) is left
+        # exactly as it was -- removing one connection just frees that
+        # slot up again, it doesn't shrink how many the node is set up
+        # to handle.
+        if body.get("kind") == "sum":
+            func.numVars = len(input_ids)
+            func.expr = "+".join(f"x{i}" for i in range(len(input_ids)))
+        return jsonify({"ok": True, "numInputs": func.numVars, "funcUpdate": describe_stim(func.path)})
+
     if edge_type not in _EDGE_SRC_FIELD:
         return jsonify({"error": f"unsupported edge type: {edge_type}"}), 400
     err = _validate_edge_ids(from_id, to_id)
@@ -1427,6 +1503,79 @@ def create_stim():
     return jsonify(describe_stim(func.path))
 
 
+def _create_target_pool(body):
+    """Shared by create_sumfunc/create_genfunc -- both drive a target pool
+    exactly the way create_stim's own target/container/dest_field logic
+    already does; factored out once here rather than copied a second and
+    third time."""
+    target_id = body.get("targetId")
+    if _current_model_path is None or not target_id or not target_id.startswith(_current_model_path):
+        return None, (jsonify({"error": "invalid or missing target pool"}), 400)
+    if not moose.exists(target_id):
+        return None, (jsonify({"error": f"target pool not found: {target_id}"}), 404)
+    if is_enz_complex(target_id):
+        return None, (jsonify({"error": "an enzyme's complex pool can't be connected to anything"}), 400)
+    return moose.element(target_id), None
+
+
+@app.post("/api/create_sumfunc")
+def create_sumfunc():
+    """A summation function is a plain moose.Function whose expr is always
+    kept as the exact "x0+x1+..." pattern for however many pool inputs are
+    currently wired (see add_edge's own funcInput handling) -- never
+    independently user-edited, unlike create_genfunc. Dropped onto a
+    target pool the same way create_stim is (drives conc/concInit)."""
+    body = request.json or {}
+    target, err = _create_target_pool(body)
+    if err:
+        return err
+
+    container = target.parent.path
+    name = _unique_name(container, body.get("name") or "sum")
+    func = moose.Function(f"{container}/{name}")
+    # No inputs wired yet -- add_edge rewrites both the moment the first
+    # one connects. allowUnknownVariable=False is the same restriction
+    # ReadKkit.cpp's own buildSumTotal applies: only x0, x1, ... (its own
+    # wired inputs) are ever legal names in a summation's expr.
+    func.expr = "0"
+    func.allowUnknownVariable = False
+    func.doEvalAtReinit = True
+    dest_field = _STIM_FIELD_BY_BUFFERED[bool(target.isBuffered)]
+    moose.connect(func, "valueOut", target, dest_field)
+    create_info(func.path, float(body.get("x", 0)), float(body.get("y", 0)), color="red")
+    return jsonify(describe_stim(func.path))
+
+
+@app.post("/api/create_genfunc")
+def create_genfunc():
+    """A general function is a plain moose.Function with a user-authored
+    expr and a fixed (but user-adjustable, see update_stim's own
+    numInputs handling) number of pool-input slots, referenced in its own
+    expr as x0, x1, .... Dropped onto a target pool the same way
+    create_stim/create_sumfunc are."""
+    body = request.json or {}
+    target, err = _create_target_pool(body)
+    if err:
+        return err
+    try:
+        num_inputs = int(body.get("numInputs", 2))
+    except (TypeError, ValueError):
+        return jsonify({"error": "numInputs must be a whole number"}), 400
+    if num_inputs < 0:
+        return jsonify({"error": "numInputs can't be negative"}), 400
+
+    container = target.parent.path
+    name = _unique_name(container, body.get("name") or "func")
+    func = moose.Function(f"{container}/{name}")
+    func.numVars = num_inputs
+    func.expr = "0"
+    func.doEvalAtReinit = True
+    dest_field = _STIM_FIELD_BY_BUFFERED[bool(target.isBuffered)]
+    moose.connect(func, "valueOut", target, dest_field)
+    create_info(func.path, float(body.get("x", 0)), float(body.get("y", 0)), color="red")
+    return jsonify(describe_stim(func.path))
+
+
 @app.post("/api/update_stim")
 def update_stim():
     body = request.json or {}
@@ -1437,7 +1586,24 @@ def update_stim():
     if not moose.exists(node_id):
         return jsonify({"error": f"node not found: {node_id}"}), 404
 
-    if "expr" in fields:
+    f = moose.element(node_id)
+    # _check_stim_expr samples the expression as a pure function of t --
+    # only meaningful for a genuine zero-input stimulus. A general
+    # function's own expr depends on its live pool inputs (x0, x1, ...),
+    # not just t, so there's nothing meaningful to pre-sample here; a
+    # summation function never has a user-editable expr in the first
+    # place (see describe_stim/add_edge's own funcInput handling), so
+    # this never actually runs for one regardless. Same "is this actually
+    # a plain stim" condition describe_stim's own classifier uses --
+    # NOT `_function_inputs(f)` (actually-wired count), which a general
+    # function's own declared-but-not-yet-wired capacity (numVars>0,
+    # nothing connected yet) would otherwise slip past, wrongly running
+    # this stim-only check against an expr that references x0/x1 the
+    # check has no way to supply real values for (verified directly: a
+    # freshly dropped general function's own default numInputs=2, zero
+    # wired, tripped exactly this before the numVars check was added).
+    is_genuine_stim = f.allowUnknownVariable and f.numVars == 0
+    if "expr" in fields and is_genuine_stim:
         try:
             runtime = float(body.get("runtime", 1.0))
         except (TypeError, ValueError):
@@ -1445,6 +1611,22 @@ def update_stim():
         error, _ = _check_stim_expr(fields["expr"], runtime)
         if error:
             return jsonify({"error": error}), 400
+
+    # A general function's own "how many inputs it handles" (see
+    # PropertiesMenuBox's numInputs field) -- not a plain numeric field
+    # _update_node can just setattr, since shrinking it needs to refuse
+    # ever orphaning an already-wired input.
+    if "numInputs" in fields:
+        try:
+            new_count = int(fields.pop("numInputs"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "numInputs must be a whole number"}), 400
+        if new_count < 0:
+            return jsonify({"error": "numInputs can't be negative"}), 400
+        wired = len(_function_inputs(f))
+        if new_count < wired:
+            return jsonify({"error": f"can't reduce below {wired} -- that many inputs are already wired"}), 400
+        f.numVars = new_count
 
     return _update_node(node_id, fields, set(), set(), describe_stim, string_fields={"expr"})
 

@@ -458,19 +458,41 @@ def _function_inputs(f):
 
 
 def describe_stim(path):
-    """A Function is either a genuine stimulus (drives a target pool from
-    an expression with no pool inputs -- a pure constant or time-based
-    driver) or a summation function (has one or more pool inputs feeding
-    its own x0, x1, ... -- see _function_inputs). Both still drive a
-    target pool the same way (_stim_field), but only the latter has real
-    incoming connections worth drawing -- distinguished here by node type
-    ("stim" vs "func") so the frontend can render/lay each out
-    differently (see build_graph's own "funcInput" edges for the summation
-    case)."""
+    """A Function is one of three things, purely by what its own
+    allowUnknownVariable/numVars already are (no separate stored flag --
+    this is deliberately reload-robust, since it's re-derived fresh from
+    live moose state every time, regardless of whether the model came
+    from a .g file, an SBML round-trip, or was built interactively this
+    session):
+    - allowUnknownVariable is False: a summation function -- ReadKkit.cpp's
+      own buildSumTotal sets this for a legacy .g SUMTOTAL, and
+      create_sumfunc does the same for one built interactively here, in
+      both cases specifically so ONLY its own x0, x1, ... names are ever
+      legal in its expr. Type "func" (the Sigma icon; no user-editable
+      expr, since add_edge's own funcInput handling always keeps it
+      exactly "x0+x1+..."). This is checked FIRST and independently of
+      numVars/input count -- a freshly created, still zero-input
+      summation function is unambiguously a "func" from the moment it's
+      created, not indistinguishable from a genuine stim the way relying
+      on "has it got any inputs yet" alone would leave it.
+    - allowUnknownVariable is True (moose's own default) and numVars==0: a
+      genuine stimulus, a pure constant/time-based driver with no pool
+      inputs at all -- type "stim".
+    - allowUnknownVariable is True and numVars>0: a general function,
+      user-authored, referencing its own x0, x1, ... inputs however it
+      likes (and possibly other names too, unlike a summation function) --
+      type "genfunc" (the f(x) icon).
+    All three still drive a target pool the same way (_stim_field)."""
     f = moose.element(path)
     target_id, dest_field = _stim_field(f)
     input_ids = _function_inputs(f)
-    return _node(f, "func" if input_ids else "stim", {
+    if not f.allowUnknownVariable:
+        node_type = "func"
+    elif f.numVars == 0:
+        node_type = "stim"
+    else:
+        node_type = "genfunc"
+    return _node(f, node_type, {
         "expr": f.expr,
         "targetId": target_id,
         # "conc" / "concInit" -- stripped of the "set" prefix moose's dest
@@ -478,6 +500,13 @@ def describe_stim(path):
         # in this API (e.g. describe_pool's own "conc"/"concInit" keys).
         "field": dest_field[3].lower() + dest_field[4:] if dest_field else None,
         "inputIds": input_ids,
+        # A general function's own "how many inputs it handles" (see
+        # PropertiesMenuBox's own numInputs field) -- f.numVars itself,
+        # not len(input_ids): the two can genuinely differ, since
+        # increasing this count (create_genfunc/update numInputs) reserves
+        # a new, not-yet-wired slot ahead of actually connecting anything
+        # to it.
+        "numInputs": f.numVars,
     })
 
 

@@ -600,6 +600,16 @@ const PROXY_LAYOUT = {
       { id: 'stimTip', type: 'source', position: 'bottom', x: w / 2, y: h },
     ],
   },
+  // A general function -- same shape/handle layout as a summation
+  // function's own entry just above (see nodes.jsx's GenFuncNode, which
+  // shares FuncNode's exact baseStyle circle and handle roles).
+  genfunc: {
+    size: () => ({ width: 90, height: 90 }),
+    handles: (w, h) => [
+      { type: 'target', position: 'left', x: 0, y: h / 2 },
+      { id: 'stimTip', type: 'source', position: 'bottom', x: w / 2, y: h },
+    ],
+  },
 };
 const DEFAULT_PROXY_SIZE = { width: 90, height: 36 };
 

@@ -120,7 +120,10 @@ function EnzIcon() {
 // Matches the real ConcChanNode's hollow-cylinder shape, with its name
 // (here the palette's generic "Pore" label) inside the hollow.
 function ConcChanIcon() {
-  const width = 96;
+  // The user's own later feedback: this icon read as too big relative to
+  // its neighbors in the palette -- 60% of its own former length (96 ->
+  // 58), height/cap size left alone (only the "too long" axis shrinks).
+  const width = 58;
   const height = 52;
   const capRx = 10;
   const railY = 6;
@@ -164,6 +167,67 @@ function StimIcon() {
       <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, height: 40, background: '#ffd60a', clipPath: STIM_CLIP_PATH }} />
       <Box sx={{ position: 'absolute', bottom: 0, left: 0, right: 0, fontSize: 9, fontWeight: 'bold', textAlign: 'center' }}>
         Stim
+      </Box>
+    </Box>
+  );
+}
+
+// Same oval-with-glyph shape the real FuncNode/GenFuncNode use (see
+// nodes.jsx), same red as StimIcon (a func-family node always drives a
+// target pool the exact same way a stim does).
+function SumFuncIcon() {
+  return (
+    <Box sx={{ position: 'relative', width: 36, height: 46 }}>
+      <Box
+        sx={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 34,
+          background: 'red',
+          borderRadius: '50%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 20,
+          color: '#fff',
+          fontWeight: 'bold',
+        }}
+      >
+        &#931;
+      </Box>
+      <Box sx={{ position: 'absolute', bottom: 0, left: 0, right: 0, fontSize: 9, fontWeight: 'bold', textAlign: 'center' }}>
+        Sum
+      </Box>
+    </Box>
+  );
+}
+
+function GenFuncIcon() {
+  return (
+    <Box sx={{ position: 'relative', width: 36, height: 46 }}>
+      <Box
+        sx={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 34,
+          background: 'red',
+          borderRadius: '50%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 13,
+          color: '#fff',
+          fontWeight: 'bold',
+        }}
+      >
+        f(x)
+      </Box>
+      <Box sx={{ position: 'absolute', bottom: 0, left: 0, right: 0, fontSize: 9, fontWeight: 'bold', textAlign: 'center' }}>
+        Func
       </Box>
     </Box>
   );
@@ -306,13 +370,27 @@ export default function EntityPalette({
       <DragIcon
         type="concchan"
         clickDisabled
-        size={{ width: 96, height: 52 }}
+        size={{ width: 58, height: 52 }}
         title="Drag onto a pool to attach a concentration channel (wire its in/out pools afterward)"
       >
         <ConcChanIcon />
       </DragIcon>
       <DragIcon type="stim" clickDisabled title="Drag onto a pool to drive its conc/concInit with a stimulus expression">
         <StimIcon />
+      </DragIcon>
+      <DragIcon
+        type="sumfunc"
+        clickDisabled
+        title="Drag onto a pool to drive its conc/concInit with the sum of whichever pools you connect to it afterward"
+      >
+        <SumFuncIcon />
+      </DragIcon>
+      <DragIcon
+        type="genfunc"
+        clickDisabled
+        title="Drag onto a pool to drive its conc/concInit with a general expression of x0, x1, ... -- one per pool you connect to it afterward"
+      >
+        <GenFuncIcon />
       </DragIcon>
       <DragIcon type="group" clickDisabled title="Drag inside a compartment (or group) to add an organizational group">
         <GroupIcon />

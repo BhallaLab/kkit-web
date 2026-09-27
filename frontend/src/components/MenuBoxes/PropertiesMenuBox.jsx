@@ -11,7 +11,7 @@ import {
   Chip,
   Tooltip,
 } from '@mui/material';
-import { RAINBOW_16 } from '../../colorUtils';
+import { RAINBOW_16, GRAYSCALE_8 } from '../../colorUtils';
 
 // Display-only rounding -- fields are edited as plain strings (see
 // initialFieldsFor/handleSave) so this never fights the user mid-keystroke;
@@ -82,10 +82,15 @@ function initialFieldsFor(node) {
       fields[key] = formatNumber(node.data[key]);
     });
   if (node.type === 'pool') fields.isBuffered = !!node.data.isBuffered;
-  // expr is free text (a muParser-style expression, function of t), not a
-  // number -- kept as a plain string rather than run through
-  // formatNumber/parseFloat the way every other editable field is.
-  if (node.type === 'stim' || node.type === 'func') fields.expr = node.data.expr ?? '';
+  // expr is free text (a muParser-style expression, function of t or of
+  // its own pool inputs), not a number -- kept as a plain string rather
+  // than run through formatNumber/parseFloat the way every other
+  // editable field is. A summation function's own expr is never shown
+  // here at all -- it's always exactly "x0+x1+...", auto-maintained by
+  // add_edge's own funcInput handling, never user-typed (see its own
+  // read-only display below instead).
+  if (node.type === 'stim' || node.type === 'genfunc') fields.expr = node.data.expr ?? '';
+  if (node.type === 'genfunc') fields.numInputs = String(node.data.numInputs ?? 0);
   fields.flipped = !!node.data.flipped;
   if (node.data.type === 'group' || node.data.type === 'compartment') {
     fields.collapsed = !!node.data.collapsed;
@@ -115,6 +120,9 @@ function buildPayload(node, fields) {
     .forEach((key) => {
       parsed[key] = parseFloat(fields[key]);
     });
+  // A whole number of input slots, not a rate/concentration field
+  // (editableRowsFor's own numeric rows), so it's parsed separately here.
+  if (node.type === 'genfunc') parsed.numInputs = parseInt(fields.numInputs, 10);
   return parsed;
 }
 
@@ -125,7 +133,8 @@ function titleFor(node) {
   if (node.type === 'compartment') return 'Compartment';
   if (node.type === 'concchan') return 'Concentration Channel';
   if (node.type === 'stim') return 'Stimulus';
-  if (node.type === 'func') return 'Function';
+  if (node.type === 'func') return 'Summation Function';
+  if (node.type === 'genfunc') return 'General Function';
   return `Enzyme (${node.data.mechanism})`;
 }
 
@@ -195,8 +204,19 @@ export default function PropertiesMenuBox({
     onSave(node.id, buildPayload(node, fields));
   };
 
+  // The user's own later request: Enter should do what clicking Save
+  // does, in every field here. Excludes a multiline field's own textarea
+  // (Notes, and a stim/func's own expression) -- Enter there still means
+  // "new line," matching every other multiline text box's own behavior,
+  // not a save-and-dismiss.
+  const handleFormKeyDown = (event) => {
+    if (event.key !== 'Enter' || event.target.tagName === 'TEXTAREA') return;
+    event.preventDefault();
+    handleSave();
+  };
+
   return (
-    <Box sx={{ p: 2, background: '#f5f5f5', borderRadius: 2, height: '100%', overflowY: 'auto' }}>
+    <Box sx={{ p: 2, background: '#f5f5f5', borderRadius: 2, height: '100%', overflowY: 'auto' }} onKeyDown={handleFormKeyDown}>
       <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: node.data.locked ? 0.5 : 2, display: 'flex', alignItems: 'center', gap: 1 }}>
         {titleFor(node)}
         {node.data.locked && (
@@ -266,20 +286,58 @@ export default function PropertiesMenuBox({
           </Grid>
         ))}
 
-        {(node.type === 'stim' || node.type === 'func') && (
+        {(node.type === 'stim' || node.type === 'func' || node.type === 'genfunc') && (
           <>
-            <Grid size={12}>
-              <TextField
-                fullWidth
-                label={node.type === 'func' ? 'Expression (x0, x1, ... are its own pool inputs)' : 'Expression (function of t, in seconds)'}
-                size="small"
-                multiline
-                minRows={2}
-                value={fields.expr}
-                onChange={(e) => setField('expr', e.target.value)}
-                helperText="Checked for negative values across the Run panel's runtime before it's saved."
-              />
-            </Grid>
+            {node.type === 'func' ? (
+              // A summation function's own expr is always exactly
+              // "x0+x1+..." -- auto-maintained by add_edge's own
+              // funcInput handling every time an input is connected or
+              // removed, never user-typed (the user's own later request:
+              // "no function because that is predefined as a summation").
+              <Grid size={12}>
+                <TextField
+                  fullWidth
+                  label="Expression"
+                  size="small"
+                  value={node.data.expr || ''}
+                  slotProps={{ input: { readOnly: true } }}
+                  variant="filled"
+                  helperText="Always the sum of its own connected pool inputs -- drag a connection from another pool onto it to add one."
+                />
+              </Grid>
+            ) : (
+              <Grid size={12}>
+                <TextField
+                  fullWidth
+                  label={node.type === 'genfunc' ? 'Expression (x0, x1, ... are its own pool inputs)' : 'Expression (function of t, in seconds)'}
+                  size="small"
+                  multiline
+                  minRows={2}
+                  value={fields.expr}
+                  onChange={(e) => setField('expr', e.target.value)}
+                  helperText={
+                    node.type === 'genfunc'
+                      ? undefined
+                      : "Checked for negative values across the Run panel's runtime before it's saved."
+                  }
+                />
+              </Grid>
+            )}
+            {node.type === 'genfunc' && (
+              <Grid size={12}>
+                <Tooltip title="Referred to in the expression above as x0, x1, ... in the order you connect pools to it.">
+                  <TextField
+                    fullWidth
+                    type="number"
+                    label="Number of inputs"
+                    size="small"
+                    value={fields.numInputs}
+                    onChange={(e) => setField('numInputs', e.target.value)}
+                    slotProps={{ htmlInput: { min: 0 } }}
+                  />
+                </Tooltip>
+              </Grid>
+            )}
             <Grid size={12}>
               <TextField
                 fullWidth
@@ -313,7 +371,7 @@ export default function PropertiesMenuBox({
             Color
           </Typography>
           <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
-            {RAINBOW_16.map((c) => (
+            {[...RAINBOW_16, ...GRAYSCALE_8].map((c) => (
               <Box
                 key={c}
                 onClick={() => {
