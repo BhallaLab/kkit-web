@@ -82,6 +82,7 @@ export default function AppLayout({
       <FileMenuBox
         onGraphLoaded={onGraphLoaded}
         status={status}
+        flowGraph={canvasProps.flowGraph}
         plots={plots}
         collapsedMap={collapsedMap}
         runtime={runtime}
@@ -168,7 +169,7 @@ export default function AppLayout({
       </AppBar>
       <Box sx={{ display: 'flex', flexGrow: 1, p: 2, gap: 2, minHeight: 0 }}>
         <Box sx={{ width: '33%', height: '100%' }}>{menuComponents[activeMenu]}</Box>
-        <Box sx={{ width: '67%', height: '100%' }}>
+        <Box id="printable-canvas" sx={{ width: '67%', height: '100%' }}>
           <MainDisplay
             {...canvasProps}
             plotData={plotData}

@@ -417,6 +417,86 @@ def describe_concchan(path):
     })
 
 
+_FUNC_NA = 6.0221415e23  # exactly moose-core's own basecode/header.h NA constant
+_FUNC_XVAR_RE = re.compile(r"\bx(\d+)\b")
+
+
+def _func_expr_scale(func):
+    """NA * (target pool's volume) -- the exact multiplicative factor
+    moose's own Stoich::zombifyPoolFuncWithScaling applies (verified
+    directly against moose-core's ksolve/Stoich.cpp/FuncTerm.cpp) to a
+    Function's output once its valueOut drives a pool's conc/concInit.
+    FuncTerm::operator() always evaluates x0, x1, ... against the pool's
+    raw molecule count N -- Pool has no concOut broadcast field to push
+    concentration with at all, only nOut (see add_edge's own funcInput
+    comment) -- then multiplies the WHOLE expression's result by this same
+    scale once, at the very end, before writing it back as the target's
+    own N. For a pure function of t (no x-tokens at all, a genuine
+    Stimulus), that final multiply exactly cancels back out and needs no
+    correction. For anything that actually references a pool input, it
+    doesn't: a raw N value substituted straight into an expression
+    authored in concentration terms is exactly `scale` times too large,
+    and unlike the missing correction, one multiply applied to the whole
+    result can't retroactively fix that term-by-term for anything but a
+    purely linear-homogeneous expression (a summation) -- verified
+    directly (a "sum" pool coming back 1000x-plus too large, a "general"
+    x0*x1+2 not landing anywhere near the intended small constant).
+    Returns None if the function isn't actually driving a target pool yet
+    (nothing to scale against)."""
+    target_id, _ = _stim_field(func)
+    if target_id is None:
+        return None
+    return _FUNC_NA * moose.element(target_id).volume
+
+
+def _scale_func_expr(expr, scale):
+    """Rewrites every x0, x1, ... reference in a clean, user/auto-authored
+    expr (concentration-domain, e.g. "x0*x1+2") into the form that must
+    actually be installed on the live moose Function ("(x0/scale)*
+    (x1/scale)+2") to make Stoich's own single end-of-expression volScale
+    multiply (see _func_expr_scale) land on the right answer. A no-op for
+    an expr with no x-tokens at all (a genuine Stimulus's pure function
+    of t) or when `scale` is None."""
+    if scale is None:
+        return expr
+    return _FUNC_XVAR_RE.sub(lambda m: f"(x{m.group(1)}/{scale!r})", expr)
+
+
+def _unscale_func_expr(expr, scale):
+    """Reverses _scale_func_expr exactly, back to the clean, user-facing
+    form -- for display (describe_stim) and for save/reload
+    (_snapshot_stims's own SBML annotation), neither of which should ever
+    show the internal scaled form. Relies on _scale_func_expr's fixed,
+    deterministic substitution pattern -- and repr() of the same target
+    pool's volume always formatting identically -- to match exactly; not
+    a general algebraic simplifier."""
+    if scale is None:
+        return expr
+    pattern = re.compile(r"\(x(\d+)/" + re.escape(repr(scale)) + r"\)")
+    return pattern.sub(lambda m: f"x{m.group(1)}", expr)
+
+
+def set_func_expr(func, raw_expr):
+    """The single place every write path (create_stim/create_sumfunc/
+    create_genfunc/add_edge/remove_edge/_restore_stims/update_stim) should
+    go through to set a Function's own expr, so the concentration-domain
+    scaling correction (see _func_expr_scale) is never applied
+    inconsistently or forgotten. Requires the Function's valueOut to
+    already be connected to its target pool (_stim_field needs to resolve
+    it) -- callers that build a brand new Function connect that message
+    first."""
+    func.expr = _scale_func_expr(raw_expr, _func_expr_scale(func))
+
+
+def clean_func_expr(func):
+    """The inverse counterpart of set_func_expr -- what every read path
+    (describe_stim, _snapshot_stims) should call instead of reading
+    func.expr directly, to get back the clean, user-facing expr rather
+    than the internally-scaled form actually installed on the live
+    object."""
+    return _unscale_func_expr(func.expr, _func_expr_scale(func))
+
+
 def _stim_field(func):
     """Which pool field (setConc/setConcInit) a Stimulus Function's
     valueOut is wired to -- read back from the live message itself (not
@@ -493,7 +573,7 @@ def describe_stim(path):
     else:
         node_type = "genfunc"
     return _node(f, node_type, {
-        "expr": f.expr,
+        "expr": clean_func_expr(f),
         "targetId": target_id,
         # "conc" / "concInit" -- stripped of the "set" prefix moose's dest
         # field names carry, to match the plain field names used elsewhere

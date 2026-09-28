@@ -29,6 +29,8 @@ from moose_graph import (
     normalize_color,
     _stim_field,
     _function_inputs,
+    set_func_expr,
+    clean_func_expr,
     _reac_orders,
     _conc_scale,
     rescale_reac_for_order_change,
@@ -53,6 +55,35 @@ def _wrap_notes(text):
     the model inside the same .xml file rather than needing a side channel."""
     escaped = html.escape(text).replace("\n", "<br/>")
     return f'<notes><body xmlns="http://www.w3.org/1999/xhtml"><p>{escaped}</p></body></notes>'
+
+
+# A legacy kkit .g file's own model-level notes -- verified directly against
+# a real dump (Repressillator.g): `simundump text /kinetics/notes 0 "..."`,
+# the SAME simundump-a-text-object convention every per-group/per-reaction
+# "notes" field also uses (e.g. `/kinetics/lac_gene/notes`), just at the
+# model's own top level. moose.loadModel's own 'ee' GENESIS parser silently
+# DROPS this entirely -- verified directly, no "notes" child or field
+# exists anywhere on the loaded object tree afterward -- so this has to be
+# pulled from the raw uploaded text instead, the same way this app already
+# treats moose's own SBML writer as unable to round-trip a model-level
+# extra (see _inject_stim_annotations' own docstring).
+_G_LINE_CONTINUATION_RE = re.compile(r"\\\s*\r?\n\s*")
+_G_MODEL_NOTES_RE = re.compile(r'simundump\s+text\s+/kinetics/notes\s+\d+\s+"((?:[^"\\]|\\.)*)"')
+_G_ESCAPE_RE = re.compile(r"\\(.)")
+
+
+def _unescape_g_string(s):
+    # GENESIS's own dump escaping: \n/\t for the obvious whitespace, \" so a
+    # literal quote doesn't end the string early, \\ for a literal
+    # backslash -- and, same as a plain \\(anything else), just drops the
+    # backslash for anything not specifically meaningful.
+    return _G_ESCAPE_RE.sub(lambda m: {"n": "\n", "t": "\t"}.get(m.group(1), m.group(1)), s)
+
+
+def _extract_g_model_notes(content):
+    joined = _G_LINE_CONTINUATION_RE.sub(" ", content)
+    m = _G_MODEL_NOTES_RE.search(joined)
+    return _unescape_g_string(m.group(1)) if m else ""
 
 
 _GROUP_ANNOTATION_FIELD_RE = re.compile(r"<moose:(x|y|width|height|bgColor)>([^<]*)</moose:\1>")
@@ -482,7 +513,11 @@ def _extract_collapsed(content, model_path):
 
 
 _KKIT_STIM_TAG_RE = re.compile(
-    r'<kkit:stimulus[^>]*\bname="([^"]*)"[^>]*\bfield="([^"]*)"[^>]*\bx="([^"]*)"[^>]*\by="([^"]*)"[^>]*>'
+    r'<kkit:stimulus[^>]*\bname="([^"]*)"[^>]*\bfield="([^"]*)"'
+    r'(?:[^>]*\bkind="([^"]*)")?'
+    r'(?:[^>]*\bnumInputs="([^"]*)")?'
+    r'(?:[^>]*\binputs="([^"]*)")?'
+    r'[^>]*\bx="([^"]*)"[^>]*\by="([^"]*)"[^>]*>'
     r"(.*?)</kkit:stimulus>",
     re.DOTALL,
 )
@@ -490,17 +525,27 @@ _RULE_BLOCK_RE = re.compile(r"<listOfRules>.*?</listOfRules>", re.DOTALL)
 
 
 def _snapshot_stims(model_path):
-    """Function-based Stimulus objects: moose.writeSBML doesn't represent
-    them faithfully at all -- verified directly, it flattens the valueOut
-    connection into an *invalid* SBML assignmentRule referencing the bare
-    identifier 't' (not a valid reference to any species/compartment/
-    parameter/reaction, so any strict SBML consumer rejects it), and the
-    Function object's own identity, expr and position are lost from the
+    """Function-based Stimulus/summation/general-function objects:
+    moose.writeSBML doesn't represent them faithfully at all -- verified
+    directly, it flattens the valueOut connection into an *invalid* SBML
+    assignmentRule referencing the bare identifier 't' (not a valid
+    reference to any species/compartment/parameter/reaction, so any
+    strict SBML consumer rejects it), and the Function object's own
+    identity, expr, pool-input wiring and position are all lost from the
     file entirely. Persisted instead via a custom annotation on the target
     species (see _inject_stim_annotations), the same approach already used
     for plot windows -- snapshotting here (rather than reading back
-    anything from the written file) since nothing about a Stimulus survives
-    the write in a usable form to read back from."""
+    anything from the written file) since nothing about one of these
+    survives the write in a usable form to read back from.
+
+    `kind`/`inputs`/`numInputs` are what let a summation or general
+    function's own pool-input wiring (never captured here before -- see
+    the bug this was written to fix: reloading such a model silently lost
+    every funcInput connection, and a summation function's own
+    allowUnknownVariable=False -- the ONLY thing describe_stim's own
+    classifier uses to tell it apart from a general function, see its own
+    docstring -- was never persisted either, so it silently came back as
+    a general function instead) survive a save/reload round trip too."""
     stims = []
     for f in moose.wildcardFind(f"{model_path}/##[ISA=Function]"):
         f = moose.element(f)
@@ -508,13 +553,17 @@ def _snapshot_stims(model_path):
         if not target_path or not dest_field:
             continue
         info = moose.element(f.path + "/info") if moose.exists(f.path + "/info") else None
+        kind = "sum" if not f.allowUnknownVariable else "general" if f.numVars > 0 else "stim"
         stims.append({
             "name": f.name,
-            "expr": f.expr,
+            "expr": clean_func_expr(f),
             "field": dest_field[3].lower() + dest_field[4:],
             "target_path": target_path,
             "x": info.x if info else 0.0,
             "y": info.y if info else 0.0,
+            "kind": kind,
+            "num_inputs": f.numVars,
+            "inputs": _function_inputs(f),
         })
     return stims
 
@@ -558,7 +607,16 @@ def _inject_stim_annotations(content, model_path, stims):
         block = m.group(0)
         tags = "".join(
             f'<kkit:stimulus xmlns:kkit="{_KKIT_NS}" name="{html.escape(s["name"])}" '
-            f'field="{s["field"]}" x="{s["x"]}" y="{s["y"]}">'
+            f'field="{s["field"]}" kind="{s["kind"]}" numInputs="{s["num_inputs"]}" '
+            # Each input pool is written as its own name-path (the same
+            # stable, session-independent identifier the target itself is
+            # matched by -- see name_path's own docstring), "/"-joined
+            # since a plain name can't itself contain "/"; several inputs
+            # are ";"-joined, in x0/x1/... order -- _restore_stims reverses
+            # both splits the same way, against the SAME live_by_path map
+            # it already builds for the target.
+            f'inputs="{html.escape(";".join("/".join(name_path(p, model_path)) for p in s["inputs"]))}" '
+            f'x="{s["x"]}" y="{s["y"]}">'
             f'{html.escape(s["expr"])}</kkit:stimulus>'
             for s in by_species_id[sid_match.group(1)]
         )
@@ -570,12 +628,14 @@ def _inject_stim_annotations(content, model_path, stims):
 
 
 def _restore_stims(doc, model_path):
-    """Rebuilds each Stimulus's actual moose.Function object (expr, target
-    connection, position) from the custom annotation this app writes on
-    save (see _inject_stim_annotations) -- moose's own writeSBML+readSBML
-    round-trip loses a Stimulus entirely (see _snapshot_stims's docstring),
-    so this is the only path that recreates it at all, mirroring how
-    _restore_group_annotations recreates group boxes after the fact."""
+    """Rebuilds each Stimulus/summation/general-function's actual
+    moose.Function object (expr, target connection, pool-input wiring,
+    kind, position) from the custom annotation this app writes on save
+    (see _inject_stim_annotations) -- moose's own writeSBML+readSBML
+    round-trip loses one of these entirely (see _snapshot_stims's own
+    docstring), so this is the only path that recreates it at all,
+    mirroring how _restore_group_annotations recreates group boxes after
+    the fact."""
     model = doc.getModel()
     if model is None:
         return
@@ -590,15 +650,42 @@ def _restore_stims(doc, model_path):
         if target_path is None:
             continue
         for m in _KKIT_STIM_TAG_RE.finditer(sp.getAnnotationString() or ""):
-            name, field, x, y, expr = m.groups()
+            name, field, kind, num_inputs_str, inputs_str, x, y, expr = m.groups()
             target = moose.element(target_path)
             container = target.parent.path
             stim_name = _unique_name(container, name or "stim")
             func = moose.Function(f"{container}/{stim_name}")
-            func.expr = html.unescape(expr)
             func.doEvalAtReinit = True
+            if kind == "sum":
+                func.allowUnknownVariable = False
+            # Reconnect every input pool, in its own original x0/x1/...
+            # order, resolved via the SAME live_by_path name-path map the
+            # target itself was just matched through -- see add_edge's
+            # own func.x[i] comment for why a bare, non-field-indexed
+            # element reference here would silently misconnect everything
+            # past the first input.
+            slot = 0
+            for name_path_str in (inputs_str or "").split(";"):
+                if not name_path_str:
+                    continue
+                input_path = live_by_path.get(tuple(name_path_str.split("/")))
+                if input_path is None:
+                    continue
+                func.numVars = slot + 1
+                moose.connect(moose.element(input_path), "nOut", func.x[slot], "input")
+                slot += 1
+            # A general function's own declared capacity can exceed how
+            # many inputs actually got reconnected (a reserved,
+            # not-yet-wired slot -- see update_stim's own numInputs
+            # handling); never shrunk below what was just wired.
+            if num_inputs_str:
+                try:
+                    func.numVars = max(func.numVars, int(num_inputs_str))
+                except ValueError:
+                    pass
             dest_field = "set" + field[0].upper() + field[1:] if field else "setConc"
             moose.connect(func, "valueOut", target, dest_field)
+            set_func_expr(func, html.unescape(expr))
             create_info(func.path, float(x), float(y), color="red")
 
 
@@ -834,7 +921,9 @@ def upload_gfile():
     model_path = _new_model_path()
     moose.loadModel(path, model_path, "ee")
     os.remove(path)
-    return jsonify(build_graph(model_path))
+    result = build_graph(model_path)
+    result["notes"] = _extract_g_model_notes(content)
+    return jsonify(result)
 
 
 @app.get("/api/graph")
@@ -1068,43 +1157,35 @@ def add_edge():
         func = moose.element(to_id)
         if func.className != "Function":
             return jsonify({"error": "funcInput target must be a function"}), 400
-        # A Function's own "x" child holds its WHOLE input vector as a
-        # single element (see _function_inputs' own docstring) -- every
-        # new input just connects to that same element again, with order
-        # (not a per-slot index) the only thing distinguishing "which x_i
-        # is which" on read-back.
-        x = moose.element(func.path + "/x")
-        moose.connect(moose.element(from_id), "nOut", x, "input")
-        # _function_inputs' own numVars==0 guard (see its docstring --
-        # needed to avoid moose fabricating a bogus "x" child for a
-        # genuine zero-input stim) means it can never see a connection
-        # just made while numVars is STILL 0 -- true for a summation
-        # function's very first input (it starts at 0 and only ever grows
-        # via this same branch, see below) and, defensively, for a general
-        # function too, if it somehow still has numVars==0 when a
-        # connection reaches it. Bumping to 1 first unblocks the read;
-        # both branches below immediately reconcile numVars to whatever
-        # the read-back actually found anyway.
-        if func.numVars == 0:
-            func.numVars = 1
-        input_ids = _function_inputs(func)
         kind = body.get("kind")
+        if kind not in ("sum", "general"):
+            return jsonify({"error": f"unsupported funcInput kind: {kind}"}), 400
+        # A Function's own "x" is a single DATA element but a multi-slot
+        # FIELD-indexed one -- func.x[i] all share the same data index,
+        # only fieldIndex actually differs between them (verified
+        # directly; moose's own test_function_change_expr.py connects
+        # this exact way). A bare moose.element(func.path + "/x")
+        # (what this used to do) always resolves to fieldIndex 0
+        # regardless of which input this is, which silently means every
+        # input after the first overwrites the same single slot instead
+        # of actually occupying its own x0/x1/... -- verified directly:
+        # this was why a summation/general function's OUTPUT never
+        # tracked its real inputs at all once actually simulated, even
+        # though _function_inputs' own read-back (a plain neighbor list,
+        # not fieldIndex-sensitive) already reported the connections
+        # correctly, masking the bug from every check this app ran before
+        # actually running a live simulation.
+        slot = len(_function_inputs(func))
+        if slot >= func.numVars:
+            func.numVars = slot + 1
+        moose.connect(moose.element(from_id), "nOut", func.x[slot], "input")
+        input_ids = _function_inputs(func)
         if kind == "sum":
-            # A summation function's own numVars/expr are ALWAYS kept in
-            # lockstep with however many inputs are actually wired -- see
+            # A summation function's own expr is ALWAYS kept in lockstep
+            # with however many inputs are actually wired -- see
             # describe_stim's own classifier, which relies on this never
             # drifting apart.
-            func.numVars = len(input_ids)
-            func.expr = "+".join(f"x{i}" for i in range(len(input_ids)))
-        elif kind == "general":
-            # A general function's own numVars is a separately declared
-            # capacity (see update_stim's own numInputs handling) -- only
-            # grown here if the new connection actually exceeds whatever
-            # was already declared, never shrunk.
-            if len(input_ids) > func.numVars:
-                func.numVars = len(input_ids)
-        else:
-            return jsonify({"error": f"unsupported funcInput kind: {kind}"}), 400
+            set_func_expr(func, "+".join(f"x{i}" for i in range(len(input_ids))))
         stoich = 1  # never a parallel/stoichiometric connection the way substrate/product can be
     else:
         return jsonify({"error": f"unsupported edge type: {edge_type}"}), 400
@@ -1146,25 +1227,55 @@ def remove_edge():
             return jsonify({"error": err}), 400
         func = moose.element(to_id)
         pool_id = from_id
-        deleted = False
-        for m in moose.element(pool_id).msgOut:
-            msg = moose.element(m)
-            if "input" in msg.destFieldsOnE2 and moose.element(msg.e2).parent.path == func.path:
-                moose.delete(msg)
-                deleted = True
-                break
-        if not deleted:
+        before = _function_inputs(func)
+        if pool_id not in before:
             return jsonify({"error": "connection not found"}), 404
-        input_ids = _function_inputs(func)
-        # A summation function's own expr/numVars stay in lockstep with
-        # whatever's actually wired (see add_edge's own matching comment);
-        # a general function's own declared capacity (numInputs) is left
-        # exactly as it was -- removing one connection just frees that
-        # slot up again, it doesn't shrink how many the node is set up
-        # to handle.
-        if body.get("kind") == "sum":
-            func.numVars = len(input_ids)
-            func.expr = "+".join(f"x{i}" for i in range(len(input_ids)))
+        declared_capacity = func.numVars
+        remaining = [p for p in before if p != pool_id]
+        # Deleting only the ONE message for `pool_id` (whichever field-
+        # indexed slot it happened to occupy, see add_edge's own
+        # func.x[i] comment) can leave a GAP in the middle of the 0..N-1
+        # slot range -- every remaining input is instead disconnected and
+        # reconnected fresh, in the same relative order, to a contiguous
+        # range, which is what actually keeps the simulation's own real
+        # x0/x1/... reading exactly the same pools _function_inputs' own
+        # read-back (and this app's own UI) reports (verified directly:
+        # leaving a gap in place left the function's own live value
+        # permanently stuck at whatever it was before the removal, still
+        # counting the just-removed input).
+        #
+        # Each existing input's own message is found via ITS OWN msgOut
+        # (the pool's outgoing side), the same narrow, per-input lookup
+        # the single-message delete used before this whole reconnect-
+        # everything approach -- enumerating from the DESTINATION side
+        # instead (func's own "x" child's msgIn) crashed outright
+        # (verified directly, a segfault) on an unrelated internal entry
+        # moose itself apparently keeps there alongside the real input
+        # messages.
+        for p in before:
+            pool_elem = moose.element(p)
+            for m in pool_elem.msgOut:
+                msg = moose.element(m)
+                if "input" in msg.destFieldsOnE2 and moose.element(msg.e2).parent.path == func.path:
+                    moose.delete(msg)
+                    break
+        func.numVars = 0
+        for i, p in enumerate(remaining):
+            func.numVars = i + 1
+            moose.connect(moose.element(p), "nOut", func.x[i], "input")
+        kind = body.get("kind")
+        if kind == "sum":
+            # A summation function's own expr/numVars stay in lockstep
+            # with however many inputs are actually wired -- see
+            # add_edge's own matching comment.
+            set_func_expr(func, "+".join(f"x{i}" for i in range(len(remaining))))
+        else:
+            # A general function's own declared capacity (numInputs) is
+            # left exactly as it was -- removing one connection just
+            # frees that slot up again, it doesn't shrink how many the
+            # node is set up to handle (see update_stim's own numInputs
+            # handling).
+            func.numVars = max(func.numVars, declared_capacity)
         return jsonify({"ok": True, "numInputs": func.numVars, "funcUpdate": describe_stim(func.path)})
 
     if edge_type not in _EDGE_SRC_FIELD:
@@ -1495,10 +1606,10 @@ def create_stim():
     container = target.parent.path
     name = _unique_name(container, body.get("name") or "stim")
     func = moose.Function(f"{container}/{name}")
-    func.expr = expr
     func.doEvalAtReinit = True
     dest_field = _STIM_FIELD_BY_BUFFERED[bool(target.isBuffered)]
     moose.connect(func, "valueOut", target, dest_field)
+    set_func_expr(func, expr)
     create_info(func.path, float(body.get("x", 0)), float(body.get("y", 0)), color="red")
     return jsonify(describe_stim(func.path))
 
@@ -1537,11 +1648,11 @@ def create_sumfunc():
     # one connects. allowUnknownVariable=False is the same restriction
     # ReadKkit.cpp's own buildSumTotal applies: only x0, x1, ... (its own
     # wired inputs) are ever legal names in a summation's expr.
-    func.expr = "0"
     func.allowUnknownVariable = False
     func.doEvalAtReinit = True
     dest_field = _STIM_FIELD_BY_BUFFERED[bool(target.isBuffered)]
     moose.connect(func, "valueOut", target, dest_field)
+    set_func_expr(func, "0")
     create_info(func.path, float(body.get("x", 0)), float(body.get("y", 0)), color="red")
     return jsonify(describe_stim(func.path))
 
@@ -1568,10 +1679,10 @@ def create_genfunc():
     name = _unique_name(container, body.get("name") or "func")
     func = moose.Function(f"{container}/{name}")
     func.numVars = num_inputs
-    func.expr = "0"
     func.doEvalAtReinit = True
     dest_field = _STIM_FIELD_BY_BUFFERED[bool(target.isBuffered)]
     moose.connect(func, "valueOut", target, dest_field)
+    set_func_expr(func, "0")
     create_info(func.path, float(body.get("x", 0)), float(body.get("y", 0)), color="red")
     return jsonify(describe_stim(func.path))
 
@@ -1628,7 +1739,18 @@ def update_stim():
             return jsonify({"error": f"can't reduce below {wired} -- that many inputs are already wired"}), 400
         f.numVars = new_count
 
-    return _update_node(node_id, fields, set(), set(), describe_stim, string_fields={"expr"})
+    # expr always goes through set_func_expr (never a plain setattr, see
+    # its own docstring) so a general function's user-authored, clean
+    # concentration-domain expr (e.g. "x0*x1+2") gets the same scaling
+    # correction applied at creation time and by add_edge/remove_edge's
+    # own funcInput handling -- otherwise editing an existing general
+    # function's expr through this endpoint would silently install it
+    # unscaled, right back into the same 1000x-plus-too-large bug this
+    # was written to fix.
+    if "expr" in fields:
+        set_func_expr(f, fields.pop("expr"))
+
+    return _update_node(node_id, fields, set(), set(), describe_stim, string_fields=set())
 
 
 @app.post("/api/delete_node")
@@ -1811,6 +1933,14 @@ def save_sbml():
     runtime = body.get("runtime")
     plot_dt = body.get("plotDt")
     collapsed = body.get("collapsed") or {}
+    creator = body.get("creator", "")
+    license_ = body.get("license", "")
+    # The "last modified" timestamp is purely informational (shown back to
+    # the user in the File menu's own read-only dialog, see FileMenuBox) --
+    # like notes/runtime/plotDt, this app trusts whatever the client sends
+    # rather than re-deriving it server-side, since there's no invariant
+    # depending on it actually being accurate to the second.
+    modified = body.get("modified", "")
     snapshot = _snapshot_positions(_current_model_path)
     group_snapshot = _snapshot_group_boxes(_current_model_path)
     stim_snapshot = _snapshot_stims(_current_model_path)
@@ -1827,24 +1957,39 @@ def save_sbml():
     content = _inject_plot_annotations(content, _current_model_path, plots)
     content = _inject_stim_annotations(content, _current_model_path, stim_snapshot)
     content = _inject_collapsed_annotations(content, _current_model_path, collapsed)
-    if notes or (runtime is not None and plot_dt is not None):
+    have_meta = creator or license_ or modified
+    if notes or (runtime is not None and plot_dt is not None) or have_meta:
         doc = libsbml.readSBMLFromString(content)
         model = doc.getModel()
         if notes:
             model.setNotes(_wrap_notes(notes))
+        # Both custom model-level annotations have to go in through a
+        # SINGLE setAnnotation call -- it replaces the model's whole
+        # annotation block rather than appending to it (confirmed
+        # directly), so building one combined string here is the only way
+        # runSettings and modelMeta both survive together.
+        annotation = ""
         if runtime is not None and plot_dt is not None:
             # The user's preferred Run-panel settings -- not part of the
             # model itself, so a plain custom model-level annotation
             # (same mechanism as the per-species plotWindow/stimulus
             # annotations) rather than any native SBML construct.
-            model.setAnnotation(
-                f'<kkit:runSettings xmlns:kkit="{_KKIT_NS}" runtime="{runtime}" plotDt="{plot_dt}"/>'
+            annotation += f'<kkit:runSettings xmlns:kkit="{_KKIT_NS}" runtime="{runtime}" plotDt="{plot_dt}"/>'
+        if have_meta:
+            annotation += (
+                f'<kkit:modelMeta xmlns:kkit="{_KKIT_NS}" creator="{html.escape(creator)}" '
+                f'license="{html.escape(license_)}" modified="{html.escape(modified)}"/>'
             )
+        if annotation:
+            model.setAnnotation(annotation)
         content = libsbml.writeSBMLToString(doc)
     return jsonify({"sbml": content})
 
 
 _RUN_SETTINGS_RE = re.compile(r'<kkit:runSettings\b[^>]*\bruntime="([^"]*)"[^>]*\bplotDt="([^"]*)"')
+_MODEL_META_RE = re.compile(
+    r'<kkit:modelMeta\b[^>]*\bcreator="([^"]*)"[^>]*\blicense="([^"]*)"[^>]*\bmodified="([^"]*)"'
+)
 
 
 @app.post("/api/load_sbml")
@@ -1854,13 +1999,22 @@ def load_sbml():
         return jsonify({"error": "no sbml content provided"}), 400
     notes = ""
     run_settings = None
+    model_meta = None
     doc = libsbml.readSBMLFromString(content)
     model = doc.getModel()
     if model is not None:
         notes = _unwrap_notes(model.getNotesString())
-        m = _RUN_SETTINGS_RE.search(model.getAnnotationString() or "")
+        annotation = model.getAnnotationString() or ""
+        m = _RUN_SETTINGS_RE.search(annotation)
         if m:
             run_settings = {"runtime": m.group(1), "plotDt": m.group(2)}
+        m = _MODEL_META_RE.search(annotation)
+        if m:
+            model_meta = {
+                "creator": html.unescape(m.group(1)),
+                "license": html.unescape(m.group(2)),
+                "modified": html.unescape(m.group(3)),
+            }
     content_for_moose = _ensure_reaction_present(content, model)
     fd, path = tempfile.mkstemp(suffix=".xml")
     with os.fdopen(fd, "w") as f:
@@ -1878,6 +2032,7 @@ def load_sbml():
     result = build_graph(model_path, extra_plot_windows, extra_collapsed)
     result["notes"] = notes
     result["runSettings"] = run_settings
+    result["modelMeta"] = model_meta
     return jsonify(result)
 
 

@@ -241,15 +241,16 @@ export default function PropertiesMenuBox({
           />
         </Grid>
         <Grid size={12}>
-          <TextField
-            fullWidth
-            label="Parent"
-            size="small"
-            value={parentName ?? '(top level)'}
-            slotProps={{ input: { readOnly: true } }}
-            variant="filled"
-            helperText="Names repeat across a model -- this disambiguates which one you're looking at."
-          />
+          <Tooltip title="Names repeat across a model -- this disambiguates which one you're looking at.">
+            <TextField
+              fullWidth
+              label="Parent"
+              size="small"
+              value={parentName ?? '(top level)'}
+              slotProps={{ input: { readOnly: true } }}
+              variant="filled"
+            />
+          </Tooltip>
         </Grid>
 
         {editableRowsFor(node).map((row, i) => (
@@ -295,32 +296,30 @@ export default function PropertiesMenuBox({
               // removed, never user-typed (the user's own later request:
               // "no function because that is predefined as a summation").
               <Grid size={12}>
-                <TextField
-                  fullWidth
-                  label="Expression"
-                  size="small"
-                  value={node.data.expr || ''}
-                  slotProps={{ input: { readOnly: true } }}
-                  variant="filled"
-                  helperText="Always the sum of its own connected pool inputs -- drag a connection from another pool onto it to add one."
-                />
+                <Tooltip title="Always the sum of its own connected pool inputs -- drag a connection from another pool onto it to add one.">
+                  <TextField
+                    fullWidth
+                    label="Expression"
+                    size="small"
+                    value={node.data.expr || ''}
+                    slotProps={{ input: { readOnly: true } }}
+                    variant="filled"
+                  />
+                </Tooltip>
               </Grid>
             ) : (
               <Grid size={12}>
-                <TextField
-                  fullWidth
-                  label={node.type === 'genfunc' ? 'Expression (x0, x1, ... are its own pool inputs)' : 'Expression (function of t, in seconds)'}
-                  size="small"
-                  multiline
-                  minRows={2}
-                  value={fields.expr}
-                  onChange={(e) => setField('expr', e.target.value)}
-                  helperText={
-                    node.type === 'genfunc'
-                      ? undefined
-                      : "Checked for negative values across the Run panel's runtime before it's saved."
-                  }
-                />
+                <Tooltip title={node.type === 'genfunc' ? '' : "Checked for negative values across the Run panel's runtime before it's saved."}>
+                  <TextField
+                    fullWidth
+                    label={node.type === 'genfunc' ? 'Expression (x0, x1, ... are its own pool inputs)' : 'Expression (function of t, in seconds)'}
+                    size="small"
+                    multiline
+                    minRows={2}
+                    value={fields.expr}
+                    onChange={(e) => setField('expr', e.target.value)}
+                  />
+                </Tooltip>
               </Grid>
             )}
             {node.type === 'genfunc' && (
@@ -339,15 +338,16 @@ export default function PropertiesMenuBox({
               </Grid>
             )}
             <Grid size={12}>
-              <TextField
-                fullWidth
-                label="Drives"
-                size="small"
-                value={node.data.field || ''}
-                slotProps={{ input: { readOnly: true } }}
-                variant="filled"
-                helperText="conc for a regular pool, concInit for a buffered one -- set automatically from the target pool."
-              />
+              <Tooltip title="conc for a regular pool, concInit for a buffered one -- set automatically from the target pool.">
+                <TextField
+                  fullWidth
+                  label="Drives"
+                  size="small"
+                  value={node.data.field || ''}
+                  slotProps={{ input: { readOnly: true } }}
+                  variant="filled"
+                />
+              </Tooltip>
             </Grid>
           </>
         )}

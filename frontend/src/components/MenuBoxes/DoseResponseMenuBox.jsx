@@ -10,6 +10,7 @@ import {
   ToggleButtonGroup,
   ToggleButton,
   Alert,
+  Tooltip,
 } from '@mui/material';
 
 // Mirrors xdoser.g's own 8 concentration-range toggles -- decade 0 is
@@ -36,15 +37,11 @@ export default function DoseResponseMenuBox({ flowGraph, params, setParams, runn
 
   return (
     <Box sx={{ p: 2, background: '#f5f5f5', borderRadius: 2, height: '100%', overflowY: 'auto' }}>
-      <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1.5 }}>
-        Dose Response
-      </Typography>
-      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-        Steps the variable pool's concentration through a log-spaced range and
-        records the monitored pool's steady-state response at each level,
-        using the Run panel's runtime to let the system settle. The
-        resulting curve appears in the Plots tab.
-      </Typography>
+      <Tooltip title="Steps the variable pool's concentration through a log-spaced range and records the monitored pool's steady-state response at each level, using the Run panel's runtime to let the system settle. The resulting curve appears in the Plots tab.">
+        <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1.5, width: 'fit-content' }}>
+          Dose Response
+        </Typography>
+      </Tooltip>
 
       <FormControl fullWidth size="small" sx={{ mb: 1 }} disabled={running}>
         <InputLabel>Variable pool (dose)</InputLabel>

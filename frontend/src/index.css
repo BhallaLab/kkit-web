@@ -134,3 +134,26 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+/* File menu's own "Print Layout" (see FileMenuBox.jsx) just calls
+   window.print() -- printing the whole page (menu bar, left panel, tabs)
+   would be useless, so this hides everything except the reaction-layout
+   canvas itself (#printable-canvas, set on its wrapper in AppLayout.jsx)
+   for the print pass only, then restores it for `visibility: visible`
+   (not `display`, so layout/sizing is unaffected on screen). */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #printable-canvas,
+  #printable-canvas * {
+    visibility: visible;
+  }
+  #printable-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+  }
+}

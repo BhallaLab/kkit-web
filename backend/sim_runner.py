@@ -8,7 +8,6 @@ import moose
 
 _PLOTS_SUBPATH = "plots"
 _SOLVE_TICK = 4
-_FUNC_TICK = 6
 _DEFAULT_SIMDT = 0.01
 
 
@@ -75,14 +74,25 @@ def build_solver(model_path, simdt=_DEFAULT_SIMDT):
     moose.useClock(_SOLVE_TICK, ksolve.path, "process")
     moose.useClock(_SOLVE_TICK, dsolve.path, "process")
 
-    # A Stimulus's Function drives its target pool's conc/concInit every
-    # timestep, not just once at reinit -- explicit scheduling here (rather
-    # than relying on whatever default tick a freshly-created Function
-    # happens to fall on) matches how the solver itself is explicitly
-    # scheduled just above, and guarantees the expression is actually
-    # re-evaluated at simdt resolution throughout the run.
-    moose.setClock(_FUNC_TICK, simdt)
-    moose.useClock(_FUNC_TICK, compt_path + "/##[ISA=Function]", "process")
+    # Deliberately NOT scheduling Function objects on their own separate
+    # clock (an earlier version of this did, via a
+    # moose.useClock(tick, ..., "ISA=Function", "process") call here, to
+    # make sure a Stimulus's own expression re-evaluates every timestep
+    # rather than just once at reinit). Stoich's own reacSystemPath scan
+    # already
+    # discovers every Function under the compartment and calls it as part
+    # of its own per-step solve -- verified directly that a genuine
+    # zero-input Stimulus (t*1e-5) still updates smoothly every simdt with
+    # no separate scheduling at all. The explicit clock was actively
+    # HARMFUL for a Function with real pool inputs (a summation or general
+    # function's own x0/x1/... wiring, see add_edge's own funcInput
+    # handling): calling Function::process() a SECOND time via this
+    # redundant clock, uncoordinated with Stoich's own internal call
+    # sequence, left its output permanently stuck at whatever its inputs
+    # evaluated to at the very first step (0, before any real pool value
+    # had propagated) for the rest of the run -- verified directly against
+    # a summation/general function built entirely from freshly-created,
+    # never-reloaded pools, with no reload/round-trip involved at all.
 
 
 def build_plot_tables(model_path):

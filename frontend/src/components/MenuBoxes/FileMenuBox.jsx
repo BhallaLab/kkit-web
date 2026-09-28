@@ -1,14 +1,111 @@
-import { useState } from 'react';
-import { Box, Typography, TextField, Button, Stack, Divider, Alert } from '@mui/material';
+import { useMemo, useState } from 'react';
+import {
+  Box,
+  TextField,
+  Button,
+  Stack,
+  Divider,
+  Typography,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  MenuItem,
+} from '@mui/material';
 
 const API_BASE = `http://${window.location.hostname}:5001`;
 
-export default function FileMenuBox({ onGraphLoaded, status, plots, collapsedMap, runtime, setRuntime, plotDt, setPlotDt }) {
+// Flat, subdued, compact styling for every button in this menu --
+// deliberately NOT MUI's default vivid blue/red "contained" palette (which
+// draws far more attention than a File menu's own routine actions need),
+// and deliberately smaller than MUI's own "small" Button default (still
+// too tall for a menu this dense).
+const MUTED_BUTTON_SX = {
+  bgcolor: '#e0e0e0',
+  color: 'rgba(0, 0, 0, 0.87)',
+  boxShadow: 'none',
+  fontSize: '0.75rem',
+  minHeight: 0,
+  lineHeight: 1.5,
+  py: 0.4,
+  '&:hover': { bgcolor: '#cfcfcf', boxShadow: 'none' },
+};
+
+// Applied to every text/select field in this menu (File name, Model
+// Creator, License, Model Notes, Last Modified) -- MUI's own size="small"
+// shrinks padding but leaves the input/label at the theme's default
+// (1rem) font, which reads as oversized next to this menu's own compact
+// buttons.
+const COMPACT_FIELD_SX = {
+  '& .MuiInputBase-root': { fontSize: '0.8rem' },
+  '& .MuiInputLabel-root': { fontSize: '0.8rem' },
+};
+
+// A real, saveable choice always overwrites this -- but until then, it
+// reads unambiguously as "we don't actually know," rather than silently
+// showing "CC BY" as if the user (or the file) had actually chosen it.
+const NO_LICENSE = '(not set)';
+const LICENSE_OPTIONS = [NO_LICENSE, 'CC BY', 'CC BY-SA', 'GPLv3', 'None'];
+
+// Order/labels match the File menu's own read-only model-info line.
+// Computed directly from the live flowGraph (the same node list the canvas
+// itself renders, keyed by the exact node "type" strings build_graph/
+// toFlowGraph emit -- see model_tools.py's own model_size, which this
+// mirrors) rather than a separate backend fetch: a fetch here raced
+// App.jsx's own /api/new_model bootstrap call on every fresh page/window
+// load (both fire on mount, with no ordering guarantee between them, and
+// /api/new_model -- which actually builds a new CubeMesh etc. server-side
+// -- reliably takes longer than a trivial model_size scan of whatever the
+// *previous* window's model still was) -- verified directly: "New Window"
+// deterministically showed the old window's own counts. flowGraph, by
+// contrast, only ever updates from this exact window's own successful
+// load, so there's nothing left to race.
+const MODEL_INFO_FIELDS = [
+  ['compartment', 'compartments'],
+  ['group', 'groups'],
+  ['pool', 'pools'],
+  ['enz', 'enz'],
+  ['reac', 'reac'],
+];
+
+function formatModelInfo(nodes) {
+  const counts = {};
+  for (const n of nodes) counts[n.type] = (counts[n.type] || 0) + 1;
+  return MODEL_INFO_FIELDS.map(([key, label]) => `${counts[key] || 0} ${label}`).join(' · ');
+}
+
+// Always sent as-is to showSaveFilePicker/the <a download> fallback -- no
+// ".xml" appended here, so the user can see and edit the exact final name
+// (including the extension) rather than fighting an invisible suffix.
+function withXmlExtension(name) {
+  const trimmed = (name || '').trim() || 'model';
+  return /\.xml$/i.test(trimmed) ? trimmed : `${trimmed}.xml`;
+}
+
+function formatTimestamp(iso) {
+  if (!iso) return '(not yet saved)';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+export default function FileMenuBox({ onGraphLoaded, flowGraph, plots, collapsedMap, runtime, setRuntime, plotDt, setPlotDt }) {
   const [modelNotes, setModelNotes] = useState('');
+  const [fileName, setFileName] = useState('model.xml');
+  const [creator, setCreator] = useState('');
+  const [license, setLicense] = useState(NO_LICENSE);
+  const [modified, setModified] = useState('');
+
+  const [aboutKkitOpen, setAboutKkitOpen] = useState(false);
+  const [aboutMooseOpen, setAboutMooseOpen] = useState(false);
+
+  const modelInfoText = useMemo(() => formatModelInfo(flowGraph?.nodes || []), [flowGraph]);
 
   const handleLoadGFile = (event) => {
     const file = event.target.files[0];
     if (!file) return;
+    // Future saves default to this file's own name (with the extension
+    // swapped to .xml, since Save always produces SBML).
+    setFileName(withXmlExtension(file.name.replace(/\.g$/i, '')));
     const reader = new FileReader();
     reader.onload = () => {
       fetch(`${API_BASE}/api/upload_gfile`, {
@@ -18,8 +115,15 @@ export default function FileMenuBox({ onGraphLoaded, status, plots, collapsedMap
       })
         .then((r) => r.json())
         .then((res) => {
-          // Legacy .g files carry no model-level notes field.
-          setModelNotes('');
+          // A legacy .g file's own model-level notes (see
+          // _extract_g_model_notes) are the only one of these five it can
+          // actually carry -- creator/license/modified have no equivalent
+          // in the format at all, so those three always reset the same
+          // way loading an SBML file with none of its own would.
+          setModelNotes(res.notes || '');
+          setCreator('');
+          setLicense(NO_LICENSE);
+          setModified('');
           onGraphLoaded(res);
         });
     };
@@ -28,22 +132,39 @@ export default function FileMenuBox({ onGraphLoaded, status, plots, collapsedMap
   };
 
   // A plain <a download> always saves silently to the browser's default
-  // downloads folder as "model.xml" -- window.showSaveFilePicker (where
-  // available; matches jardesigner's own FileMenuBox) gives a real native
-  // save dialog instead, falling back to the download link otherwise.
-  const handleSaveSbml = async () => {
+  // downloads folder under whatever name it's given -- window.showSaveFilePicker
+  // (where available; matches jardesigner's own FileMenuBox) gives a real
+  // native save dialog instead, falling back to the download link otherwise.
+  // Firefox doesn't implement showSaveFilePicker at all (verified directly),
+  // so the inline "File name" field above is the ONLY way a Firefox user
+  // gets to name the saved file -- the fallback download must actually use
+  // it, not a hardcoded "model.xml".
+  const handleSave = async () => {
+    const name = withXmlExtension(fileName);
+    const nowIso = new Date().toISOString();
     const res = await fetch(`${API_BASE}/api/save_sbml`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notes: modelNotes, plots, collapsed: collapsedMap, runtime, plotDt }),
+      body: JSON.stringify({
+        notes: modelNotes,
+        plots,
+        collapsed: collapsedMap,
+        runtime,
+        plotDt,
+        creator,
+        license: license === NO_LICENSE ? '' : license,
+        modified: nowIso,
+      }),
     }).then((r) => r.json());
     if (res.error) return;
+    setFileName(name);
+    setModified(nowIso);
     const blob = new Blob([res.sbml], { type: 'application/xml' });
 
     if (window.showSaveFilePicker) {
       try {
         const handle = await window.showSaveFilePicker({
-          suggestedName: 'model.xml',
+          suggestedName: name,
           types: [{ description: 'SBML file', accept: { 'application/xml': ['.xml'] } }],
         });
         const writable = await handle.createWritable();
@@ -62,7 +183,7 @@ export default function FileMenuBox({ onGraphLoaded, status, plots, collapsedMap
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'model.xml';
+    a.download = name;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -70,6 +191,7 @@ export default function FileMenuBox({ onGraphLoaded, status, plots, collapsedMap
   const handleLoadSbmlFile = (event) => {
     const file = event.target.files[0];
     if (!file) return;
+    setFileName(file.name);
     const reader = new FileReader();
     reader.onload = () => {
       fetch(`${API_BASE}/api/load_sbml`, {
@@ -82,11 +204,20 @@ export default function FileMenuBox({ onGraphLoaded, status, plots, collapsedMap
           setModelNotes(res.notes || '');
           // Older files (or ones saved before this existed) simply have
           // no runSettings -- leave whatever's currently configured alone
-          // rather than resetting it to something arbitrary.
+          // rather than resetting it to something arbitrary (there's no
+          // "correct" runtime/plotDt to fall back to).
           if (res.runSettings) {
             setRuntime(res.runSettings.runtime);
             setPlotDt(res.runSettings.plotDt);
           }
+          // Creator/license/modified, unlike runSettings, DO have an
+          // obvious correct fallback (blank/default) -- so every load
+          // resets them from this file, one way or the other, rather than
+          // ever leaving a previous file's values showing against a new
+          // one that simply never had them.
+          setCreator(res.modelMeta?.creator || '');
+          setLicense(res.modelMeta?.license || NO_LICENSE);
+          setModified(res.modelMeta?.modified || '');
           onGraphLoaded(res);
         });
     };
@@ -98,7 +229,7 @@ export default function FileMenuBox({ onGraphLoaded, status, plots, collapsedMap
     window.open(window.location.href, '_blank').focus();
   };
 
-  const handleQuit = () => {
+  const handleClose = () => {
     window.close();
     // If this tab wasn't opened by JavaScript, close() is silently blocked
     // by the browser -- the timeout only fires if the window is still open.
@@ -109,61 +240,132 @@ export default function FileMenuBox({ onGraphLoaded, status, plots, collapsedMap
 
   return (
     <Box sx={{ p: 2, background: '#f5f5f5', borderRadius: 2, height: '100%', overflowY: 'auto' }}>
-      <Stack spacing={1.5}>
-        <Button variant="contained" onClick={handleNew}>
-          New window
+      <Stack spacing={0.5}>
+        <Button variant="contained" sx={MUTED_BUTTON_SX} onClick={handleNew}>
+          New Window
         </Button>
-      </Stack>
-
-      <Divider sx={{ my: 2 }} />
-
-      <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1 }}>
-        Legacy kkit (.g) file
-      </Typography>
-      <Stack spacing={1.5}>
-        <Button variant="contained" component="label">
-          Load .g file
-          <input type="file" accept=".g" hidden onChange={handleLoadGFile} />
-        </Button>
-      </Stack>
-
-      <Divider sx={{ my: 2 }} />
-
-      <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1 }}>
-        Native format (SBML)
-      </Typography>
-      <Stack spacing={1.5}>
-        <Button variant="contained" onClick={handleSaveSbml}>
-          Save as SBML
-        </Button>
-        <Button variant="outlined" component="label">
-          Load SBML file
+        <Button variant="contained" sx={MUTED_BUTTON_SX} component="label">
+          Load SBML Model
           <input type="file" accept=".xml,.sbml" hidden onChange={handleLoadSbmlFile} />
         </Button>
+        <Button variant="contained" sx={MUTED_BUTTON_SX} component="label">
+          Import Legacy .g Model
+          <input type="file" accept=".g" hidden onChange={handleLoadGFile} />
+        </Button>
+        <Typography variant="caption" color="text.secondary" sx={{ px: 0.5 }}>
+          {modelInfoText}
+        </Typography>
+        <Button variant="contained" sx={MUTED_BUTTON_SX} onClick={handleClose}>
+          Close
+        </Button>
+
+        <Divider sx={{ my: 0.25 }} />
+
+        <Box sx={{ display: 'flex', gap: 0.5 }}>
+          <Button
+            variant="contained"
+            sx={{ ...MUTED_BUTTON_SX, minWidth: 56, flexShrink: 0 }}
+            onClick={handleSave}
+          >
+            Save
+          </Button>
+          <TextField
+            fullWidth
+            size="small"
+            label="File name"
+            value={fileName}
+            onChange={(e) => setFileName(e.target.value)}
+            sx={COMPACT_FIELD_SX}
+          />
+        </Box>
         <TextField
-          label="Model notes"
+          fullWidth
           size="small"
+          label="Model Creator"
+          value={creator}
+          onChange={(e) => setCreator(e.target.value)}
+          sx={COMPACT_FIELD_SX}
+        />
+        <TextField
+          select
+          fullWidth
+          size="small"
+          label="License"
+          value={license}
+          onChange={(e) => setLicense(e.target.value)}
+          sx={COMPACT_FIELD_SX}
+        >
+          {LICENSE_OPTIONS.map((opt) => (
+            <MenuItem key={opt} value={opt}>
+              {opt}
+            </MenuItem>
+          ))}
+        </TextField>
+        <TextField
+          fullWidth
+          size="small"
+          label="Model Notes"
           multiline
-          minRows={3}
+          minRows={2}
+          maxRows={4}
           value={modelNotes}
           onChange={(e) => setModelNotes(e.target.value)}
-          helperText="Saved into the SBML file's model notes; loaded back from any SBML file that has them."
+          sx={COMPACT_FIELD_SX}
         />
-      </Stack>
+        <TextField
+          fullWidth
+          size="small"
+          label="Last Modified"
+          value={formatTimestamp(modified)}
+          slotProps={{ input: { readOnly: true } }}
+          variant="filled"
+          sx={COMPACT_FIELD_SX}
+        />
 
-      <Divider sx={{ my: 2 }} />
+        <Divider sx={{ my: 0.25 }} />
 
-      <Stack spacing={1.5}>
-        <Button variant="contained" color="error" onClick={handleQuit}>
-          Quit
+        <Button variant="contained" sx={MUTED_BUTTON_SX} onClick={() => window.print()}>
+          Print Layout
         </Button>
+        <Button variant="contained" sx={MUTED_BUTTON_SX} onClick={() => setAboutKkitOpen(true)}>
+          About KKIT
+        </Button>
+        <Button variant="contained" sx={MUTED_BUTTON_SX} onClick={() => setAboutMooseOpen(true)}>
+          About MOOSE
+        </Button>
+
+        <Divider sx={{ my: 0.25 }} />
       </Stack>
 
-      {status && (
-        <Alert severity="info" sx={{ mt: 2 }}>
-          {status}
-        </Alert>
-      )}
+      <Dialog open={aboutKkitOpen} onClose={() => setAboutKkitOpen(false)} fullWidth maxWidth="xs">
+        <DialogTitle>About KKIT</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            KKIT is a browser-based editor and simulator for chemical kinetic models, built around
+            MOOSE. It reads and writes SBML, and imports legacy GENESIS/kkit .g files.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button variant="contained" sx={MUTED_BUTTON_SX} onClick={() => setAboutKkitOpen(false)}>
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={aboutMooseOpen} onClose={() => setAboutMooseOpen(false)} fullWidth maxWidth="xs">
+        <DialogTitle>About MOOSE</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            MOOSE, the Multiscale Object-Oriented Simulation Environment, is the simulation engine
+            underneath KKIT -- see moose.ncbs.res.in for documentation and source.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button variant="contained" sx={MUTED_BUTTON_SX} onClick={() => setAboutMooseOpen(false)}>
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

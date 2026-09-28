@@ -9,6 +9,7 @@ import {
   MenuItem,
   Alert,
   Divider,
+  Tooltip,
 } from '@mui/material';
 
 // All of this panel's own state (the parsed file, the entity mapping, the
@@ -36,17 +37,15 @@ export default function FindSimMenuBox({
       <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1.5 }}>
         FindSim Experiment
       </Typography>
-      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-        Load a FindSim experiment spec (TimeSeries or DoseResponse -- see
-        FindSim-Schema.json's Stimuli/Readouts/Experiment.design) and run it
-        against the current model. The result appears in the Plots tab,
-        alongside the reference data being reproduced.
-      </Typography>
 
-      <Button component="label" variant="outlined" fullWidth disabled={running}>
-        {fileName || 'Load experiment .json'}
-        <input type="file" accept=".json" hidden onChange={(e) => e.target.files[0] && onFile(e.target.files[0])} />
-      </Button>
+      <Tooltip title="Load a FindSim experiment spec (TimeSeries or DoseResponse -- see FindSim-Schema.json's Stimuli/Readouts/Experiment.design) and run it against the current model. The result appears in the Plots tab, alongside the reference data being reproduced.">
+        <span>
+          <Button component="label" variant="outlined" fullWidth disabled={running}>
+            {fileName || 'Load experiment .json'}
+            <input type="file" accept=".json" hidden onChange={(e) => e.target.files[0] && onFile(e.target.files[0])} />
+          </Button>
+        </span>
+      </Tooltip>
 
       {parsed && (
         <>
