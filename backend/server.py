@@ -24,6 +24,7 @@ from moose_graph import (
     create_info,
     is_enz_complex,
     container_parent_id,
+    _CONTAINER_CLASSES,
     diameter_to_volume,
     name_path,
     normalize_color,
@@ -652,7 +653,7 @@ def _restore_stims(doc, model_path):
         for m in _KKIT_STIM_TAG_RE.finditer(sp.getAnnotationString() or ""):
             name, field, kind, num_inputs_str, inputs_str, x, y, expr = m.groups()
             target = moose.element(target_path)
-            container = target.parent.path
+            container = target.path
             stim_name = _unique_name(container, name or "stim")
             func = moose.Function(f"{container}/{stim_name}")
             func.doEvalAtReinit = True
@@ -1076,6 +1077,36 @@ def update_position():
         return jsonify({"error": "invalid or stale node id"}), 400
     if not moose.exists(node_id):
         return jsonify({"error": f"node not found: {node_id}"}), 404
+
+    # A shift-drag out of its current group/compartment (see MainDisplay's
+    # own onNodeDragStop) -- moose.move keeps every existing message/
+    # structural-child connection intact (verified directly), unlike a
+    # delete+recreate would. The node's own id (a live moose path) changes
+    # as a result, and so does every descendant's -- reported back as "id"
+    # so the frontend knows to do a full graph refetch rather than trying
+    # to patch just this one node's stale id in place (same reasoning as
+    # _update_node's own "previousId", just for however many ids moved this
+    # time instead of exactly one).
+    new_parent_id = body.get("newParentId")
+    if new_parent_id:
+        if not new_parent_id.startswith(_current_model_path) or not moose.exists(new_parent_id):
+            return jsonify({"error": f"new parent not found: {new_parent_id}"}), 404
+        if moose.element(new_parent_id).className not in _CONTAINER_CLASSES:
+            return jsonify({"error": "can only move something into a group or compartment"}), 400
+        if is_enz_complex(node_id):
+            return jsonify({"error": "an enzyme's complex pool can't be moved on its own"}), 400
+        if moose.element(node_id).className == "CubeMesh":
+            return jsonify({"error": "a compartment can't be moved into anything"}), 400
+        elem = moose.element(node_id)
+        new_parent = moose.element(new_parent_id)
+        if elem.parent.path == new_parent.path:
+            return jsonify({"error": "already in that group"}), 400
+        name = _unique_name(new_parent_id, elem.name)
+        if name != elem.name:
+            elem.name = name
+        moose.move(elem, new_parent)
+        node_id = elem.path
+
     # /info is normally created alongside a node at the moment it first gets
     # *any* explicit position (create_info, called from every "add X"
     # endpoint) -- but the one compartment a brand-new/freshly-loaded model
@@ -1090,7 +1121,7 @@ def update_position():
     info = moose.element(node_id + "/info")
     info.x = float(body.get("x"))
     info.y = float(body.get("y"))
-    result = {"ok": True, "x": info.x, "y": info.y}
+    result = {"ok": True, "x": info.x, "y": info.y, "id": node_id}
     # width/height are only ever sent when resizing a group/compartment box
     # (see nodes.jsx's NodeResizer) -- optional so plain pool/reac/enz drags
     # don't need to touch them.
@@ -1581,9 +1612,14 @@ _STIM_FIELD_BY_BUFFERED = {True: "setConcInit", False: "setConc"}
 def create_stim():
     """A Stimulus is a moose.Function whose valueOut drives a target pool's
     conc (or concInit, if the pool is buffered) -- see jardesigner's
-    _buildOneStim, the same mechanism this mirrors. Created directly under
-    whatever container the target pool itself lives in (a plain sibling,
-    not nested under the pool), same as create_pool/create_reac."""
+    _buildOneStim, the same mechanism this mirrors. Nested directly under
+    the target pool itself, matching how create_enz/create_concchan already
+    nest an enzyme/channel under their own parent pool -- so deleting the
+    pool deletes this along with it via moose's own ordinary recursive
+    subtree delete, no separate cascade-delete code needed (see
+    delete_node), and container_parent_id's own walk-past-non-container-
+    ancestors logic (already relied on for enz/concChan) places this at
+    exactly the same group/compartment in the diagram a sibling would have."""
     body = request.json or {}
     target_id = body.get("targetId")
     if _current_model_path is None or not target_id or not target_id.startswith(_current_model_path):
@@ -1603,7 +1639,7 @@ def create_stim():
         return jsonify({"error": error}), 400
 
     target = moose.element(target_id)
-    container = target.parent.path
+    container = target.path
     name = _unique_name(container, body.get("name") or "stim")
     func = moose.Function(f"{container}/{name}")
     func.doEvalAtReinit = True
@@ -1641,7 +1677,7 @@ def create_sumfunc():
     if err:
         return err
 
-    container = target.parent.path
+    container = target.path
     name = _unique_name(container, body.get("name") or "sum")
     func = moose.Function(f"{container}/{name}")
     # No inputs wired yet -- add_edge rewrites both the moment the first
@@ -1675,7 +1711,7 @@ def create_genfunc():
     if num_inputs < 0:
         return jsonify({"error": "numInputs can't be negative"}), 400
 
-    container = target.parent.path
+    container = target.path
     name = _unique_name(container, body.get("name") or "func")
     func = moose.Function(f"{container}/{name}")
     func.numVars = num_inputs

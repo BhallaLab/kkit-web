@@ -189,6 +189,7 @@ function Canvas({
   onNodeClick,
   onPaneClick,
   onNodesChange,
+  onNodeDragStart,
   onNodeDragStop,
   onConnect,
   isValidConnection,
@@ -267,6 +268,7 @@ function Canvas({
           onNodeClick={onNodeClick}
           onPaneClick={onPaneClick}
           onNodesChange={onNodesChange}
+          onNodeDragStart={onNodeDragStart}
           onNodeDragStop={onNodeDragStop}
           onConnect={onConnect}
           isValidConnection={isValidConnection}
@@ -353,6 +355,7 @@ export default function MainDisplay({
   onNodeClick,
   onPaneClick,
   onNodesChange,
+  onNodeDragStart,
   onNodeDragStop,
   onConnect,
   isValidConnection,
@@ -416,6 +419,7 @@ export default function MainDisplay({
               onNodeClick={onNodeClick}
               onPaneClick={onPaneClick}
               onNodesChange={onNodesChange}
+              onNodeDragStart={onNodeDragStart}
               onNodeDragStop={onNodeDragStop}
               onConnect={onConnect}
               isValidConnection={isValidConnection}

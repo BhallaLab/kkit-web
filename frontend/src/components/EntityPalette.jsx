@@ -119,7 +119,9 @@ function ConcChanIcon() {
   // The user's own later feedback: this icon read as too big relative to
   // its neighbors in the palette -- 60% of its own former length (96 ->
   // 58), height/cap size left alone (only the "too long" axis shrinks).
-  const width = 58;
+  // Then 20% wider again (58 -> 70) once it turned out that shrunk it too
+  // far relative to the other icons after all.
+  const width = 70;
   const height = 52;
   const capRx = 10;
   const railY = 6;

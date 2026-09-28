@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Snackbar, Alert } from '@mui/material';
 import { applyNodeChanges, applyEdgeChanges } from '@xyflow/react';
 import AppLayout from './AppLayout';
 import { RAINBOW_16, resolveGroupColor } from './colorUtils';
@@ -1121,6 +1122,21 @@ function absoluteFlowPosition(nodeId, flowNodes) {
 export default function App() {
   const [flowGraph, setFlowGraph] = useState({ nodes: [], edges: [] });
   const [status, setStatus] = useState('starting new model...');
+  // A transient, always-visible popup (regardless of which left-menu tab is
+  // showing) for actionable warnings like an invalid drop -- distinct from
+  // `status`, which nothing renders anymore (see FileMenuBox's own removal
+  // of its status Alert) and was never meant for this anyway: `status` also
+  // carries routine, silent-is-fine info ("loaded N nodes, M edges") that a
+  // popup would just be noise for. `warningKey` forces the Snackbar to
+  // re-open (and restart its auto-hide timer) even if the same message
+  // fires twice in a row, since React skips a re-render when neither piece
+  // of state actually changes value.
+  const [warning, setWarning] = useState('');
+  const [warningKey, setWarningKey] = useState(0);
+  const showWarning = useCallback((message) => {
+    setWarning(message);
+    setWarningKey((k) => k + 1);
+  }, []);
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [activeMenu, setActiveMenu] = useState('File');
   const [plotData, setPlotData] = useState(null);
@@ -1491,6 +1507,29 @@ export default function App() {
   // to relocate that whole block earlier in the file.
   const refreshGraphRef = useRef(null);
 
+  // Latched once at drag-start (not re-read from the drop event) since the
+  // shift key can easily be released a beat before the mouse button is,
+  // and captures the node's own parentId *before* the drag -- both read
+  // back in onNodeDragStop to decide whether this was a plain in-group
+  // reposition or an attempt to move to a different one.
+  const dragStartInfoRef = useRef(null);
+
+  // A node normally can't be dragged out of its own group/compartment box
+  // at all (extent:'parent', see buildFlowNodes) -- the user's own later
+  // request: holding Shift while starting a drag should lift that, so it
+  // can be dropped into a *different* container instead. Relaxing extent
+  // only on the one node actually being dragged (rather than globally)
+  // keeps every other node's own containment exactly as before.
+  const onNodeDragStart = useCallback((event, node) => {
+    dragStartInfoRef.current = { shiftHeld: event.shiftKey, parentId: node.parentId };
+    if (event.shiftKey && node.parentId) {
+      setFlowGraph((g) => ({
+        ...g,
+        nodes: g.nodes.map((n) => (n.id === node.id ? { ...n, extent: undefined } : n)),
+      }));
+    }
+  }, []);
+
   const onNodeDragStop = useCallback((event, node) => {
     if (isOverTrash(event)) {
       if (node.data.isEnzComplex) {
@@ -1526,6 +1565,52 @@ export default function App() {
     const abs = absoluteFlowPosition(node.id, flowGraph.nodes);
     const x = abs.x / scale;
     const y = -abs.y / scale;
+
+    const dragInfo = dragStartInfoRef.current;
+    dragStartInfoRef.current = null;
+    if (dragInfo?.shiftHeld) {
+      // Excludes the dragged node itself from consideration -- only
+      // relevant when it's a group/compartment being dragged (its own box
+      // could otherwise "contain" the very point it just moved to).
+      const newParentId = findContainerAt(x, y, flowGraph.nodes.filter((n) => n.id !== node.id));
+      if (newParentId && newParentId !== dragInfo.parentId) {
+        fetch(`${API_BASE}/api/update_position`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: node.id, x, y, newParentId }),
+        })
+          .then((r) => r.json())
+          .then((res) => {
+            if (res.error) {
+              setStatus(`error: ${res.error}`);
+              // extent was relaxed for this drag -- a node stuck without
+              // its usual containment until the next unrelated refresh
+              // would be a lingering bug, not just a cosmetic one.
+              refreshGraphRef.current?.();
+              return;
+            }
+            setSelectedNodeId((sel) => (sel === node.id ? res.id : sel));
+            refreshGraphRef.current?.();
+          })
+          .catch((err) => {
+            setStatus(`error: ${err}`);
+            refreshGraphRef.current?.();
+          });
+        return;
+      }
+      // Shift was held but it landed back in the same container (or
+      // nowhere valid) -- nothing to actually move. Re-fetching (rather
+      // than just restoring this one node's own extent) is the simplest
+      // way to also snap its position back to wherever it actually was
+      // last saved, instead of persisting a drop point that may now sit
+      // outside its own unchanged parent's box.
+      if (!newParentId) {
+        showWarning('Drop it inside a group or compartment.');
+      }
+      refreshGraphRef.current?.();
+      return;
+    }
+
     fetch(`${API_BASE}/api/update_position`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1549,7 +1634,7 @@ export default function App() {
         }));
       })
       .catch((err) => setStatus(`error: ${err}`));
-  }, [scale, flowGraph.nodes]);
+  }, [scale, flowGraph.nodes, showWarning]);
 
   // A group/compartment's resize handle (nodes.jsx's NodeResizer, via
   // NodeActionsContext) reports its new box in the same relative-to-parent
@@ -2964,7 +3049,7 @@ export default function App() {
       } else if (type === 'group') {
         const parentId = findContainerAt(kx, ky, flowGraph.nodes);
         if (!parentId) {
-          setStatus('drop the group icon inside an existing compartment (or group)');
+          showWarning('Drop the group icon inside an existing compartment (or group).');
           return;
         }
         handleAddGroup(kx, ky, parentId);
@@ -2974,55 +3059,55 @@ export default function App() {
       } else if (type === 'enz') {
         const hitNode = flowGraph.nodes.find((n) => n.id === hitNodeId);
         if (!hitNode || hitNode.type !== 'pool') {
-          setStatus('drop the enzyme icon onto an existing pool');
+          showWarning('Drop the enzyme icon onto an existing pool.');
           return;
         }
         if (hitNode.data.isEnzComplex) {
-          setStatus("an enzyme's complex pool can't be connected to anything");
+          showWarning("An enzyme's complex pool can't be connected to anything.");
           return;
         }
         createEnzOnPool(hitNode);
       } else if (type === 'concchan') {
         const hitNode = flowGraph.nodes.find((n) => n.id === hitNodeId);
         if (!hitNode || hitNode.type !== 'pool') {
-          setStatus('drop the ConcChan icon onto an existing pool');
+          showWarning('Drop the ConcChan icon onto an existing pool.');
           return;
         }
         if (hitNode.data.isEnzComplex) {
-          setStatus("an enzyme's complex pool can't be connected to anything");
+          showWarning("An enzyme's complex pool can't be connected to anything.");
           return;
         }
         createConcChanOnPool(hitNode);
       } else if (type === 'stim') {
         const hitNode = flowGraph.nodes.find((n) => n.id === hitNodeId);
         if (!hitNode || hitNode.type !== 'pool') {
-          setStatus('drop the Stimulus icon onto an existing pool');
+          showWarning('Drop the Stimulus icon onto an existing pool.');
           return;
         }
         if (hitNode.data.isEnzComplex) {
-          setStatus("an enzyme's complex pool can't be connected to anything");
+          showWarning("An enzyme's complex pool can't be connected to anything.");
           return;
         }
         createStimOnPool(hitNode);
       } else if (type === 'sumfunc') {
         const hitNode = flowGraph.nodes.find((n) => n.id === hitNodeId);
         if (!hitNode || hitNode.type !== 'pool') {
-          setStatus('drop the summation function icon onto an existing pool');
+          showWarning('Drop the summation function icon onto an existing pool.');
           return;
         }
         if (hitNode.data.isEnzComplex) {
-          setStatus("an enzyme's complex pool can't be connected to anything");
+          showWarning("An enzyme's complex pool can't be connected to anything.");
           return;
         }
         createSumFuncOnPool(hitNode);
       } else if (type === 'genfunc') {
         const hitNode = flowGraph.nodes.find((n) => n.id === hitNodeId);
         if (!hitNode || hitNode.type !== 'pool') {
-          setStatus('drop the general function icon onto an existing pool');
+          showWarning('Drop the general function icon onto an existing pool.');
           return;
         }
         if (hitNode.data.isEnzComplex) {
-          setStatus("an enzyme's complex pool can't be connected to anything");
+          showWarning("An enzyme's complex pool can't be connected to anything.");
           return;
         }
         createGenFuncOnPool(hitNode);
@@ -3035,7 +3120,7 @@ export default function App() {
         // mean now that the complex pool isn't shown as its own icon.
         const targetPoolId = hitNode?.type === 'enz' ? hitNode.data.complexPoolId : hitNode?.id;
         if (!hitNode || (hitNode.type !== 'pool' && hitNode.type !== 'enz') || !targetPoolId) {
-          setStatus('drop the plot icon onto a pool (or an enzyme, to plot its complex) to plot it');
+          showWarning('Drop the plot icon onto a pool (or an enzyme, to plot its complex) to plot it.');
           return;
         }
         // Purely a frontend marker (like flipped/color) -- toggled so
@@ -3072,6 +3157,7 @@ export default function App() {
       createStimOnPool,
       createSumFuncOnPool,
       createGenFuncOnPool,
+      showWarning,
     ]
   );
 
@@ -3357,76 +3443,90 @@ export default function App() {
   }, [findSimParsed, findSimEntityMap, flowGraph.nodes]);
 
   return (
-    <AppLayout
-      activeMenu={activeMenu}
-      setActiveMenu={setActiveMenu}
-      status={status}
-      onGraphLoaded={handleGraphResult}
-      plots={plots}
-      collapsedMap={collapsedMap}
-      selectedNode={selectedNode}
-      selectedParentName={selectedParentName}
-      onSaveNode={onSaveNode}
-      onToggleFlip={onToggleFlip}
-      onToggleCollapse={onToggleCollapse}
-      onSetAllCollapsed={onSetAllCollapsed}
-      visualMode={visualMode}
-      onCycleVisualMode={onCycleVisualMode}
-      onAutoLayoutGroup={onAutoLayoutGroup}
-      onAutoLayoutGroupByFlow={onAutoLayoutGroupByFlow}
-      onAutoLayoutRecursive={onAutoLayoutRecursive}
-      onAutoLayoutRecursiveFlow={onAutoLayoutRecursiveFlow}
-      onClearLayoutLocks={onClearLayoutLocks}
-      layoutRunning={layoutRunning}
-      selectedGroupScore={selectedGroupScore}
-      onUndoLayout={onUndoLayout}
-      canUndoLayout={!!autoLayoutUndoSnapshot}
-      loadGeneration={loadGeneration}
-      onCanvasDrop={handleCanvasDrop}
-      onUnplot={handleUnplot}
-      onAddPool={handleAddPool}
-      onAddReac={handleAddReac}
-      onAddEnz={handleAddEnz}
-      onDeleteSelected={handleDeleteSelected}
-      onStartRun={handleStartRun}
-      onResetRun={handleResetRun}
-      isRunning={isRunning}
-      runError={runError}
-      lastRuntime={lastRuntime}
-      runtime={runtime}
-      setRuntime={setRuntime}
-      plotDt={plotDt}
-      setPlotDt={setPlotDt}
-      plotData={plotData}
-      doseCurve={doseCurve}
-      doseParams={doseParams}
-      setDoseParams={setDoseParams}
-      doseRunning={doseRunning}
-      doseError={doseError}
-      onDoseStart={handleDoseStart}
-      onDoseHalt={handleDoseHalt}
-      findSimParsed={findSimParsed}
-      findSimEntityMap={findSimEntityMap}
-      findSimFileName={findSimFileName}
-      findSimRunning={findSimRunning}
-      findSimError={findSimError}
-      findSimResult={findSimResult}
-      onFindSimFile={handleFindSimFile}
-      onFindSimEntityChange={handleFindSimEntityChange}
-      onFindSimRun={handleFindSimRun}
-      displayTab={displayTab}
-      setDisplayTab={setDisplayTab}
-      flowGraph={flowGraph}
-      displayGraph={displayGraph}
-      edgeActions={edgeActions}
-      nodeActions={nodeActions}
-      onNodeClick={onNodeClick}
-      onPaneClick={onPaneClick}
-      onNodesChange={onNodesChange}
-      onNodeDragStop={onNodeDragStop}
-      onConnect={onConnect}
-      isValidConnection={isValidConnection}
-      onEdgesChange={onEdgesChange}
-    />
+    <>
+      <Snackbar
+        key={warningKey}
+        open={!!warning}
+        autoHideDuration={4000}
+        onClose={() => setWarning('')}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity="warning" variant="filled" onClose={() => setWarning('')}>
+          {warning}
+        </Alert>
+      </Snackbar>
+      <AppLayout
+        activeMenu={activeMenu}
+        setActiveMenu={setActiveMenu}
+        status={status}
+        onGraphLoaded={handleGraphResult}
+        plots={plots}
+        collapsedMap={collapsedMap}
+        selectedNode={selectedNode}
+        selectedParentName={selectedParentName}
+        onSaveNode={onSaveNode}
+        onToggleFlip={onToggleFlip}
+        onToggleCollapse={onToggleCollapse}
+        onSetAllCollapsed={onSetAllCollapsed}
+        visualMode={visualMode}
+        onCycleVisualMode={onCycleVisualMode}
+        onAutoLayoutGroup={onAutoLayoutGroup}
+        onAutoLayoutGroupByFlow={onAutoLayoutGroupByFlow}
+        onAutoLayoutRecursive={onAutoLayoutRecursive}
+        onAutoLayoutRecursiveFlow={onAutoLayoutRecursiveFlow}
+        onClearLayoutLocks={onClearLayoutLocks}
+        layoutRunning={layoutRunning}
+        selectedGroupScore={selectedGroupScore}
+        onUndoLayout={onUndoLayout}
+        canUndoLayout={!!autoLayoutUndoSnapshot}
+        loadGeneration={loadGeneration}
+        onCanvasDrop={handleCanvasDrop}
+        onUnplot={handleUnplot}
+        onAddPool={handleAddPool}
+        onAddReac={handleAddReac}
+        onAddEnz={handleAddEnz}
+        onDeleteSelected={handleDeleteSelected}
+        onStartRun={handleStartRun}
+        onResetRun={handleResetRun}
+        isRunning={isRunning}
+        runError={runError}
+        lastRuntime={lastRuntime}
+        runtime={runtime}
+        setRuntime={setRuntime}
+        plotDt={plotDt}
+        setPlotDt={setPlotDt}
+        plotData={plotData}
+        doseCurve={doseCurve}
+        doseParams={doseParams}
+        setDoseParams={setDoseParams}
+        doseRunning={doseRunning}
+        doseError={doseError}
+        onDoseStart={handleDoseStart}
+        onDoseHalt={handleDoseHalt}
+        findSimParsed={findSimParsed}
+        findSimEntityMap={findSimEntityMap}
+        findSimFileName={findSimFileName}
+        findSimRunning={findSimRunning}
+        findSimError={findSimError}
+        findSimResult={findSimResult}
+        onFindSimFile={handleFindSimFile}
+        onFindSimEntityChange={handleFindSimEntityChange}
+        onFindSimRun={handleFindSimRun}
+        displayTab={displayTab}
+        setDisplayTab={setDisplayTab}
+        flowGraph={flowGraph}
+        displayGraph={displayGraph}
+        edgeActions={edgeActions}
+        nodeActions={nodeActions}
+        onNodeClick={onNodeClick}
+        onPaneClick={onPaneClick}
+        onNodesChange={onNodesChange}
+        onNodeDragStart={onNodeDragStart}
+        onNodeDragStop={onNodeDragStop}
+        onConnect={onConnect}
+        isValidConnection={isValidConnection}
+        onEdgesChange={onEdgesChange}
+      />
+    </>
   );
 }
