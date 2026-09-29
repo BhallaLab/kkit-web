@@ -1,28 +1,22 @@
 import { AppBar, Toolbar, Button, Box } from '@mui/material';
 import FolderIcon from '@mui/icons-material/Folder';
 import TuneIcon from '@mui/icons-material/Tune';
-import AddCircleIcon from '@mui/icons-material/AddCircle';
 import PlayCircleIcon from '@mui/icons-material/PlayCircle';
 import BuildIcon from '@mui/icons-material/Build';
 import StairsIcon from '@mui/icons-material/Stairs';
-import ScienceIcon from '@mui/icons-material/Science';
 import FileMenuBox from './components/MenuBoxes/FileMenuBox';
 import PropertiesMenuBox from './components/MenuBoxes/PropertiesMenuBox';
-import AddMenuBox from './components/MenuBoxes/AddMenuBox';
 import RunMenuBox from './components/MenuBoxes/RunMenuBox';
 import ToolsMenuBox from './components/MenuBoxes/ToolsMenuBox';
 import DoseResponseMenuBox from './components/MenuBoxes/DoseResponseMenuBox';
-import FindSimMenuBox from './components/MenuBoxes/FindSimMenuBox';
 import MainDisplay from './components/MainDisplay';
 
 const MENU_ITEMS = [
   { key: 'File', label: 'File', Icon: FolderIcon },
   { key: 'Run', label: 'Run', Icon: PlayCircleIcon },
   { key: 'Properties', label: 'Properties', Icon: TuneIcon },
-  { key: 'Add', label: 'Add', Icon: AddCircleIcon },
   { key: 'Tools', label: 'Tools', Icon: BuildIcon },
   { key: 'DoseResponse', label: 'Dose Response', Icon: StairsIcon },
-  { key: 'FindSim', label: 'FindSim', Icon: ScienceIcon },
 ];
 
 export default function AppLayout({
@@ -41,13 +35,13 @@ export default function AppLayout({
   onAutoLayoutRecursiveFlow,
   onClearLayoutLocks,
   layoutRunning,
+  layoutProgress,
   selectedGroupScore,
   onUndoLayout,
   canUndoLayout,
   onAddPool,
   onAddReac,
   onAddEnz,
-  onDeleteSelected,
   onStartRun,
   onResetRun,
   isRunning,
@@ -91,7 +85,6 @@ export default function AppLayout({
         setPlotDt={setPlotDt}
       />
     ),
-    Add: <AddMenuBox onDeleteSelected={onDeleteSelected} selectedNode={selectedNode} />,
     Properties: (
       <PropertiesMenuBox
         node={selectedNode}
@@ -105,6 +98,7 @@ export default function AppLayout({
         onAutoLayoutRecursiveFlow={onAutoLayoutRecursiveFlow}
         onClearLayoutLocks={onClearLayoutLocks}
         layoutRunning={layoutRunning}
+        layoutProgress={layoutProgress}
         selectedGroupScore={selectedGroupScore}
         onUndoLayout={onUndoLayout}
         canUndoLayout={canUndoLayout}
@@ -121,6 +115,15 @@ export default function AppLayout({
         setRuntime={setRuntime}
         plotDt={plotDt}
         setPlotDt={setPlotDt}
+        findSimParsed={findSimParsed}
+        findSimEntityMap={findSimEntityMap}
+        findSimFileName={findSimFileName}
+        findSimRunning={findSimRunning}
+        findSimError={findSimError}
+        findSimResult={findSimResult}
+        onFindSimFile={onFindSimFile}
+        onFindSimEntityChange={onFindSimEntityChange}
+        onFindSimRun={onFindSimRun}
       />
     ),
     Tools: <ToolsMenuBox flowGraph={canvasProps.flowGraph} />,
@@ -133,19 +136,6 @@ export default function AppLayout({
         error={doseError}
         onStart={onDoseStart}
         onHalt={onDoseHalt}
-      />
-    ),
-    FindSim: (
-      <FindSimMenuBox
-        parsed={findSimParsed}
-        entityMap={findSimEntityMap}
-        fileName={findSimFileName}
-        running={findSimRunning}
-        error={findSimError}
-        result={findSimResult}
-        onFile={onFindSimFile}
-        onEntityChange={onFindSimEntityChange}
-        onRun={onFindSimRun}
       />
     ),
   };

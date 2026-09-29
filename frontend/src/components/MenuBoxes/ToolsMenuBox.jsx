@@ -88,9 +88,6 @@ function CompareReport({ result, labelA, labelB }) {
 }
 
 export default function ToolsMenuBox({ flowGraph }) {
-  const [modelSize, setModelSize] = useState(null);
-  const [sizeError, setSizeError] = useState(null);
-
   const [dtResult, setDtResult] = useState(null);
   const [dtError, setDtError] = useState(null);
 
@@ -105,20 +102,6 @@ export default function ToolsMenuBox({ flowGraph }) {
 
   const [reportFormat, setReportFormat] = useState('markdown');
   const [reportError, setReportError] = useState(null);
-
-  const handleModelSize = () => {
-    fetch(`${API_BASE}/api/tools/model_size`)
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.error) {
-          setSizeError(res.error);
-          return;
-        }
-        setSizeError(null);
-        setModelSize(res);
-      })
-      .catch((err) => setSizeError(String(err)));
-  };
 
   const handleFindDt = (err) => {
     fetch(`${API_BASE}/api/tools/find_dt`, {
@@ -239,29 +222,6 @@ export default function ToolsMenuBox({ flowGraph }) {
       <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1.5 }}>
         Tools
       </Typography>
-
-      <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>
-        Model size
-      </Typography>
-      <Button variant="outlined" size="small" fullWidth sx={{ mt: 0.5 }} onClick={handleModelSize}>
-        Calculate model size
-      </Button>
-      {sizeError && (
-        <Alert severity="error" sx={{ mt: 1 }}>
-          {sizeError}
-        </Alert>
-      )}
-      {modelSize && !sizeError && (
-        <Box sx={{ mt: 1, fontSize: 13 }}>
-          {Object.entries(modelSize).map(([kind, count]) => (
-            <div key={kind}>
-              {kind}: {count}
-            </div>
-          ))}
-        </Box>
-      )}
-
-      <Divider sx={{ my: 2 }} />
 
       <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>
         Timestep (dt) estimate

@@ -615,7 +615,24 @@ function childFootprint(c, containerIndex, boxById, cellUnit = AUTO_LAYOUT_CELL)
 // necessary. The container's own *position* is what actually needed to
 // stay put (see assignAbsolutePositions/onAutoLayoutGroup, both
 // unaffected by this), not its size.
-function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, edges, perLevelBudgetMs, cellUnit = AUTO_LAYOUT_CELL) {
+// A bare setTimeout(0) hands control back to the browser's own event loop
+// for one tick -- long enough for a pending React state update (a fresh
+// %complete) to actually paint -- before the recursive layout computation
+// picks back up with the next container.
+function yieldToBrowser() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+// `onProgress`, if given, is awaited once per container this recurses
+// into or through -- exactly once per invocation of this function, root
+// included, which is exactly how the caller's own pre-computed
+// containerCount is defined (see onAutoLayoutRecursive). Awaiting it
+// (rather than firing it synchronously) is what actually lets the browser
+// repaint an updated percentage between containers -- without that yield,
+// this whole recursive computation still runs as one uninterrupted
+// synchronous block regardless of how "async" the function signature
+// looks, and the tab would stay just as frozen as before.
+async function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, edges, perLevelBudgetMs, cellUnit = AUTO_LAYOUT_CELL, onProgress) {
   const directChildren = rawNodes.filter(
     (n) => n.parentId === rootId && !(n.type === 'pool' && n.isEnzComplex)
   );
@@ -627,14 +644,15 @@ function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById,
   // never recurse into (or reposition) one at all -- its own current
   // footprint still counts toward this level's bounding-box accounting
   // below, just never gets a fresh internal layout or a new position.
-  directChildren.forEach((child) => {
+  for (const child of directChildren) {
     if (CONTAINER_TYPES.includes(child.type) && !child.locked) {
-      computeLocalLayouts(child.id, rawNodes, rawById, containerIndex, boxById, localLayouts, edges, perLevelBudgetMs, cellUnit);
+      await computeLocalLayouts(child.id, rawNodes, rawById, containerIndex, boxById, localLayouts, edges, perLevelBudgetMs, cellUnit, onProgress);
     }
-  });
+  }
   if (directChildren.length === 0) {
     const currentBox = effectiveContainerBox(rawById[rootId], containerIndex, boxById);
     localLayouts[rootId] = { children: [], width: currentBox.width, height: currentBox.height };
+    if (onProgress) await onProgress();
     return;
   }
 
@@ -770,6 +788,7 @@ function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById,
         width: Math.max(...allBounds.map((b) => b.right)) - Math.min(...allBounds.map((b) => b.localX)) + CONTAINER_PADDING * 2,
         height: Math.max(...allBounds.map((b) => b.localY)) - Math.min(...allBounds.map((b) => b.bottom)) + CONTAINER_PADDING * 2,
       };
+  if (onProgress) await onProgress();
 }
 
 // Recurse Flow's own sibling to computeLocalLayouts above -- same bottom-
@@ -807,18 +826,21 @@ function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById,
 // the caller applies once at the end, instead of re-deriving them
 // afterward with the cruder plain heuristic the Square-recursive action
 // still uses (see its own onAutoLayoutRecursive).
-function computeLocalFlowLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, flipsOut, edges, cellUnit = AUTO_LAYOUT_CELL, isRoot = true) {
+// See computeLocalLayouts' own comment on `onProgress` -- same contract,
+// awaited once per container.
+async function computeLocalFlowLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, flipsOut, edges, cellUnit = AUTO_LAYOUT_CELL, isRoot = true, onProgress) {
   const directChildren = rawNodes.filter(
     (n) => n.parentId === rootId && !(n.type === 'pool' && n.isEnzComplex)
   );
-  directChildren.forEach((child) => {
+  for (const child of directChildren) {
     if (CONTAINER_TYPES.includes(child.type) && !child.locked) {
-      computeLocalFlowLayouts(child.id, rawNodes, rawById, containerIndex, boxById, localLayouts, flipsOut, edges, cellUnit, false);
+      await computeLocalFlowLayouts(child.id, rawNodes, rawById, containerIndex, boxById, localLayouts, flipsOut, edges, cellUnit, false, onProgress);
     }
-  });
+  }
   if (directChildren.length === 0) {
     const currentBox = effectiveContainerBox(rawById[rootId], containerIndex, boxById);
     localLayouts[rootId] = { children: [], width: currentBox.width, height: currentBox.height };
+    if (onProgress) await onProgress();
     return;
   }
 
@@ -877,6 +899,7 @@ function computeLocalFlowLayouts(rootId, rawNodes, rawById, containerIndex, boxB
     width: Math.max(...allBounds.map((b) => b.right)) - Math.min(...allBounds.map((b) => b.localX)) + CONTAINER_PADDING * 2,
     height: Math.max(...allBounds.map((b) => b.localY)) - Math.min(...allBounds.map((b) => b.bottom)) + CONTAINER_PADDING * 2,
   };
+  if (onProgress) await onProgress();
 }
 
 // Turns each container's own locally-relative child placements into real
@@ -1195,6 +1218,11 @@ export default function App() {
   // would race against work already in flight. PropertiesMenuBox disables
   // the whole Layout section while this is true.
   const [layoutRunning, setLayoutRunning] = useState(false);
+  // Only ever set during a Recurse Square/Flow run (see onAutoLayoutRecursive/
+  // onAutoLayoutRecursiveFlow's own onProgress) -- null the rest of the
+  // time, including during a plain single-level Square/Flow, which finishes
+  // fast enough that a percentage would just flicker.
+  const [layoutProgress, setLayoutProgress] = useState(null);
 
   // Dose Response's whole panel state lives here (not as local state in
   // DoseResponseMenuBox) so it survives switching to another menu tab and
@@ -1434,9 +1462,8 @@ export default function App() {
   // The user's own later bug report: pressing Delete/Backspace on a
   // selected pool/reaction/etc removed it from the canvas but left it
   // fully intact in the backend model -- unlike dragging it onto the
-  // trash icon or the "Delete Selected" button (see onNodeDragStop/
-  // handleDeleteSelected below), both of which call /api/delete_node and
-  // refresh. This used to be a plain passthrough (every change, remove
+  // trash icon (see onNodeDragStop), which calls /api/delete_node and
+  // refreshes. This used to be a plain passthrough (every change, remove
   // included, went straight to applyNodeChanges), so React Flow's own
   // built-in `deleteKeyCode` handling (see MainDisplay.jsx) removed a
   // node from local state ONLY, with no backend call and no confirm-
@@ -2069,7 +2096,7 @@ export default function App() {
   // plain position update for the same id) followed by one refreshGraph,
   // rather than one round trip per nesting level.
   const onAutoLayoutRecursive = useCallback(
-    (rootId) => {
+    async (rootId) => {
       const rawNodes = flowGraph.nodes.map((n) => n.data);
       const rawById = {};
       rawNodes.forEach((n) => {
@@ -2099,9 +2126,17 @@ export default function App() {
       const containerIndex = buildContainerIndex(rawNodes, rawById);
       const boxById = {};
       const localLayouts = {};
-      computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, flowGraph.edges, perLevelBudgetMs, effectiveAutoLayoutCell(scale));
+      let doneCount = 0;
+      setLayoutProgress({ done: 0, total: containerCount });
+      const onProgress = async () => {
+        doneCount += 1;
+        setLayoutProgress({ done: doneCount, total: containerCount });
+        await yieldToBrowser();
+      };
+      await computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, flowGraph.edges, perLevelBudgetMs, effectiveAutoLayoutCell(scale), onProgress);
       if (localLayouts[rootId].children.length === 0) {
         setLayoutRunning(false);
+        setLayoutProgress(null);
         return;
       }
 
@@ -2185,17 +2220,30 @@ export default function App() {
             }));
           }
           setAutoLayoutUndoSnapshot(undoSnapshot);
-          refreshGraphRef.current?.();
           // Unlike the single-level layout actions above (which leave the
           // viewport alone -- see their own "deliberately not bumping"
           // comment), a RECURSIVE layout can move everything below the
           // selected group, often well outside whatever's currently in
           // view -- the user's own later request: auto Fit View afterward
           // so the result is actually visible without a manual re-fit.
-          setLoadGeneration((g) => g + 1);
+          // Bumping loadGeneration only *after* the refreshed graph has
+          // actually landed in flowGraph (chained here, not fired
+          // alongside refreshGraphRef.current?.() the way every other
+          // caller does) matters more than it would elsewhere: refetching
+          // a big model (the exact case a slow recursive layout implies)
+          // takes long enough that FitViewOnLoad's own nested-rAF wait
+          // could otherwise fire *before* the new positions ever arrive,
+          // fitting to whatever the view happened to still be showing
+          // instead of the real result -- verified directly against a
+          // 36-group synthetic model, where this raced and lost often
+          // enough to reliably reproduce a fit that missed most of it.
+          return refreshGraphRef.current?.().then(() => setLoadGeneration((g) => g + 1));
         })
         .catch((err) => setStatus(`error: ${err}`))
-        .finally(() => setLayoutRunning(false));
+        .finally(() => {
+          setLayoutRunning(false);
+          setLayoutProgress(null);
+        });
     },
     [flowGraph.nodes, flowGraph.edges, scale]
   );
@@ -2207,7 +2255,7 @@ export default function App() {
   // onAutoLayoutRecursive above) -- see computeLocalFlowLayouts' own
   // comment on why.
   const onAutoLayoutRecursiveFlow = useCallback(
-    (rootId) => {
+    async (rootId) => {
       const rawNodes = flowGraph.nodes.map((n) => n.data);
       const rawById = {};
       rawNodes.forEach((n) => {
@@ -2237,9 +2285,23 @@ export default function App() {
       const boxById = {};
       const localLayouts = {};
       const flipsOut = {};
-      computeLocalFlowLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, flipsOut, flowGraph.edges, effectiveAutoLayoutCell(scale));
+      // Same progress convention as onAutoLayoutRecursive's own -- 1 (the
+      // root) plus every unlocked descendant container, exactly matching
+      // how many times computeLocalFlowLayouts' own recursion actually
+      // invokes itself.
+      const containerCount =
+        1 + rawNodes.filter((n) => CONTAINER_TYPES.includes(n.type) && !n.locked && isDescendantOf(n.id, rootId, rawById)).length;
+      let doneCount = 0;
+      setLayoutProgress({ done: 0, total: containerCount });
+      const onProgress = async () => {
+        doneCount += 1;
+        setLayoutProgress({ done: doneCount, total: containerCount });
+        await yieldToBrowser();
+      };
+      await computeLocalFlowLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, flipsOut, flowGraph.edges, effectiveAutoLayoutCell(scale), true, onProgress);
       if (localLayouts[rootId].children.length === 0) {
         setLayoutRunning(false);
+        setLayoutProgress(null);
         return;
       }
 
@@ -2300,12 +2362,14 @@ export default function App() {
             }));
           }
           setAutoLayoutUndoSnapshot(undoSnapshot);
-          refreshGraphRef.current?.();
           // See onAutoLayoutRecursive's own matching comment just above.
-          setLoadGeneration((g) => g + 1);
+          return refreshGraphRef.current?.().then(() => setLoadGeneration((g) => g + 1));
         })
         .catch((err) => setStatus(`error: ${err}`))
-        .finally(() => setLayoutRunning(false));
+        .finally(() => {
+          setLayoutRunning(false);
+          setLayoutProgress(null);
+        });
     },
     [flowGraph.nodes, flowGraph.edges, scale]
   );
@@ -2604,7 +2668,12 @@ export default function App() {
   // position out from under the user mid-edit, reading as the view jumping
   // around for no reason; keeps the current scale, same as drag/single-add.
   const refreshGraph = useCallback(() => {
-    fetch(`${API_BASE}/api/graph`)
+    // Returns the fetch's own promise -- most callers just fire-and-forget
+    // this (fine, `flowGraph` updates whenever it updates), but a couple
+    // (see onAutoLayoutRecursive/onAutoLayoutRecursiveFlow) need to know
+    // once the refreshed graph has actually landed in state before doing
+    // anything that depends on it.
+    return fetch(`${API_BASE}/api/graph`)
       .then((r) => r.json())
       .then((graph) => {
         if (graph.error) {
@@ -3183,26 +3252,6 @@ export default function App() {
     }));
   }, []);
 
-  const handleDeleteSelected = useCallback(() => {
-    if (!selectedNodeId || !selectedNode) return;
-    if (!confirmContainerDelete(selectedNode, flowGraph.nodes)) return;
-    fetch(`${API_BASE}/api/delete_node`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: selectedNodeId }),
-    })
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.error) {
-          setStatus(`error: ${res.error}`);
-          return;
-        }
-        setSelectedNodeId(null);
-        refreshGraph();
-      })
-      .catch((err) => setStatus(`error: ${err}`));
-  }, [selectedNodeId, selectedNode, flowGraph.nodes, refreshGraph]);
-
   const handleStartRun = useCallback((runtime, plotDt) => {
     setIsRunning(true);
     setRunError(null);
@@ -3476,6 +3525,7 @@ export default function App() {
         onAutoLayoutRecursiveFlow={onAutoLayoutRecursiveFlow}
         onClearLayoutLocks={onClearLayoutLocks}
         layoutRunning={layoutRunning}
+        layoutProgress={layoutProgress}
         selectedGroupScore={selectedGroupScore}
         onUndoLayout={onUndoLayout}
         canUndoLayout={!!autoLayoutUndoSnapshot}
@@ -3485,7 +3535,6 @@ export default function App() {
         onAddPool={handleAddPool}
         onAddReac={handleAddReac}
         onAddEnz={handleAddEnz}
-        onDeleteSelected={handleDeleteSelected}
         onStartRun={handleStartRun}
         onResetRun={handleResetRun}
         isRunning={isRunning}

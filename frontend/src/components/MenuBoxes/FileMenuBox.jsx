@@ -70,7 +70,11 @@ const MODEL_INFO_FIELDS = [
 
 function formatModelInfo(nodes) {
   const counts = {};
-  for (const n of nodes) counts[n.type] = (counts[n.type] || 0) + 1;
+  // n.type is React Flow's own rendering type -- remapped for groups (to
+  // 'kkitGroup', see App.jsx's own REACT_FLOW_NODE_TYPE) -- the semantic
+  // type every other count here actually wants lives on n.data.type
+  // instead (same distinction PropertiesMenuBox's own titleFor relies on).
+  for (const n of nodes) counts[n.data.type] = (counts[n.data.type] || 0) + 1;
   return MODEL_INFO_FIELDS.map(([key, label]) => `${counts[key] || 0} ${label}`).join(' · ');
 }
 

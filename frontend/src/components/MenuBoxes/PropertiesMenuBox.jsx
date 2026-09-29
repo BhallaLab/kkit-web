@@ -10,6 +10,7 @@ import {
   Divider,
   Chip,
   Tooltip,
+  LinearProgress,
 } from '@mui/material';
 import { RAINBOW_16, GRAYSCALE_8 } from '../../colorUtils';
 
@@ -150,6 +151,7 @@ export default function PropertiesMenuBox({
   onAutoLayoutRecursiveFlow,
   onClearLayoutLocks,
   layoutRunning,
+  layoutProgress,
   selectedGroupScore,
   onUndoLayout,
   canUndoLayout,
@@ -433,6 +435,24 @@ export default function PropertiesMenuBox({
                 Layout
               </Typography>
             </Grid>
+            {layoutProgress && (
+              // Only Recurse Square/Flow ever set this (see App.jsx's own
+              // onAutoLayoutRecursive/onAutoLayoutRecursiveFlow) -- a
+              // plain single-level Square/Flow click finishes fast enough
+              // that showing a bar for it would just flicker.
+              <Grid size={12}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <LinearProgress
+                    variant="determinate"
+                    value={(layoutProgress.done / layoutProgress.total) * 100}
+                    sx={{ flexGrow: 1 }}
+                  />
+                  <Typography variant="caption" color="text.secondary">
+                    {layoutProgress.done}/{layoutProgress.total}
+                  </Typography>
+                </Box>
+              </Grid>
+            )}
             {selectedGroupScore && (
               <Grid size={12}>
                 <Tooltip title="Lower is better -- weighted total of connector length, crossings, icon overlaps, and footprint area. Same score auto-layout itself uses to judge a candidate.">
