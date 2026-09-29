@@ -1179,13 +1179,30 @@ export default function App() {
   const [plotData, setPlotData] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
   const [runError, setRunError] = useState(null);
-  const [lastRuntime, setLastRuntime] = useState(null);
   // Lifted out of RunMenuBox (rather than kept as its own local state) so a
   // Stimulus's save-time negative-value check (see onSaveNode) can send the
   // Run panel's *current* runtime value along with it, per the user's own
   // choice of where that duration should come from.
   const [runtime, setRuntime] = useState('3000');
   const [plotDt, setPlotDt] = useState('1');
+  // Which solver a Start click uses -- 'lsoda' (deterministic, Ksolve) or
+  // 'gssa' (Gillespie's Stochastic Simulation Algorithm, Gsolve) -- see
+  // sim_runner.py's build_solver.
+  const [solverMethod, setSolverMethod] = useState('lsoda');
+  // When on, the trace(s) showing when a run *starts* are kept around as a
+  // dashed "previous" layer instead of being discarded the moment the new
+  // run's own solid trace lands (see handleStartRun below) -- turning it
+  // off doesn't retroactively clear an already-dashed trace, only the
+  // *next* completed run stops carrying one forward.
+  const [overlayPlots, setOverlayPlots] = useState(false);
+  const [previousPlotData, setPreviousPlotData] = useState(null);
+  // 'conc' (native mM, scaled by the Units menu's own concUnit) or 'n'
+  // (raw molecule count, never unit-scaled, same as Pool's own n field
+  // elsewhere) -- which of a pool's own domains the Plots tab's time-course
+  // traces are shown in. The backend only ever records conc (see
+  // sim_runner.py's build_plot_tables) -- 'n' is derived in PlotsPanel
+  // itself from each pool's own (already-known) volume.
+  const [plotDomain, setPlotDomain] = useState('conc');
   // Which of MainDisplay's two tabs (0 = Reaction Layout, 1 = Plots) is
   // showing -- lifted up here (rather than local state in MainDisplay) so a
   // completed run can switch to it, not just the user clicking the tab.
@@ -1252,6 +1269,12 @@ export default function App() {
     buffered: true,
     resetEachLevel: true,
     decreasing: false,
+    // 'input' | 'output' | null -- armed by DoseResponseMenuBox's own Pick
+    // button (see handleArmDosePick), consumed by the *next* canvas click
+    // (see onNodeClick/onPaneClick below) instead of a dropdown, so
+    // choosing a dose/monitor pool doesn't mean scrolling through a
+    // hundreds-of-entries Select once a model gets large.
+    picking: null,
   });
   const [doseRunning, setDoseRunning] = useState(false);
   const [doseError, setDoseError] = useState(null);
@@ -1451,27 +1474,68 @@ export default function App() {
     return { ...view, edges: avoidObstacles(view.nodes, edgesWithAggregateVia) };
   }, [canvasGraph.nodes, canvasGraph.edges, collapsedIds, visualMode, aggregateVia]);
 
-  const onNodeClick = useCallback((event, node) => {
-    // A proxy (Decorated mode -- see collapseView.js's computeDecoratedView) is
-    // a synthetic stand-in for one specific hidden entity, not a real node
-    // of its own -- clicking it opens *that* entity's own Properties
-    // (still fully present in flowGraph.nodes, just not currently
-    // rendered), keyed by realId/realType rather than the proxy's own
-    // synthetic id/type.
-    if (node.data.type === 'proxy') {
-      if (EDITABLE_ENDPOINTS[node.data.realType]) {
-        setSelectedNodeId(node.data.realId);
+  const onNodeClick = useCallback(
+    (event, node) => {
+      // A proxy (Decorated mode -- see collapseView.js's computeDecoratedView) is
+      // a synthetic stand-in for one specific hidden entity, not a real node
+      // of its own -- clicking it opens *that* entity's own Properties
+      // (still fully present in flowGraph.nodes, just not currently
+      // rendered), keyed by realId/realType rather than the proxy's own
+      // synthetic id/type.
+      const isProxy = node.data.type === 'proxy';
+      const realType = isProxy ? node.data.realType : node.data.type;
+      const realId = isProxy ? node.data.realId : node.id;
+
+      // Dose Response's own "pick from canvas" flow (see
+      // DoseResponseMenuBox's own Pick button/handleArmDosePick) -- while
+      // armed, the *next* click anywhere on the canvas is consumed by the
+      // pick instead of the usual "open Properties" behavior, valid pool
+      // or not (an invalid click just leaves picking armed rather than
+      // silently opening Properties for whatever was actually clicked,
+      // which would otherwise be a confusing double effect).
+      if (doseParams.picking) {
+        if (realType === 'pool') {
+          const realNode = flowGraph.nodes.find((n) => n.id === realId);
+          if (realNode && !realNode.data.isEnzComplex) {
+            setDoseParams((p) => ({ ...p, [`${p.picking}Id`]: realId, picking: null }));
+          }
+        }
+        return;
+      }
+
+      if (isProxy) {
+        if (EDITABLE_ENDPOINTS[realType]) {
+          setSelectedNodeId(realId);
+          setActiveMenu('Properties');
+        }
+        return;
+      }
+      if (EDITABLE_ENDPOINTS[node.data.type]) {
+        setSelectedNodeId(node.id);
         setActiveMenu('Properties');
       }
+    },
+    [doseParams.picking, flowGraph.nodes]
+  );
+
+  const onPaneClick = useCallback(() => {
+    // A click on blank canvas while a Dose Response pick is armed means
+    // "never mind" -- cancels the pick rather than leaving it armed
+    // indefinitely (or, worse, silently doing nothing the user can see).
+    if (doseParams.picking) {
+      setDoseParams((p) => ({ ...p, picking: null }));
       return;
     }
-    if (EDITABLE_ENDPOINTS[node.data.type]) {
-      setSelectedNodeId(node.id);
-      setActiveMenu('Properties');
-    }
-  }, []);
+    setSelectedNodeId(null);
+  }, [doseParams.picking]);
 
-  const onPaneClick = useCallback(() => setSelectedNodeId(null), []);
+  // Arms/disarms Dose Response's own "pick from canvas" flow (see
+  // onNodeClick above) -- also switches to the Reaction Layout tab, since
+  // there's nothing to click on the Plots tab.
+  const handleArmDosePick = useCallback((field) => {
+    setDoseParams((p) => ({ ...p, picking: p.picking === field ? null : field }));
+    setDisplayTab(0);
+  }, []);
 
   // The user's own later bug report: pressing Delete/Backspace on a
   // selected pool/reaction/etc removed it from the canvas but left it
@@ -3272,7 +3336,7 @@ export default function App() {
     fetch(`${API_BASE}/api/run/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ runtime, plotDt }),
+      body: JSON.stringify({ runtime, plotDt, solver: solverMethod }),
     })
       .then((r) => r.json())
       .then((res) => {
@@ -3280,13 +3344,19 @@ export default function App() {
           setRunError(res.error);
           return;
         }
+        // Overlay Plots: whatever was showing right before this run's own
+        // result lands becomes the dashed "previous" layer -- but only if
+        // the toggle is currently on; otherwise any earlier dashed layer is
+        // dropped here too, so turning overlay off makes it vanish at the
+        // next completed run, not immediately (see the toggle's own
+        // comment above).
+        setPreviousPlotData(overlayPlots ? plotData : null);
         setPlotData(res);
-        setLastRuntime(runtime);
         setDisplayTab(1);
       })
       .catch((err) => setRunError(String(err)))
       .finally(() => setIsRunning(false));
-  }, []);
+  }, [solverMethod, overlayPlots, plotData]);
 
   const handleResetRun = useCallback(() => {
     fetch(`${API_BASE}/api/run/reset`, { method: 'POST' })
@@ -3337,7 +3407,7 @@ export default function App() {
         });
         setStatus(`reset ${graph.nodes.length} nodes to initial values`);
         setPlotData(null);
-        setLastRuntime(null);
+        setPreviousPlotData(null);
         setRunError(null);
       })
       .catch((err) => setRunError(String(err)));
@@ -3553,12 +3623,18 @@ export default function App() {
         onResetRun={handleResetRun}
         isRunning={isRunning}
         runError={runError}
-        lastRuntime={lastRuntime}
         runtime={runtime}
         setRuntime={setRuntime}
         plotDt={plotDt}
         setPlotDt={setPlotDt}
+        solverMethod={solverMethod}
+        setSolverMethod={setSolverMethod}
+        overlayPlots={overlayPlots}
+        setOverlayPlots={setOverlayPlots}
+        plotDomain={plotDomain}
+        setPlotDomain={setPlotDomain}
         plotData={plotData}
+        previousPlotData={previousPlotData}
         doseCurve={doseCurve}
         doseParams={doseParams}
         setDoseParams={setDoseParams}
@@ -3566,6 +3642,7 @@ export default function App() {
         doseError={doseError}
         onDoseStart={handleDoseStart}
         onDoseHalt={handleDoseHalt}
+        onArmDosePick={handleArmDosePick}
         findSimParsed={findSimParsed}
         findSimEntityMap={findSimEntityMap}
         findSimFileName={findSimFileName}

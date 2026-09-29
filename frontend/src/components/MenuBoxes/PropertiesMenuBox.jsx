@@ -39,6 +39,7 @@ import {
   permeabilityUnitLabel,
   fluxUnitLabel,
 } from '../../unitConversions';
+import { TOGGLE_GROUP_SX } from '../../menuStyle';
 
 // Which unit-conversion "kind" a given (node type, field key) pair needs
 // -- everything not listed here (n/nInit, ratio, ConcChan.numChan -- plain
@@ -533,6 +534,7 @@ export default function PropertiesMenuBox({
                   const isInit = fields.field.endsWith('Init');
                   setField('field', v === 'n' ? (isInit ? 'nInit' : 'n') : isInit ? 'concInit' : 'conc');
                 }}
+                sx={TOGGLE_GROUP_SX}
               >
                 <ToggleButton
                   value="conc"

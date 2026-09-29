@@ -1896,8 +1896,11 @@ def run_start():
         return jsonify({"error": "runtime and plotDt must be numbers"}), 400
     if runtime <= 0 or plot_dt <= 0:
         return jsonify({"error": "runtime and plotDt must be positive"}), 400
+    solver = body.get("solver", "lsoda")
+    if solver not in ("lsoda", "gssa"):
+        return jsonify({"error": f"unknown solver: {solver}"}), 400
 
-    result = run_simulation(_current_model_path, runtime, plot_dt)
+    result = run_simulation(_current_model_path, runtime, plot_dt, stochastic=(solver == "gssa"))
     return jsonify(result)
 
 

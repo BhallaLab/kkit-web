@@ -1,6 +1,6 @@
 import Plot from 'react-plotly.js';
 import { Box, Typography } from '@mui/material';
-import { conc, time, timeUnitAbbrev } from '../unitConversions';
+import { conc, time, timeUnitAbbrev, concToN } from '../unitConversions';
 
 // Plotly's legend already toggles a trace's visibility on click (its
 // default itemclick behavior) -- no extra wiring needed for that.
@@ -81,35 +81,60 @@ function findSimWindowContent(curve) {
   };
 }
 
-export default function PlotsPanel({ plotData, nodes, doseCurve, findSimCurve, concUnit, timeUnit }) {
+export default function PlotsPanel({ plotData, previousPlotData, plotDomain, nodes, doseCurve, findSimCurve, concUnit, timeUnit }) {
   const nameById = {};
   const colorById = {};
+  const volumeById = {};
   const windowById = {};
   nodes.forEach((n) => {
     nameById[n.id] = n.data.name;
     colorById[n.id] = n.data.color;
-    if (n.type === 'pool' && n.data.plotWindow) windowById[n.id] = n.data.plotWindow;
+    if (n.type === 'pool') {
+      volumeById[n.id] = n.data.volume;
+      if (n.data.plotWindow) windowById[n.id] = n.data.plotWindow;
+    }
   });
 
   // plotData.time/series come back from /api/run/start in native units
   // (seconds, mM -- see sim_runner.py's run_simulation) -- converted here
-  // to whatever the Units menu currently has selected, the same "not
-  // live, only when this panel is actually showing" convention every
-  // other dialog uses (a fresh run always re-renders this panel from
-  // scratch anyway, so there's no separate "becomes visible" moment to
-  // gate on the way a persistent form field needs one).
-  const toTrace = ([poolId, values]) => ({
-    x: plotData.time.map((t) => time.toDisplay(t, timeUnit)),
-    y: values.map((v) => conc.toDisplay(v, concUnit)),
-    type: 'scatter',
-    mode: 'lines',
-    name: nameById[poolId] || poolId,
-    line: { color: colorById[poolId] },
-  });
+  // to whatever the Units menu currently has selected, or, if the Plots
+  // panel's own "# of molecules" toggle is on, into each pool's raw n
+  // instead (see unitConversions.js's own concToN, which needs that pool's
+  // volume -- never unit-scaled itself, same as Pool's own n field
+  // elsewhere). Same "not live, only when this panel is actually showing"
+  // convention every other dialog uses (a fresh run always re-renders this
+  // panel from scratch anyway, so there's no separate "becomes visible"
+  // moment to gate on the way a persistent form field needs one).
+  const yValue = (poolId, v) => (plotDomain === 'n' ? concToN(v, volumeById[poolId]) : conc.toDisplay(v, concUnit));
+
+  // `dashed` renders the Overlay Plots toggle's own "previous run" layer
+  // (see App.jsx's handleStartRun) -- same pool, same color, just a dashed
+  // line and a "(previous)" legend suffix so it's clearly the older trace,
+  // not a second live series.
+  const makeToTrace =
+    (data, dashed) =>
+    ([poolId, values]) => ({
+      x: data.time.map((t) => time.toDisplay(t, timeUnit)),
+      y: values.map((v) => yValue(poolId, v)),
+      type: 'scatter',
+      mode: 'lines',
+      name: dashed ? `${nameById[poolId] || poolId} (previous)` : nameById[poolId] || poolId,
+      line: { color: colorById[poolId], dash: dashed ? 'dot' : 'solid' },
+    });
 
   const entries = plotData ? Object.entries(plotData.series).filter(([poolId]) => windowById[poolId]) : [];
-  const traces1 = entries.filter(([poolId]) => windowById[poolId] === 1).map(toTrace);
-  const traces2 = entries.filter(([poolId]) => windowById[poolId] === 2).map(toTrace);
+  const prevEntries = previousPlotData
+    ? Object.entries(previousPlotData.series).filter(([poolId]) => windowById[poolId])
+    : [];
+  const toTrace = makeToTrace(plotData || {}, false);
+  const toPrevTrace = makeToTrace(previousPlotData || {}, true);
+  const tracesForWindow = (win) => [
+    ...prevEntries.filter(([poolId]) => windowById[poolId] === win).map(toPrevTrace),
+    ...entries.filter(([poolId]) => windowById[poolId] === win).map(toTrace),
+  ];
+  const traces1 = tracesForWindow(1);
+  const traces2 = tracesForWindow(2);
+  const yAxisTitle = plotDomain === 'n' ? '# of molecules' : `Conc (${concUnit})`;
 
   // A dose-response run or a FindSim playback each claim one whole window
   // slot (see App.jsx's handleDoseStart/handleFindSimRun for how 1-vs-2 is
@@ -122,8 +147,8 @@ export default function PlotsPanel({ plotData, nodes, doseCurve, findSimCurve, c
     doseCurve?.window === win ? doseWindowContent(doseCurve, nameById, concUnit)
     : findSimCurve?.window === win ? findSimWindowContent(findSimCurve)
     : null;
-  const window1 = overlayFor(1) ?? (traces1.length > 0 ? { traces: traces1 } : null);
-  const window2 = overlayFor(2) ?? (traces2.length > 0 ? { traces: traces2 } : null);
+  const window1 = overlayFor(1) ?? (traces1.length > 0 ? { traces: traces1, layout: { yaxis: { title: { text: yAxisTitle } } } } : null);
+  const window2 = overlayFor(2) ?? (traces2.length > 0 ? { traces: traces2, layout: { yaxis: { title: { text: yAxisTitle } } } } : null);
 
   if (!window1 && !window2) {
     return (

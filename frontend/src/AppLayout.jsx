@@ -49,12 +49,18 @@ export default function AppLayout({
   onResetRun,
   isRunning,
   runError,
-  lastRuntime,
   runtime,
   setRuntime,
   plotDt,
   setPlotDt,
+  solverMethod,
+  setSolverMethod,
+  overlayPlots,
+  setOverlayPlots,
+  plotDomain,
+  setPlotDomain,
   plotData,
+  previousPlotData,
   plots,
   collapsedMap,
   doseParams,
@@ -63,6 +69,7 @@ export default function AppLayout({
   doseError,
   onDoseStart,
   onDoseHalt,
+  onArmDosePick,
   findSimParsed,
   findSimEntityMap,
   findSimFileName,
@@ -125,11 +132,16 @@ export default function AppLayout({
         onReset={onResetRun}
         isRunning={isRunning}
         error={runError}
-        lastRuntime={lastRuntime}
         runtime={runtime}
         setRuntime={setRuntime}
         plotDt={plotDt}
         setPlotDt={setPlotDt}
+        solverMethod={solverMethod}
+        setSolverMethod={setSolverMethod}
+        overlayPlots={overlayPlots}
+        setOverlayPlots={setOverlayPlots}
+        plotDomain={plotDomain}
+        setPlotDomain={setPlotDomain}
         timeUnit={timeUnit}
         findSimParsed={findSimParsed}
         findSimEntityMap={findSimEntityMap}
@@ -164,6 +176,7 @@ export default function AppLayout({
         error={doseError}
         onStart={onDoseStart}
         onHalt={onDoseHalt}
+        onArmPick={onArmDosePick}
         concUnit={concUnit}
         timeUnit={timeUnit}
       />
@@ -193,6 +206,8 @@ export default function AppLayout({
           <MainDisplay
             {...canvasProps}
             plotData={plotData}
+            previousPlotData={previousPlotData}
+            plotDomain={plotDomain}
             findSimCurve={findSimResult}
             selectedNode={selectedNode}
             onAddPool={onAddPool}

@@ -20,15 +20,24 @@ def _compartment_path(model_path):
     return kinetics if moose.exists(kinetics) else model_path
 
 
-def build_solver(model_path, simdt=_DEFAULT_SIMDT):
-    """(Re)builds the Ksolve/Dsolve/Stoich trio that actually drives the
-    reaction system -- moose.loadModel(..., 'ee') only parses the model and
-    leaves every Pool/Reac/Enz unscheduled (tick=-1); 'ee' is a legacy mode
-    meant for loading, not computation. Rebuilt fresh on every run (deleting
-    any previous solver first) so Stoich.reacSystemPath -- which captures the
-    reaction system as a one-shot scan, not a live view -- always reflects
-    the model's current objects, including any added/removed since the last
-    run. Mirrors the pattern in jardesigner/jardesigner.py's _buildChemLine.
+def build_solver(model_path, simdt=_DEFAULT_SIMDT, stochastic=False):
+    """(Re)builds the Ksolve/Gsolve/Dsolve/Stoich trio that actually drives
+    the reaction system -- moose.loadModel(..., 'ee') only parses the model
+    and leaves every Pool/Reac/Enz unscheduled (tick=-1); 'ee' is a legacy
+    mode meant for loading, not computation. Rebuilt fresh on every run
+    (deleting any previous solver first) so Stoich.reacSystemPath -- which
+    captures the reaction system as a one-shot scan, not a live view --
+    always reflects the model's current objects, including any added/
+    removed since the last run. Mirrors the pattern in
+    jardesigner/jardesigner.py's _buildChemLine.
+
+    `stochastic` swaps the deterministic ODE solver (Ksolve/lsoda) for
+    Gillespie's Stochastic Simulation Algorithm (Gsolve) -- ported from
+    moose-core's own snippets/switchKineticSolvers.py: Stoich.ksolve
+    accepts either object under the same field name, no other wiring
+    differs (verified directly -- both drive the same Table2/getConc
+    plot-table setup identically; Gsolve's own discrete integer molecule
+    counts are just visible as extra sampling noise in the readback).
 
     Without an explicit moose.useClock/setClock here, Ksolve/Dsolve fall back
     to whatever MOOSE's default tick dt happens to be -- verified directly to
@@ -54,15 +63,18 @@ def build_solver(model_path, simdt=_DEFAULT_SIMDT):
         if moose.exists(p):
             moose.delete(p)
 
-    ksolve = moose.Ksolve(f"{compt_path}/ksolve")
-    # Ksolve's own default method is "rk5" (GSL's adaptive Runge-Kutta-
-    # Fehlberg), not LSODA -- verified directly (Ksolve.method is never set
-    # otherwise). LSODA switches automatically between a non-stiff (Adams)
-    # and a stiff (BDF) method as the reaction system's own stiffness
-    # changes over the run, which suits a chemical kinetics model (rate
-    # constants routinely spanning several orders of magnitude) better than
-    # a single fixed-order adaptive RK method.
-    ksolve.method = "lsoda"
+    if stochastic:
+        ksolve = moose.Gsolve(f"{compt_path}/ksolve")
+    else:
+        ksolve = moose.Ksolve(f"{compt_path}/ksolve")
+        # Ksolve's own default method is "rk5" (GSL's adaptive Runge-Kutta-
+        # Fehlberg), not LSODA -- verified directly (Ksolve.method is never
+        # set otherwise). LSODA switches automatically between a non-stiff
+        # (Adams) and a stiff (BDF) method as the reaction system's own
+        # stiffness changes over the run, which suits a chemical kinetics
+        # model (rate constants routinely spanning several orders of
+        # magnitude) better than a single fixed-order adaptive RK method.
+        ksolve.method = "lsoda"
     dsolve = moose.Dsolve(f"{compt_path}/dsolve")
     stoich = moose.Stoich(f"{compt_path}/stoich")
     stoich.compartment = moose.element(compt_path)
@@ -215,7 +227,7 @@ def finish_dose_response(session):
     input_pool.isBuffered = session["orig_buffered"]
 
 
-def run_simulation(model_path, runtime, plot_dt):
+def run_simulation(model_path, runtime, plot_dt, stochastic=False):
     # A plot interval any finer than runtime/1000 buys essentially nothing
     # in a displayed trace while directly costing solver steps -- clamp up
     # rather than trust an arbitrarily small typed value; runtime/100 is
@@ -223,9 +235,12 @@ def run_simulation(model_path, runtime, plot_dt):
     # itself (not a fraction of it) is enough to avoid a visible staircase
     # -- the solver (LSODA, adaptive -- see build_solver) integrates
     # accurately across whatever interval it's given, a fixed-step method's
-    # concern, not an adaptive one's.
+    # concern, not an adaptive one's. (Gsolve/GSSA has no such adaptive
+    # integration to rely on -- it's a discrete-event method -- but reusing
+    # the same clamped plot_dt as the solve tick here is still harmless,
+    # just a slightly finer sampling than strictly necessary.)
     plot_dt = max(plot_dt, runtime / 1000.0)
-    build_solver(model_path, min(_DEFAULT_SIMDT, plot_dt))
+    build_solver(model_path, min(_DEFAULT_SIMDT, plot_dt), stochastic=stochastic)
     tables = build_plot_tables(model_path)
     moose.setClock(8, plot_dt)
     moose.useClock(8, _plots_path(model_path) + "/##", "process")

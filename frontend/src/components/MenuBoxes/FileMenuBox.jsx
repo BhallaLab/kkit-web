@@ -12,34 +12,9 @@ import {
   DialogActions,
   MenuItem,
 } from '@mui/material';
+import { MUTED_BUTTON_SX, COMPACT_FIELD_SX } from '../../menuStyle';
 
 const API_BASE = `http://${window.location.hostname}:5001`;
-
-// Flat, subdued, compact styling for every button in this menu --
-// deliberately NOT MUI's default vivid blue/red "contained" palette (which
-// draws far more attention than a File menu's own routine actions need),
-// and deliberately smaller than MUI's own "small" Button default (still
-// too tall for a menu this dense).
-const MUTED_BUTTON_SX = {
-  bgcolor: '#e0e0e0',
-  color: 'rgba(0, 0, 0, 0.87)',
-  boxShadow: 'none',
-  fontSize: '0.75rem',
-  minHeight: 0,
-  lineHeight: 1.5,
-  py: 0.4,
-  '&:hover': { bgcolor: '#cfcfcf', boxShadow: 'none' },
-};
-
-// Applied to every text/select field in this menu (File name, Model
-// Creator, License, Model Notes, Last Modified) -- MUI's own size="small"
-// shrinks padding but leaves the input/label at the theme's default
-// (1rem) font, which reads as oversized next to this menu's own compact
-// buttons.
-const COMPACT_FIELD_SX = {
-  '& .MuiInputBase-root': { fontSize: '0.8rem' },
-  '& .MuiInputLabel-root': { fontSize: '0.8rem' },
-};
 
 // A real, saveable choice always overwrites this -- but until then, it
 // reads unambiguously as "we don't actually know," rather than silently

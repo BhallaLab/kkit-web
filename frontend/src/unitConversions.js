@@ -157,6 +157,17 @@ export function permeabilityUnitLabel(concUnit, timeUnit) {
   return rateConstantUnitLabel(2, concUnit, timeUnit);
 }
 
+// A pool's own n is never unit-scaled (same reasoning as n/nInit elsewhere
+// in this app) -- this instead converts a *recorded conc trace* (see
+// sim_runner.py's run_simulation, which only ever records conc) into n
+// directly, for the Plots panel's own "conc vs # of molecules" toggle.
+// conc[mM] == n / (Avogadro * volume[m^3]) (see permeabilityToDisplay's own
+// comment) -- so n = conc * Avogadro * volume; volumeM3 is each pool's own
+// already-known describe_pool volume, not anything the Units menu affects.
+export function concToN(concMM, volumeM3) {
+  return concMM * AVOGADRO * volumeM3;
+}
+
 // ConcChan.flux -- a live, read-only diagnostic (#/s, molecule count per
 // time, see ConcChan's own field doc) -- same time-only scaling as
 // timeRateToDisplay/ToNative (its value math is identical; only the label

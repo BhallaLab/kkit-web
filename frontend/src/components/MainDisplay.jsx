@@ -361,6 +361,8 @@ export default function MainDisplay({
   isValidConnection,
   onEdgesChange,
   plotData,
+  previousPlotData,
+  plotDomain,
   doseCurve,
   findSimCurve,
   loadGeneration,
@@ -439,6 +441,8 @@ export default function MainDisplay({
       <Box sx={{ flexGrow: 1, position: 'relative', display: displayTab === 1 ? 'block' : 'none' }}>
         <PlotsPanel
           plotData={plotData}
+          previousPlotData={previousPlotData}
+          plotDomain={plotDomain}
           nodes={flowGraph.nodes}
           doseCurve={doseCurve}
           findSimCurve={findSimCurve}
