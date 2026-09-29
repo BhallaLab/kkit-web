@@ -11,8 +11,131 @@ import {
   Chip,
   Tooltip,
   LinearProgress,
+  ToggleButtonGroup,
+  ToggleButton,
 } from '@mui/material';
 import { RAINBOW_16, GRAYSCALE_8 } from '../../colorUtils';
+import {
+  conc as concUnitConv,
+  time as timeUnitConv,
+  volume as volumeUnitConv,
+  length as lengthUnitConv,
+  rateConstantToDisplay,
+  rateConstantToNative,
+  rateConstantUnitLabel,
+  timeRateToDisplay,
+  timeRateToNative,
+  timeRateUnitLabel,
+  numRateUnitLabel,
+  timeUnitAbbrev,
+  diffConstToDisplay,
+  diffConstToNative,
+  diffConstUnitLabel,
+  motorConstToDisplay,
+  motorConstToNative,
+  motorConstUnitLabel,
+  permeabilityToDisplay,
+  permeabilityToNative,
+  permeabilityUnitLabel,
+  fluxUnitLabel,
+} from '../../unitConversions';
+
+// Which unit-conversion "kind" a given (node type, field key) pair needs
+// -- everything not listed here (n/nInit, ratio, ConcChan.numChan -- plain
+// dimensionless counts, same as n/nInit) passes through unconverted, in
+// whatever native units the backend already returns (see moose_graph.py's
+// describe_pool/describe_reac/describe_enz/describe_concchan).
+function fieldKind(node, key) {
+  if (node.type === 'pool' && (key === 'conc' || key === 'concInit')) return 'conc';
+  if (node.type === 'pool' && key === 'diffConst') return 'diffConst';
+  if (node.type === 'pool' && key === 'motorConst') return 'motorConst';
+  if (node.type === 'compartment' && key === 'volume') return 'volume';
+  if (node.type === 'compartment' && key === 'diameter') return 'length';
+  if (node.type === 'concchan') {
+    if (key === 'permeability') return 'permeability';
+    if (key === 'flux') return 'flux';
+  }
+  if (node.type === 'reac') {
+    if (key === 'Kf') return { kind: 'rate', order: node.data.subOrder };
+    if (key === 'Kb') return { kind: 'rate', order: node.data.prdOrder };
+    if (key === 'numKf') return { kind: 'numrate', order: node.data.subOrder };
+    if (key === 'numKb') return { kind: 'numrate', order: node.data.prdOrder };
+    if (key === 'tau') return 'time';
+    // Keq (sub_order === prd_order) is dimensionless -- never scaled,
+    // regardless of which concentration unit is selected; a real Kd is a
+    // single (order-independent) concentration power, the same
+    // conversion a plain concentration value gets.
+    if (key === 'kd') return node.data.kdLabel === 'Keq' ? null : 'conc';
+  }
+  if (node.type === 'enz') {
+    if (key === 'Km') return 'conc';
+    // concK1 is k1's concentration-based counterpart (see describe_enz's
+    // own comment) -- a fixed bimolecular (order-2) concentration-based
+    // rate constant, same dimension a Reac's own Kf gets at order 2.
+    if (key === 'concK1') return { kind: 'rate', order: 2 };
+    // k1/k2's own true units are #^-1.time^-1 (see describe_enz's own
+    // comment on why they're never concentration-scaled) -- only their
+    // time part is converted here, same simplification numKf/numKb's "#"
+    // portion already gets. kcat (k3) is a plain unimolecular rate, no
+    // "#" term at all either way.
+    if (key === 'kcat' || key === 'k1' || key === 'k2') return 'timerate';
+  }
+  return null;
+}
+
+function toDisplayValue(node, key, rawValue, units) {
+  const kind = fieldKind(node, key);
+  if (kind === null || rawValue === undefined || rawValue === null) return rawValue;
+  if (kind === 'conc') return concUnitConv.toDisplay(rawValue, units.concUnit);
+  if (kind === 'volume') return volumeUnitConv.toDisplay(rawValue, units.volumeUnit);
+  if (kind === 'length') return lengthUnitConv.toDisplay(rawValue, units.lengthUnit);
+  if (kind === 'time') return timeUnitConv.toDisplay(rawValue, units.timeUnit);
+  if (kind === 'diffConst') return diffConstToDisplay(rawValue, units.lengthUnit, units.timeUnit);
+  if (kind === 'motorConst') return motorConstToDisplay(rawValue, units.lengthUnit, units.timeUnit);
+  if (kind === 'permeability') return permeabilityToDisplay(rawValue, units.concUnit, units.timeUnit);
+  if (kind === 'flux') return timeRateToDisplay(rawValue, units.timeUnit);
+  if (kind === 'timerate' || kind.kind === 'numrate') return timeRateToDisplay(rawValue, units.timeUnit);
+  if (kind.kind === 'rate') return rateConstantToDisplay(rawValue, kind.order, units.concUnit, units.timeUnit);
+  return rawValue;
+}
+
+function toNativeValue(node, key, displayValue, units) {
+  const kind = fieldKind(node, key);
+  if (kind === null || !Number.isFinite(displayValue)) return displayValue;
+  if (kind === 'conc') return concUnitConv.toNative(displayValue, units.concUnit);
+  if (kind === 'volume') return volumeUnitConv.toNative(displayValue, units.volumeUnit);
+  if (kind === 'length') return lengthUnitConv.toNative(displayValue, units.lengthUnit);
+  if (kind === 'time') return timeUnitConv.toNative(displayValue, units.timeUnit);
+  if (kind === 'diffConst') return diffConstToNative(displayValue, units.lengthUnit, units.timeUnit);
+  if (kind === 'motorConst') return motorConstToNative(displayValue, units.lengthUnit, units.timeUnit);
+  if (kind === 'permeability') return permeabilityToNative(displayValue, units.concUnit, units.timeUnit);
+  if (kind === 'flux') return timeRateToNative(displayValue, units.timeUnit);
+  if (kind === 'timerate' || kind.kind === 'numrate') return timeRateToNative(displayValue, units.timeUnit);
+  if (kind.kind === 'rate') return rateConstantToNative(displayValue, kind.order, units.concUnit, units.timeUnit);
+  return displayValue;
+}
+
+// The unit suffix a field's label shows (e.g. "concInit (uM)") -- derived
+// from fieldKind + whatever's currently selected, replacing what used to
+// be a hardcoded label the backend sent (describe_pool's own concUnit,
+// etc. -- removed once this moved here, see moose_graph.py's matching
+// comment).
+function unitSuffixFor(node, key, units) {
+  const kind = fieldKind(node, key);
+  if (kind === null) return null;
+  if (kind === 'conc') return units.concUnit;
+  if (kind === 'volume') return units.volumeUnit;
+  if (kind === 'length') return units.lengthUnit;
+  if (kind === 'time') return timeUnitAbbrev(units.timeUnit);
+  if (kind === 'diffConst') return diffConstUnitLabel(units.lengthUnit, units.timeUnit);
+  if (kind === 'motorConst') return motorConstUnitLabel(units.lengthUnit, units.timeUnit);
+  if (kind === 'permeability') return permeabilityUnitLabel(units.concUnit, units.timeUnit);
+  if (kind === 'flux') return fluxUnitLabel(units.timeUnit);
+  if (kind === 'timerate') return timeRateUnitLabel(units.timeUnit);
+  if (kind.kind === 'numrate') return numRateUnitLabel(kind.order, units.timeUnit);
+  if (kind.kind === 'rate') return rateConstantUnitLabel(kind.order, units.concUnit, units.timeUnit);
+  return null;
+}
 
 // Display-only rounding -- fields are edited as plain strings (see
 // initialFieldsFor/handleSave) so this never fights the user mid-keystroke;
@@ -25,9 +148,11 @@ function formatNumber(value) {
   return String(Number(value.toPrecision(5)));
 }
 
-// Rows of editable numeric fields, grouped by meaning rather than listed
-// flat -- e.g. n/nInit together, conc/concInit together.
-const EDITABLE_ROWS = {
+// Rows of fields shown in Properties, grouped by meaning and in on-screen
+// order -- e.g. n/nInit together, conc/concInit together. A key listed in
+// the matching READONLY_KEYS set renders greyed/read-only within its row;
+// every other key in a row is editable.
+const ROWS = {
   pool: [
     ['n', 'nInit'],
     ['conc', 'concInit'],
@@ -36,51 +161,83 @@ const EDITABLE_ROWS = {
   reac: [
     ['numKf', 'numKb'],
     ['Kf', 'Kb'],
+    // kd's own displayed name switches between "Kd" and "Keq" depending on
+    // reaction order (see fieldLabel/describe_reac's kdLabel) -- ported
+    // from xreac.g's do_update_reac_scaling.
+    ['kd', 'tau'],
   ],
   // diameter is a derived, invertible convenience for volume (kkit's
   // classic sphere-equivalent convention), not a real CubeMesh field --
   // editing either one updates the other.
   compartment: [['volume', 'diameter']],
-  concchan: [['permeability']],
+  concchan: [['permeability'], ['numChan', 'flux']],
 };
 
-const READONLY_ROWS = {
-  // kd's own displayed name switches between "Kd" and "Keq" depending on
-  // reaction order (see fieldLabel/describe_reac's kdLabel) -- ported
-  // from xreac.g's do_update_reac_scaling.
-  reac: [['kd', 'tau']],
-  concchan: [['numChan', 'flux']],
+const READONLY_KEYS = {
+  reac: new Set(['kd', 'tau']),
+  concchan: new Set(['numChan', 'flux']),
 };
 
-const ENZ_EDITABLE_ROWS = {
-  'explicit-complex': [['k1', 'k2', 'k3']],
+// Km/kcat (the more familiar Michaelis-Menten-style pair) shown right under
+// the parent name; K1 (concK1, k1's own concentration-based counterpart)
+// and ratio next; numK1/numK2 (the molecule-count "number units" rate
+// constants) last -- the user's own preferred ordering. k3 is never shown
+// separately, since it's literally the same MOOSE field as kcat (see
+// describe_enz's own comment). Editing Km or kcat here relies entirely on
+// MOOSE's own setters (Enz::vSetKm/vSetKcat) to preserve whichever of
+// {ratio, Km} it isn't touching -- no extra app-level math needed.
+const ENZ_ROWS = {
+  'explicit-complex': [['Km', 'kcat'], ['concK1', 'ratio'], ['k1', 'k2']],
   'michaelis-menten': [['Km', 'kcat']],
 };
 
-// Km/kcat/ratio are native MOOSE fields on an explicit-complex Enz too, but
-// MOOSE derives them from k1/k2/k3 (confirmed not independently settable) --
-// shown read-only rather than omitted, since they're genuinely informative.
-const ENZ_READONLY_ROWS = {
-  'explicit-complex': [['Km', 'kcat', 'ratio']],
-  'michaelis-menten': [],
+// ratio (k2/kcat) is a native MOOSE field, technically settable, but shown
+// read-only/greyed by design -- editing Km or kcat already preserves it
+// automatically, so there's no independent reason to expose it as editable.
+const ENZ_READONLY_KEYS = {
+  'explicit-complex': new Set(['ratio']),
+  'michaelis-menten': new Set(),
 };
 
+// Explanatory tooltips for fields whose meaning isn't self-evident from the
+// label alone -- only the explicit-complex Enz's own quintet needs this.
+function fieldTooltip(node, key) {
+  if (node.type !== 'enz' || node.data.mechanism !== 'explicit-complex') return '';
+  if (key === 'k1' || key === 'k2') return 'Molecule-count ("number units") rate constant, not concentration-based.';
+  if (key === 'concK1') return "k1's own concentration-based counterpart (same reaction, converted through the compartment volume).";
+  if (key === 'kcat') return 'Same underlying value as k3 -- editing it rescales k2 to preserve the ratio below, and Km to stay fixed.';
+  if (key === 'Km') return 'Editing this preserves ratio and kcat, and recomputes concK1/k1 to match.';
+  if (key === 'ratio') return 'k2/kcat -- preserved automatically whenever Km or kcat is edited, not independently editable here.';
+  return '';
+}
+
+function rowsFor(node) {
+  if (node.type === 'enz') return ENZ_ROWS[node.data.mechanism] || [];
+  return ROWS[node.type] || [];
+}
+
+function readOnlyKeysFor(node) {
+  if (node.type === 'enz') return ENZ_READONLY_KEYS[node.data.mechanism] || new Set();
+  return READONLY_KEYS[node.type] || new Set();
+}
+
+// Flat list of this node's own editable numeric keys -- row grouping/order
+// doesn't matter here, just membership, since this only seeds/parses
+// `fields` (see initialFieldsFor/buildPayload); the on-screen row order
+// comes from rowsFor instead.
 function editableRowsFor(node) {
-  if (node.type === 'enz') return ENZ_EDITABLE_ROWS[node.data.mechanism];
-  return EDITABLE_ROWS[node.type] || [];
+  const readOnly = readOnlyKeysFor(node);
+  return rowsFor(node)
+    .map((row) => row.filter((key) => !readOnly.has(key)))
+    .filter((row) => row.length);
 }
 
-function readOnlyRowsFor(node) {
-  if (node.type === 'enz') return ENZ_READONLY_ROWS[node.data.mechanism];
-  return READONLY_ROWS[node.type] || [];
-}
-
-function initialFieldsFor(node) {
+function initialFieldsFor(node, units) {
   const fields = { name: node.data.name, color: node.data.color, notes: node.data.notes };
   editableRowsFor(node)
     .flat()
     .forEach((key) => {
-      fields[key] = formatNumber(node.data[key]);
+      fields[key] = formatNumber(toDisplayValue(node, key, node.data[key], units));
     });
   if (node.type === 'pool') fields.isBuffered = !!node.data.isBuffered;
   // expr is free text (a muParser-style expression, function of t or of
@@ -92,6 +249,9 @@ function initialFieldsFor(node) {
   // read-only display below instead).
   if (node.type === 'stim' || node.type === 'genfunc') fields.expr = node.data.expr ?? '';
   if (node.type === 'genfunc') fields.numInputs = String(node.data.numInputs ?? 0);
+  // Which of the target pool's own fields this drives -- conc/concInit
+  // (mM) or n/nInit (# of molecules), see the Controls Field toggle below.
+  if (node.type === 'stim' || node.type === 'func' || node.type === 'genfunc') fields.field = node.data.field || 'conc';
   fields.flipped = !!node.data.flipped;
   if (node.data.type === 'group' || node.data.type === 'compartment') {
     fields.collapsed = !!node.data.collapsed;
@@ -99,14 +259,15 @@ function initialFieldsFor(node) {
   return fields;
 }
 
-// A field's display label, including its unit where the backend provides
-// one (see moose_graph.py's describe_pool/describe_reac/describe_enz --
-// e.g. "concInit (µM)", "Kf (µM^-1.s^-1)"). A field can also
-// override its own displayed *name*, not just its unit, the way Reac's
-// own kd switches between "Kd" and "Keq" depending on reaction order.
-function fieldLabel(node, key) {
+// A field's display label, including its unit where one applies (see
+// fieldKind/unitSuffixFor -- e.g. "concInit (uM)", "Kf (uM^-1.s^-1)",
+// both now computed from whatever's currently selected in the Units
+// menu, not a value the backend sends). A field can also override its
+// own displayed *name*, not just its unit, the way Reac's own kd
+// switches between "Kd" and "Keq" depending on reaction order.
+function fieldLabel(node, key, units) {
   const name = node.data[`${key}Label`] || key;
-  const unit = node.data[`${key}Unit`];
+  const unit = unitSuffixFor(node, key, units);
   return unit ? `${name} (${unit})` : name;
 }
 
@@ -114,12 +275,12 @@ function fieldLabel(node, key) {
 // below -- the editable numeric rows are typed as plain strings (see
 // initialFieldsFor) and need parsing back to numbers; everything else in
 // `fields` (name, notes, isBuffered, expr, ...) already round-trips as-is.
-function buildPayload(node, fields) {
+function buildPayload(node, fields, units) {
   const parsed = { ...fields };
   editableRowsFor(node)
     .flat()
     .forEach((key) => {
-      parsed[key] = parseFloat(fields[key]);
+      parsed[key] = toNativeValue(node, key, parseFloat(fields[key]), units);
     });
   // A whole number of input slots, not a rate/concentration field
   // (editableRowsFor's own numeric rows), so it's parsed separately here.
@@ -155,7 +316,12 @@ export default function PropertiesMenuBox({
   selectedGroupScore,
   onUndoLayout,
   canUndoLayout,
+  timeUnit,
+  concUnit,
+  volumeUnit,
+  lengthUnit,
 }) {
+  const units = { timeUnit, concUnit, volumeUnit, lengthUnit };
   const [fields, setFields] = useState(null);
   // Tracks whether `fields` has any edit not yet sent to the backend --
   // set by setField, cleared on every explicit Save and whenever a fresh
@@ -163,15 +329,23 @@ export default function PropertiesMenuBox({
   // effect below can see its *latest* value from inside a cleanup closure
   // without needing to depend on (and so re-run for) every keystroke.
   const dirtyRef = useRef(false);
-  // Mirrors `fields`/`onSave` into refs for the same reason: the flush
-  // effect's cleanup only ever depends on `node`, so without this it
-  // would see the stale `fields`/`onSave` from whenever that node was
-  // first selected, not whatever was last typed.
-  const latestRef = useRef({ fields, onSave });
-  latestRef.current = { fields, onSave };
+  // Mirrors `fields`/`onSave`/`units` into refs for the same reason: the
+  // flush effect's cleanup only ever depends on `node`, so without this it
+  // would see stale values from whenever that node was first selected,
+  // not whatever was last typed/currently selected in the Units menu.
+  const latestRef = useRef({ fields, onSave, units });
+  latestRef.current = { fields, onSave, units };
 
+  // Deliberately depends on [node] only, not `units` -- the user's own
+  // explicit spec: switching units isn't live, a Properties panel only
+  // recomputes its displayed values (via this same effect) when it next
+  // becomes visible for some node, i.e. exactly when this effect's own
+  // dependency (`node`) changes because a different one just got
+  // selected, or this whole panel just (re)mounted. `units` is still read
+  // directly below (the current render's own prop value, always fresh
+  // for whichever node this effect is actually firing for).
   useEffect(() => {
-    setFields(node ? initialFieldsFor(node) : null);
+    setFields(node ? initialFieldsFor(node, units) : null);
     dirtyRef.current = false;
     // The dialog "unmapping" -- either a different node gets selected
     // while Properties is showing, or the whole panel is left (switching
@@ -181,9 +355,10 @@ export default function PropertiesMenuBox({
     // stop being shown), captured directly from this effect's own closure.
     return () => {
       if (dirtyRef.current && node) {
-        latestRef.current.onSave(node.id, buildPayload(node, latestRef.current.fields));
+        latestRef.current.onSave(node.id, buildPayload(node, latestRef.current.fields, latestRef.current.units));
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node]);
 
   if (!node || !fields) {
@@ -203,7 +378,7 @@ export default function PropertiesMenuBox({
 
   const handleSave = () => {
     dirtyRef.current = false;
-    onSave(node.id, buildPayload(node, fields));
+    onSave(node.id, buildPayload(node, fields, units));
   };
 
   // The user's own later request: Enter should do what clicking Save
@@ -255,39 +430,38 @@ export default function PropertiesMenuBox({
           </Tooltip>
         </Grid>
 
-        {editableRowsFor(node).map((row, i) => (
-          <Grid key={`edit-${i}`} size={12} container spacing={1.5}>
-            {row.map((key) => (
-              <Grid key={key} size={12 / row.length}>
-                <TextField
-                  fullWidth
-                  label={fieldLabel(node, key)}
-                  type="number"
-                  size="small"
-                  value={fields[key]}
-                  onChange={(e) => setField(key, e.target.value)}
-                />
-              </Grid>
-            ))}
-          </Grid>
-        ))}
-
-        {readOnlyRowsFor(node).map((row, i) => (
-          <Grid key={`ro-${i}`} size={12} container spacing={1.5}>
-            {row.map((key) => (
-              <Grid key={key} size={12 / row.length}>
-                <TextField
-                  fullWidth
-                  label={fieldLabel(node, key)}
-                  size="small"
-                  value={formatNumber(node.data[key])}
-                  slotProps={{ input: { readOnly: true } }}
-                  variant="filled"
-                />
-              </Grid>
-            ))}
-          </Grid>
-        ))}
+        {rowsFor(node).map((row, i) => {
+          const readOnly = readOnlyKeysFor(node);
+          return (
+            <Grid key={`row-${i}`} size={12} container spacing={1.5}>
+              {row.map((key) => (
+                <Grid key={key} size={12 / row.length}>
+                  <Tooltip title={fieldTooltip(node, key)}>
+                    {readOnly.has(key) ? (
+                      <TextField
+                        fullWidth
+                        label={fieldLabel(node, key, units)}
+                        size="small"
+                        value={formatNumber(toDisplayValue(node, key, node.data[key], units))}
+                        slotProps={{ input: { readOnly: true } }}
+                        variant="filled"
+                      />
+                    ) : (
+                      <TextField
+                        fullWidth
+                        label={fieldLabel(node, key, units)}
+                        type="number"
+                        size="small"
+                        value={fields[key]}
+                        onChange={(e) => setField(key, e.target.value)}
+                      />
+                    )}
+                  </Tooltip>
+                </Grid>
+              ))}
+            </Grid>
+          );
+        })}
 
         {(node.type === 'stim' || node.type === 'func' || node.type === 'genfunc') && (
           <>
@@ -311,10 +485,16 @@ export default function PropertiesMenuBox({
               </Grid>
             ) : (
               <Grid size={12}>
-                <Tooltip title={node.type === 'genfunc' ? '' : "Checked for negative values across the Run panel's runtime before it's saved."}>
+                <Tooltip
+                  title={
+                    node.type === 'genfunc'
+                      ? 'x0, x1, ... are read in whichever units Controls Field below is set to (mM or # of molecules).'
+                      : "Checked for negative values across the Run panel's runtime before it's saved."
+                  }
+                >
                   <TextField
                     fullWidth
-                    label={node.type === 'genfunc' ? 'Expression (x0, x1, ... are its own pool inputs)' : 'Expression (function of t, in seconds)'}
+                    label={node.type === 'genfunc' ? 'Expression (t in seconds, x0, x1 from other pools)' : 'Expression (function of t, in seconds)'}
                     size="small"
                     multiline
                     minRows={2}
@@ -340,16 +520,33 @@ export default function PropertiesMenuBox({
               </Grid>
             )}
             <Grid size={12}>
-              <Tooltip title="conc for a regular pool, concInit for a buffered one -- set automatically from the target pool.">
-                <TextField
-                  fullWidth
-                  label="Drives"
-                  size="small"
-                  value={node.data.field || ''}
-                  slotProps={{ input: { readOnly: true } }}
-                  variant="filled"
-                />
-              </Tooltip>
+              <Typography variant="caption" color="text.secondary">
+                Controls field
+              </Typography>
+              <ToggleButtonGroup
+                fullWidth
+                size="small"
+                exclusive
+                value={fields.field.startsWith('n') ? 'n' : 'conc'}
+                onChange={(e, v) => {
+                  if (v === null) return;
+                  const isInit = fields.field.endsWith('Init');
+                  setField('field', v === 'n' ? (isInit ? 'nInit' : 'n') : isInit ? 'concInit' : 'conc');
+                }}
+              >
+                <ToggleButton
+                  value="conc"
+                  title="Drives the target pool's own concentration field, in mM. Init vs non-Init still follows whether the target pool is buffered; only the domain (mM vs #) is chosen here."
+                >
+                  {fields.field.endsWith('Init') ? 'concInit' : 'conc'} in mM
+                </ToggleButton>
+                <ToggleButton
+                  value="n"
+                  title="Drives the target pool's own molecule-count field directly, in # of molecules. Init vs non-Init still follows whether the target pool is buffered; only the domain (mM vs #) is chosen here."
+                >
+                  {fields.field.endsWith('Init') ? 'nInit' : 'n'} in # of molecules
+                </ToggleButton>
+              </ToggleButtonGroup>
             </Grid>
           </>
         )}

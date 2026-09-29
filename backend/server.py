@@ -33,7 +33,6 @@ from moose_graph import (
     set_func_expr,
     clean_func_expr,
     _reac_orders,
-    _conc_scale,
     rescale_reac_for_order_change,
 )
 from sim_runner import (
@@ -978,13 +977,12 @@ _POOL_SIM_FIELDS = {"n", "nInit", "conc", "concInit", "diffConst", "motorConst"}
 @app.post("/api/update_pool")
 def update_pool():
     body = request.json or {}
-    # conc/concInit are shown and edited in uM (see describe_pool) but
-    # stored in MOOSE natively as mM -- convert back at the one place a
-    # user's edit actually reaches the live model.
+    # conc/concInit arrive already in MOOSE-native mM -- the frontend's own
+    # unit-conversion module (see unitConversions.js) converts from
+    # whatever display unit the Units menu currently has selected *before*
+    # sending this request, so there's nothing left to convert here (see
+    # describe_pool's own matching comment).
     fields = dict(body.get("fields", {}))
-    for key in ("conc", "concInit"):
-        if key in fields:
-            fields[key] = float(fields[key]) / 1000.0
     return _update_node(body.get("id"), fields, _POOL_SIM_FIELDS, {"isBuffered"}, describe_pool)
 
 
@@ -1000,26 +998,59 @@ def update_reac():
     if not moose.exists(node_id):
         return jsonify({"error": f"node not found: {node_id}"}), 404
 
-    # Kf/Kb are shown and edited in uM (order-scaled, see describe_reac's
-    # _conc_scale) but stored in MOOSE natively as mM -- convert back
-    # using this same reaction's own order, computed before any of the
-    # requested fields are actually applied. Kf/Kb carry a *negative*
-    # power of concentration (see _conc_scale), so going display -> raw
-    # multiplies by the scale factor -- the inverse of describe_reac's own
-    # raw -> display division.
+    # Kf/Kb arrive already in MOOSE-native, order-scaled mM terms -- the
+    # frontend's own unit-conversion module applies the order-dependent
+    # rescale (see describe_reac's own matching comment) before sending
+    # this request, so there's nothing left to convert here.
     fields = dict(body.get("fields", {}))
-    sub_order, prd_order = _reac_orders(moose.element(node_id))
-    if "Kf" in fields:
-        fields["Kf"] = float(fields["Kf"]) * _conc_scale(sub_order)
-    if "Kb" in fields:
-        fields["Kb"] = float(fields["Kb"]) * _conc_scale(prd_order)
     return _update_node(node_id, fields, _REAC_SIM_FIELDS, set(), describe_reac)
 
 
 _ENZ_SIM_FIELDS = {
-    "explicit-complex": {"k1", "k2", "k3"},
+    # k1/k2/concK1/Km/kcat are a tightly-coupled quintet on an
+    # explicit-complex Enz -- each one's own MOOSE setter recomputes some
+    # of the *others* as a side effect, to hold whichever combination it
+    # doesn't touch fixed (Enz.cpp's setK1/setK2/setConcK1/vSetKm/
+    # vSetKcat). k3 is deliberately absent -- it's literally the same
+    # field as kcat (same setter/getter), never shown as a separate input.
+    "explicit-complex": {"k1", "k2", "concK1", "Km", "kcat"},
     "michaelis-menten": {"Km", "kcat"},
 }
+
+# Fixed application order for whichever of the above quintet genuinely
+# changed in one Save (see _apply_enz_rate_fields) -- k1 stays last,
+# matching the pre-existing k1-subordinate-to-Km convention; kcat before
+# Km so a kcat edit's own k2/concK1 side effect isn't clobbered by a
+# Km edit's own concK1 side effect landing on top of it afterward.
+_ENZ_FIELD_ORDER = ["k2", "kcat", "Km", "concK1", "k1"]
+
+
+def _apply_enz_rate_fields(elem, fields, editable_keys):
+    # This app's usual convention is that the frontend resends every field
+    # in a Properties row unconditionally, not just the one the user
+    # edited (harmless everywhere else -- see _update_node) -- not here:
+    # blindly reapplying an *unchanged* field's own stale, round-tripped
+    # value can silently stomp whatever a genuinely-edited sibling field in
+    # the same payload just recomputed as a side effect (e.g. resending
+    # the old k2 after a real Km edit would undo the ratio Km was meant to
+    # preserve). Only fields that differ from the enzyme's current live
+    # value by more than plain display-rounding noise are applied at all,
+    # in _ENZ_FIELD_ORDER; a genuine simultaneous edit of two interdependent
+    # fields is inherently ambiguous (each one's own side effect depends on
+    # the other's *old* value) -- resolved pragmatically by that fixed order
+    # rather than perfectly.
+    changed = {}
+    for key in editable_keys:
+        if key not in fields:
+            continue
+        new_value = float(fields[key])
+        old_value = getattr(elem, key)
+        threshold = abs(old_value) * 1e-4 if old_value != 0 else 1e-9
+        if abs(new_value - old_value) > threshold:
+            changed[key] = new_value
+    for key in _ENZ_FIELD_ORDER:
+        if key in changed:
+            setattr(elem, key, changed[key])
 
 
 @app.post("/api/update_enz")
@@ -1031,14 +1062,24 @@ def update_enz():
     if not moose.exists(node_id):
         return jsonify({"error": f"node not found: {node_id}"}), 404
 
-    mechanism = "michaelis-menten" if "MMenz" in moose.element(node_id).className else "explicit-complex"
+    elem = moose.element(node_id)
+    mechanism = "michaelis-menten" if "MMenz" in elem.className else "explicit-complex"
+    editable_keys = _ENZ_SIM_FIELDS[mechanism]
     fields = dict(body.get("fields", {}))
-    # Km (michaelis-menten only -- explicit-complex's own Km is a derived
-    # read-only field, never in the editable set) is shown/edited in uM
-    # but stored natively as mM.
-    if mechanism == "michaelis-menten" and "Km" in fields:
-        fields["Km"] = float(fields["Km"]) / 1000.0
-    return _update_node(node_id, fields, _ENZ_SIM_FIELDS[mechanism], set(), describe_enz)
+    # Rate/Km/kcat fields arrive already in MOOSE-native mM/number units --
+    # see describe_enz's own matching comment -- nothing left to convert
+    # here, just to apply (carefully, for explicit-complex -- see
+    # _apply_enz_rate_fields).
+    rate_fields = {k: fields.pop(k) for k in list(fields) if k in editable_keys}
+    if mechanism == "explicit-complex":
+        _apply_enz_rate_fields(elem, rate_fields, editable_keys)
+    else:
+        # michaelis-menten's own Km/kcat are fully independent fields (no
+        # cross-recomputation) -- plain apply is safe, same as any other
+        # node type.
+        for key, value in rate_fields.items():
+            setattr(elem, key, float(value))
+    return _update_node(node_id, fields, set(), set(), describe_enz)
 
 
 @app.post("/api/update_group")
@@ -1723,6 +1764,38 @@ def create_genfunc():
     return jsonify(describe_stim(func.path))
 
 
+_FIELD_NAMES = {"conc", "concInit", "n", "nInit"}
+
+
+def _rewire_stim_field(f, new_field):
+    """Handles a "Controls field" toggle flip (see PropertiesMenuBox's own
+    conc/n domain toggle) -- detaches the existing valueOut message and
+    reconnects it to a different dest field on the *same* target pool.
+    Init-vs-not is the caller's business (the toggle itself only ever
+    flips conc<->n, preserving whichever Init-ness was already set, see
+    the frontend's own comment) -- this just rewires whatever field name
+    it's given. Recomputes the expr's own scaling correction for the NEW
+    field (see set_func_expr/_func_expr_scale): a conc-domain field needs
+    the NA*volume correction, an n-domain one needs none, since a
+    Function's own x0, x1, ... are always evaluated against the connected
+    pools' raw N regardless of which field its own output happens to
+    land in (verified directly, see _func_expr_scale's own comment)."""
+    target_id, old_dest = _stim_field(f)
+    if target_id is None:
+        return
+    new_dest = "set" + new_field[0].upper() + new_field[1:]
+    if new_dest == old_dest:
+        return
+    clean_expr = clean_func_expr(f)
+    for m in f.msgOut:
+        msg = moose.element(m)
+        if "valueOut" in msg.srcFieldsOnE1:
+            moose.delete(msg)
+            break
+    moose.connect(f, "valueOut", moose.element(target_id), new_dest)
+    set_func_expr(f, clean_expr)
+
+
 @app.post("/api/update_stim")
 def update_stim():
     body = request.json or {}
@@ -1734,6 +1807,12 @@ def update_stim():
         return jsonify({"error": f"node not found: {node_id}"}), 404
 
     f = moose.element(node_id)
+    if "field" in fields:
+        new_field = fields.pop("field")
+        if new_field not in _FIELD_NAMES:
+            return jsonify({"error": f"invalid field: {new_field}"}), 400
+        _rewire_stim_field(f, new_field)
+
     # _check_stim_expr samples the expression as a pure function of t --
     # only meaningful for a genuine zero-input stimulus. A general
     # function's own expr depends on its live pool inputs (x0, x1, ...),

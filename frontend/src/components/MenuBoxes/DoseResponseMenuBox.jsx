@@ -12,12 +12,27 @@ import {
   Alert,
   Tooltip,
 } from '@mui/material';
+import { conc } from '../../unitConversions';
+
+// Same display-rounding convention as PropertiesMenuBox's own formatNumber.
+function formatNumber(value) {
+  if (!Number.isFinite(value)) return '';
+  if (value === 0) return '0';
+  const abs = Math.abs(value);
+  if (abs < 1e-3 || abs >= 1e6) return value.toExponential(4);
+  return String(Number(value.toPrecision(5)));
+}
 
 // Mirrors xdoser.g's own 8 concentration-range toggles -- decade 0 is
-// 0.1 nM (1e-7 mM, matching this app's mM-valued concInit), each
-// subsequent decade x10 (see sim_runner.py's dose_concentrations, which
-// this must stay in step with).
-const DECADE_LABELS = ['0.1 nM', '1 nM', '10 nM', '100 nM', '1 µM', '10 µM', '100 µM', '1 mM'];
+// 1e-7 mM, each subsequent decade x10 (see sim_runner.py's
+// dose_concentrations, which this must stay in step with; the decade
+// *index* sent to the backend is unaffected by the unit chosen here --
+// only this dropdown's own label text reflects it).
+const DECADE_BASE_MM = [1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1];
+
+function decadeLabels(concUnit) {
+  return DECADE_BASE_MM.map((mM) => `${formatNumber(conc.toDisplay(mM, concUnit))} ${concUnit}`);
+}
 
 function poolOptions(nodes) {
   // An enzyme's hidden complex pool is never something you'd dose or
@@ -31,9 +46,10 @@ function poolOptions(nodes) {
 // menuComponents), so a plain local useState would be thrown away the
 // moment the user switched to another tab and back. The resulting curve
 // itself is rendered in the Plots tab (see PlotsPanel), not inline here.
-export default function DoseResponseMenuBox({ flowGraph, params, setParams, running, error, onStart, onHalt }) {
+export default function DoseResponseMenuBox({ flowGraph, params, setParams, running, error, onStart, onHalt, concUnit }) {
   const pools = poolOptions(flowGraph.nodes);
   const setField = (key, value) => setParams((p) => ({ ...p, [key]: value }));
+  const decadeLabelsForUnit = decadeLabels(concUnit);
 
   return (
     <Box sx={{ p: 2, background: '#f5f5f5', borderRadius: 2, height: '100%', overflowY: 'auto' }}>
@@ -72,7 +88,7 @@ export default function DoseResponseMenuBox({ flowGraph, params, setParams, runn
           <FormControl fullWidth size="small" disabled={running}>
             <InputLabel>From</InputLabel>
             <Select label="From" value={params.minDecade} onChange={(e) => setField('minDecade', e.target.value)}>
-              {DECADE_LABELS.map((l, i) => (
+              {decadeLabelsForUnit.map((l, i) => (
                 <MenuItem key={i} value={i}>
                   {l}
                 </MenuItem>
@@ -84,7 +100,7 @@ export default function DoseResponseMenuBox({ flowGraph, params, setParams, runn
           <FormControl fullWidth size="small" disabled={running}>
             <InputLabel>To</InputLabel>
             <Select label="To" value={params.maxDecade} onChange={(e) => setField('maxDecade', e.target.value)}>
-              {DECADE_LABELS.map((l, i) => (
+              {decadeLabelsForUnit.map((l, i) => (
                 <MenuItem key={i} value={i}>
                   {l}
                 </MenuItem>

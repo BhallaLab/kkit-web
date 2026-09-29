@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import {
   Box,
   Typography,
@@ -16,6 +17,16 @@ import {
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import { time, timeUnitAbbrev } from '../../unitConversions';
+
+// Same display-rounding convention as PropertiesMenuBox's own formatNumber.
+function formatNumber(value) {
+  if (!Number.isFinite(value)) return '';
+  if (value === 0) return '0';
+  const abs = Math.abs(value);
+  if (abs < 1e-3 || abs >= 1e6) return value.toExponential(4);
+  return String(Number(value.toPrecision(5)));
+}
 
 export default function RunMenuBox({
   onStart,
@@ -27,6 +38,7 @@ export default function RunMenuBox({
   setRuntime,
   plotDt,
   setPlotDt,
+  timeUnit,
   findSimParsed,
   findSimEntityMap,
   findSimFileName,
@@ -37,9 +49,38 @@ export default function RunMenuBox({
   onFindSimEntityChange,
   onFindSimRun,
 }) {
+  // runtime/plotDt themselves stay in native seconds (see App.jsx -- they
+  // also feed /api/run/start, dose response's own settle time, and get
+  // saved/loaded as-is in the SBML file's runSettings, none of which know
+  // about display units at all) -- only *this panel's own* text fields
+  // show/accept the currently-selected time unit, converting back to
+  // native on every keystroke. Recomputed once when this panel becomes
+  // visible (mirrors PropertiesMenuBox's own "not live" convention, see
+  // its own matching comment), not on every runtime/plotDt/timeUnit
+  // change thereafter.
+  const [runtimeText, setRuntimeText] = useState(() => formatNumber(time.toDisplay(parseFloat(runtime) || 0, timeUnit)));
+  const [plotDtText, setPlotDtText] = useState(() => formatNumber(time.toDisplay(parseFloat(plotDt) || 0, timeUnit)));
+  useEffect(() => {
+    setRuntimeText(formatNumber(time.toDisplay(parseFloat(runtime) || 0, timeUnit)));
+    setPlotDtText(formatNumber(time.toDisplay(parseFloat(plotDt) || 0, timeUnit)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleRuntimeTextChange = (text) => {
+    setRuntimeText(text);
+    const parsed = parseFloat(text);
+    if (Number.isFinite(parsed)) setRuntime(String(time.toNative(parsed, timeUnit)));
+  };
+  const handlePlotDtTextChange = (text) => {
+    setPlotDtText(text);
+    const parsed = parseFloat(text);
+    if (Number.isFinite(parsed)) setPlotDt(String(time.toNative(parsed, timeUnit)));
+  };
+
   const runtimeNum = parseFloat(runtime);
   const plotDtNum = parseFloat(plotDt);
   const invalid = !(runtimeNum > 0) || !(plotDtNum > 0);
+  const abbrev = timeUnitAbbrev(timeUnit);
 
   const findSimBlocks = findSimParsed ? [...findSimParsed.stimuli, findSimParsed.readout] : [];
   const findSimAllMapped = findSimBlocks.length > 0 && findSimBlocks.every((b) => findSimEntityMap[b.id]);
@@ -55,20 +96,20 @@ export default function RunMenuBox({
           <TextField
             fullWidth
             size="small"
-            label="Runtime (s)"
+            label={`Runtime (${abbrev})`}
             type="number"
-            value={runtime}
-            onChange={(e) => setRuntime(e.target.value)}
+            value={runtimeText}
+            onChange={(e) => handleRuntimeTextChange(e.target.value)}
           />
         </Grid>
         <Grid size={6}>
           <TextField
             fullWidth
             size="small"
-            label="Plot dt (s)"
+            label={`Plot dt (${abbrev})`}
             type="number"
-            value={plotDt}
-            onChange={(e) => setPlotDt(e.target.value)}
+            value={plotDtText}
+            onChange={(e) => handlePlotDtTextChange(e.target.value)}
           />
         </Grid>
       </Grid>
@@ -105,8 +146,8 @@ export default function RunMenuBox({
           a spinner until the full time course comes back. */}
       {isRunning && (
         <Alert severity="info" sx={{ mt: 2 }}>
-          Simulating {runtime}s of model time -- this request blocks until it
-          finishes.
+          Simulating {runtimeText}
+          {abbrev} of model time -- this request blocks until it finishes.
         </Alert>
       )}
       {error && (
@@ -116,7 +157,8 @@ export default function RunMenuBox({
       )}
       {!isRunning && !error && lastRuntime && (
         <Alert severity="success" sx={{ mt: 2 }}>
-          Last run: {lastRuntime}s. See the Plots tab for results.
+          Last run: {formatNumber(time.toDisplay(lastRuntime, timeUnit))}
+          {abbrev}. See the Plots tab for results.
         </Alert>
       )}
 

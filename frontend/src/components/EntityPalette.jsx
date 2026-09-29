@@ -370,20 +370,20 @@ export default function EntityPalette({
       >
         <ConcChanIcon />
       </DragIcon>
-      <DragIcon type="stim" clickDisabled title="Drag onto a pool to drive its conc/concInit with a stimulus expression">
+      <DragIcon type="stim" clickDisabled title="Drag onto a pool to drive its conc/concInit or n/nInit (see its own Controls Field toggle) with a stimulus expression">
         <StimIcon />
       </DragIcon>
       <DragIcon
         type="sumfunc"
         clickDisabled
-        title="Drag onto a pool to drive its conc/concInit with the sum of whichever pools you connect to it afterward"
+        title="Drag onto a pool to drive its conc/concInit or n/nInit (see its own Controls Field toggle) with the sum of whichever pools you connect to it afterward"
       >
         <SumFuncIcon />
       </DragIcon>
       <DragIcon
         type="genfunc"
         clickDisabled
-        title="Drag onto a pool to drive its conc/concInit with a general expression of x0, x1, ... -- one per pool you connect to it afterward"
+        title="Drag onto a pool to drive its conc/concInit or n/nInit (see its own Controls Field toggle) with a general expression of x0, x1, ... -- one per pool you connect to it afterward"
       >
         <GenFuncIcon />
       </DragIcon>

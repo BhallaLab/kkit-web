@@ -4,10 +4,12 @@ import TuneIcon from '@mui/icons-material/Tune';
 import PlayCircleIcon from '@mui/icons-material/PlayCircle';
 import BuildIcon from '@mui/icons-material/Build';
 import StairsIcon from '@mui/icons-material/Stairs';
+import StraightenIcon from '@mui/icons-material/Straighten';
 import FileMenuBox from './components/MenuBoxes/FileMenuBox';
 import PropertiesMenuBox from './components/MenuBoxes/PropertiesMenuBox';
 import RunMenuBox from './components/MenuBoxes/RunMenuBox';
 import ToolsMenuBox from './components/MenuBoxes/ToolsMenuBox';
+import UnitsMenuBox from './components/MenuBoxes/UnitsMenuBox';
 import DoseResponseMenuBox from './components/MenuBoxes/DoseResponseMenuBox';
 import MainDisplay from './components/MainDisplay';
 
@@ -16,6 +18,7 @@ const MENU_ITEMS = [
   { key: 'Run', label: 'Run', Icon: PlayCircleIcon },
   { key: 'Properties', label: 'Properties', Icon: TuneIcon },
   { key: 'Tools', label: 'Tools', Icon: BuildIcon },
+  { key: 'Units', label: 'Units', Icon: StraightenIcon },
   { key: 'DoseResponse', label: 'Dose Response', Icon: StairsIcon },
 ];
 
@@ -69,6 +72,14 @@ export default function AppLayout({
   onFindSimFile,
   onFindSimEntityChange,
   onFindSimRun,
+  timeUnit,
+  setTimeUnit,
+  concUnit,
+  setConcUnit,
+  volumeUnit,
+  setVolumeUnit,
+  lengthUnit,
+  setLengthUnit,
   ...canvasProps
 }) {
   const menuComponents = {
@@ -102,6 +113,10 @@ export default function AppLayout({
         selectedGroupScore={selectedGroupScore}
         onUndoLayout={onUndoLayout}
         canUndoLayout={canUndoLayout}
+        timeUnit={timeUnit}
+        concUnit={concUnit}
+        volumeUnit={volumeUnit}
+        lengthUnit={lengthUnit}
       />
     ),
     Run: (
@@ -115,6 +130,7 @@ export default function AppLayout({
         setRuntime={setRuntime}
         plotDt={plotDt}
         setPlotDt={setPlotDt}
+        timeUnit={timeUnit}
         findSimParsed={findSimParsed}
         findSimEntityMap={findSimEntityMap}
         findSimFileName={findSimFileName}
@@ -127,6 +143,18 @@ export default function AppLayout({
       />
     ),
     Tools: <ToolsMenuBox flowGraph={canvasProps.flowGraph} />,
+    Units: (
+      <UnitsMenuBox
+        timeUnit={timeUnit}
+        setTimeUnit={setTimeUnit}
+        concUnit={concUnit}
+        setConcUnit={setConcUnit}
+        volumeUnit={volumeUnit}
+        setVolumeUnit={setVolumeUnit}
+        lengthUnit={lengthUnit}
+        setLengthUnit={setLengthUnit}
+      />
+    ),
     DoseResponse: (
       <DoseResponseMenuBox
         flowGraph={canvasProps.flowGraph}
@@ -136,6 +164,8 @@ export default function AppLayout({
         error={doseError}
         onStart={onDoseStart}
         onHalt={onDoseHalt}
+        concUnit={concUnit}
+        timeUnit={timeUnit}
       />
     ),
   };
@@ -168,6 +198,8 @@ export default function AppLayout({
             onAddPool={onAddPool}
             onAddReac={onAddReac}
             onAddEnz={onAddEnz}
+            concUnit={concUnit}
+            timeUnit={timeUnit}
           />
         </Box>
       </Box>

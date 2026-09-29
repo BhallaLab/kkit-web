@@ -1,9 +1,10 @@
 import Plot from 'react-plotly.js';
 import { Box, Typography } from '@mui/material';
+import { conc, time, timeUnitAbbrev } from '../unitConversions';
 
 // Plotly's legend already toggles a trace's visibility on click (its
 // default itemclick behavior) -- no extra wiring needed for that.
-function PlotWindow({ traces, style, layout }) {
+function PlotWindow({ traces, style, layout, timeUnit, concUnit }) {
   return (
     <Box sx={{ height: '100%', width: '100%', ...style }}>
       <Plot
@@ -11,8 +12,8 @@ function PlotWindow({ traces, style, layout }) {
         layout={{
           autosize: true,
           margin: { t: 30, r: 20, b: 40, l: 50 },
-          xaxis: { title: { text: 'Time (s)' } },
-          yaxis: { title: { text: 'Conc (mM)' } },
+          xaxis: { title: { text: `Time (${timeUnitAbbrev(timeUnit)})` } },
+          yaxis: { title: { text: `Conc (${concUnit})` } },
           legend: { orientation: 'h' },
           ...layout,
         }}
@@ -24,22 +25,22 @@ function PlotWindow({ traces, style, layout }) {
   );
 }
 
-function doseWindowContent(doseCurve, nameById) {
+function doseWindowContent(doseCurve, nameById, concUnit) {
   const inputName = nameById[doseCurve.inputId] || 'dose';
   const outputName = nameById[doseCurve.outputId] || 'response';
   return {
     traces: [
       {
-        x: doseCurve.points.map((p) => p.conc),
-        y: doseCurve.points.map((p) => p.response),
+        x: doseCurve.points.map((p) => conc.toDisplay(p.conc, concUnit)),
+        y: doseCurve.points.map((p) => conc.toDisplay(p.response, concUnit)),
         type: 'scatter',
         mode: 'lines+markers',
         name: `${outputName} vs ${inputName}`,
       },
     ],
     layout: {
-      xaxis: { title: { text: `${inputName} concInit (mM)` }, type: 'log' },
-      yaxis: { title: { text: `${outputName} conc (mM)` } },
+      xaxis: { title: { text: `${inputName} concInit (${concUnit})` }, type: 'log' },
+      yaxis: { title: { text: `${outputName} conc (${concUnit})` } },
     },
   };
 }
@@ -80,7 +81,7 @@ function findSimWindowContent(curve) {
   };
 }
 
-export default function PlotsPanel({ plotData, nodes, doseCurve, findSimCurve }) {
+export default function PlotsPanel({ plotData, nodes, doseCurve, findSimCurve, concUnit, timeUnit }) {
   const nameById = {};
   const colorById = {};
   const windowById = {};
@@ -90,9 +91,16 @@ export default function PlotsPanel({ plotData, nodes, doseCurve, findSimCurve })
     if (n.type === 'pool' && n.data.plotWindow) windowById[n.id] = n.data.plotWindow;
   });
 
+  // plotData.time/series come back from /api/run/start in native units
+  // (seconds, mM -- see sim_runner.py's run_simulation) -- converted here
+  // to whatever the Units menu currently has selected, the same "not
+  // live, only when this panel is actually showing" convention every
+  // other dialog uses (a fresh run always re-renders this panel from
+  // scratch anyway, so there's no separate "becomes visible" moment to
+  // gate on the way a persistent form field needs one).
   const toTrace = ([poolId, values]) => ({
-    x: plotData.time,
-    y: values,
+    x: plotData.time.map((t) => time.toDisplay(t, timeUnit)),
+    y: values.map((v) => conc.toDisplay(v, concUnit)),
     type: 'scatter',
     mode: 'lines',
     name: nameById[poolId] || poolId,
@@ -111,7 +119,7 @@ export default function PlotsPanel({ plotData, nodes, doseCurve, findSimCurve })
   // rare case they do, arbitrarily, same as either would displace normal
   // pool traces on its own.
   const overlayFor = (win) =>
-    doseCurve?.window === win ? doseWindowContent(doseCurve, nameById)
+    doseCurve?.window === win ? doseWindowContent(doseCurve, nameById, concUnit)
     : findSimCurve?.window === win ? findSimWindowContent(findSimCurve)
     : null;
   const window1 = overlayFor(1) ?? (traces1.length > 0 ? { traces: traces1 } : null);
@@ -135,8 +143,12 @@ export default function PlotsPanel({ plotData, nodes, doseCurve, findSimCurve })
 
   return (
     <Box sx={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column' }}>
-      {window1 && <PlotWindow {...window1} style={{ height: showBoth ? '50%' : '100%' }} />}
-      {window2 && <PlotWindow {...window2} style={{ height: showBoth ? '50%' : '100%' }} />}
+      {window1 && (
+        <PlotWindow {...window1} style={{ height: showBoth ? '50%' : '100%' }} timeUnit={timeUnit} concUnit={concUnit} />
+      )}
+      {window2 && (
+        <PlotWindow {...window2} style={{ height: showBoth ? '50%' : '100%' }} timeUnit={timeUnit} concUnit={concUnit} />
+      )}
     </Box>
   );
 }

@@ -375,6 +375,8 @@ export default function MainDisplay({
   selectedNode,
   displayTab,
   setDisplayTab,
+  concUnit,
+  timeUnit,
 }) {
   const canAddEnz = selectedNode?.type === 'pool' && !selectedNode.data.isEnzComplex;
 
@@ -435,7 +437,14 @@ export default function MainDisplay({
         </Box>
       </Box>
       <Box sx={{ flexGrow: 1, position: 'relative', display: displayTab === 1 ? 'block' : 'none' }}>
-        <PlotsPanel plotData={plotData} nodes={flowGraph.nodes} doseCurve={doseCurve} findSimCurve={findSimCurve} />
+        <PlotsPanel
+          plotData={plotData}
+          nodes={flowGraph.nodes}
+          doseCurve={doseCurve}
+          findSimCurve={findSimCurve}
+          concUnit={concUnit}
+          timeUnit={timeUnit}
+        />
       </Box>
     </Box>
   );

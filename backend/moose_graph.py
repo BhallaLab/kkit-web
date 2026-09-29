@@ -256,14 +256,14 @@ def describe_pool(path, plot_window=None):
     return _node(p, "pool", {
         "n": p.n,
         "nInit": p.nInit,
-        # MOOSE's own pool concentration fields are natively in mM
-        # (verified directly) -- converted here to this app's default
-        # display unit, uM (matching kkit's own DEFAULT_CONC_UNITS), so
-        # the raw mM value is never shown to or edited by the user.
-        "conc": p.conc * 1000.0,
-        "concInit": p.concInit * 1000.0,
-        "concUnit": _MICROMOLAR,
-        "concInitUnit": _MICROMOLAR,
+        # Native MOOSE units (mM) -- unconverted. The frontend's own units
+        # module (see unitConversions.js) applies whatever concentration
+        # unit the Units menu currently has selected, both for display
+        # (PropertiesMenuBox) and for plots; this backend response is
+        # deliberately unit-choice-agnostic so it never needs to know what
+        # that selection currently is.
+        "conc": p.conc,
+        "concInit": p.concInit,
         "diffConst": p.diffConst,
         "motorConst": p.motorConst,
         "volume": p.volume,
@@ -273,22 +273,25 @@ def describe_pool(path, plot_window=None):
     })
 
 
-def _kd_value(sub_order, prd_order, kf_display, kb_display):
+def _kd_value(sub_order, prd_order, kf_native, kb_native):
     """kd (or Keq, when sub_order == prd_order) for a reaction whose
-    already-uM-scaled forward/backward rates are kf_display/kb_display --
-    ported from xreac.g's do_update_reac_scaling. Same order both ways is
-    a dimensionless equilibrium constant (Keq = kf/kb, units cancel);
-    different orders is a real Kd with concentration units, taking the
-    (sub_order - prd_order)-th root of kb/kf so the units come out to a
-    single concentration power regardless of the reaction's order. None
-    when there isn't a meaningful ratio yet (a rate of exactly zero, or --
-    physically impossible for non-negative rates, but guarded anyway -- a
-    negative one)."""
+    forward/backward rates are kf_native/kb_native (raw MOOSE-native
+    values, mM-based -- NOT display-unit-scaled; the frontend rescales the
+    result the same "plain concentration" way it rescales Pool.conc,
+    unrelated to whatever order-dependent rate-constant scaling Kf/Kb
+    themselves need) -- ported from xreac.g's do_update_reac_scaling. Same
+    order both ways is a dimensionless equilibrium constant (Keq = kf/kb,
+    units cancel); different orders is a real Kd with concentration units,
+    taking the (sub_order - prd_order)-th root of kb/kf so the units come
+    out to a single concentration power regardless of the reaction's
+    order. None when there isn't a meaningful ratio yet (a rate of exactly
+    zero, or -- physically impossible for non-negative rates, but guarded
+    anyway -- a negative one)."""
     if sub_order == prd_order:
-        return kf_display / kb_display if kb_display != 0 else None
-    if kf_display == 0:
+        return kf_native / kb_native if kb_native != 0 else None
+    if kf_native == 0:
         return None
-    ratio = kb_display / kf_display
+    ratio = kb_native / kf_native
     if ratio < 0:
         return None
     exponent = 1.0 / (sub_order - prd_order)
@@ -307,28 +310,25 @@ def _kd_value(sub_order, prd_order, kf_display, kb_display):
 def describe_reac(path):
     r = moose.element(path)
     sub_order, prd_order = _reac_orders(r)
-    # Kf/Kb (concentration.time units, mM-based) and numKf/numKb (number.
-    # time units) are both native MOOSE fields, kept in sync internally --
-    # Kf/Kb are converted to uM display units here per this app's default
-    # concentration unit (see _conc_scale); numKf/numKb are left as-is
-    # (never concentration-based, so uM doesn't apply to them).
-    kf_display = r.Kf / _conc_scale(sub_order)
-    kb_display = r.Kb / _conc_scale(prd_order)
-
-    kd = _kd_value(sub_order, prd_order, kf_display, kb_display)
-    kd_label, kd_unit = ("Keq", "") if sub_order == prd_order else ("Kd", _MICROMOLAR)
+    # Raw MOOSE-native Kf/Kb (mM-based, order-dependent -- see
+    # _conc_scale's own comment for the exact dimensional convention) and
+    # numKf/numKb (number-based, never concentration-dependent) -- all
+    # unconverted. subOrder/prdOrder are included specifically so the
+    # frontend's own unit-conversion module can apply the same order-
+    # dependent rate-constant scaling _conc_scale used to apply here,
+    # against whatever concentration/time unit the Units menu currently
+    # has selected, instead of this backend baking in one fixed choice.
+    kd = _kd_value(sub_order, prd_order, r.Kf, r.Kb)
+    kd_label = "Keq" if sub_order == prd_order else "Kd"
 
     tau = 1.0 / (r.numKf + r.numKb) if (r.numKf + r.numKb) > 0 else None
 
     return _node(r, "reac", {
-        "Kf": kf_display, "Kb": kb_display,
-        "KfUnit": _rate_unit_label(sub_order, False),
-        "KbUnit": _rate_unit_label(prd_order, False),
+        "Kf": r.Kf, "Kb": r.Kb,
+        "subOrder": sub_order, "prdOrder": prd_order,
         "numKf": r.numKf, "numKb": r.numKb,
-        "numKfUnit": _rate_unit_label(sub_order, True),
-        "numKbUnit": _rate_unit_label(prd_order, True),
-        "kd": kd, "kdLabel": kd_label, "kdUnit": kd_unit,
-        "tau": tau, "tauUnit": "s",
+        "kd": kd, "kdLabel": kd_label,
+        "tau": tau,
     })
 
 
@@ -373,12 +373,11 @@ def rescale_reac_for_order_change(elem, old_sub_order, old_prd_order, changed_si
 def describe_enz(path):
     e = moose.element(path)
     is_mm = "MMenz" in e.className
-    # Km is a plain concentration (no reaction-order dependence the way
-    # Kf/Kb have) -- always a flat mM->uM conversion.
-    km_display = e.Km * 1000.0
+    # Native MOOSE units (mM for Km) -- unconverted, same reasoning as
+    # describe_pool's own conc/concInit.
+    km_display = e.Km
     extra = {
         "mechanism": "michaelis-menten" if is_mm else "explicit-complex",
-        "KmUnit": _MICROMOLAR,
         # The parent molecule this enzyme is attached to (like a
         # ConcChan's own parentPoolId above) -- this element's own MOOSE
         # parent, not a message neighbor. Distinct from "parentId" (set
@@ -389,13 +388,26 @@ def describe_enz(path):
     if is_mm:
         extra.update({"Km": km_display, "kcat": e.kcat})
     else:
-        # Km/kcat/ratio exist on explicit-complex Enz too, but as derived
-        # readouts of k1/k2/k3 (MOOSE recomputes them, not independently
-        # settable) -- included for display, not meant to be edited here.
-        # k1 is explicitly documented (Enz.cpp) as being in # units, not
-        # concentration units, so it gets no uM conversion.
+        # k1/k2 are MOOSE's own "number units" rate constants (Enz.cpp:
+        # "v is in number units") -- labeled numK1/numK2 here (mirroring
+        # how numKf/numKb are already labeled for Reac) so they're never
+        # confused with concK1, the concentration-based counterpart k1
+        # converts to/from internally via the mesh's volume (see
+        # Enz::setK1/getK1). k2 has no such counterpart -- it's already a
+        # plain unimolecular rate with no concentration term either way
+        # (Enz::setK2/getK2 just store/return k2_ directly) -- so there's
+        # nothing to add a second field for there. k3 is *literally* the
+        # same field as kcat: Enz.cpp's own Finfo for "k3" registers
+        # Enz::setKcat/getKcat directly as its setter/getter. Editing kcat
+        # (Enz::vSetKcat) rescales k2 to preserve ratio and recomputes
+        # concK1/k1 to preserve Km; editing Km (Enz::vSetKm) leaves k2/kcat
+        # (hence ratio) untouched and recomputes only concK1/k1 -- both
+        # exactly the "change one thing, MOOSE preserves the rest" rule the
+        # UI relies on, so k3 itself is never shown as a separate field.
         extra.update({
-            "k1": e.k1, "k2": e.k2, "k3": e.k3,
+            "k1": e.k1, "k1Label": "numK1",
+            "k2": e.k2, "k2Label": "numK2",
+            "concK1": e.concK1, "concK1Label": "K1",
             "Km": km_display, "kcat": e.kcat, "ratio": e.ratio,
         })
     return _node(e, "enz", extra)
@@ -442,9 +454,18 @@ def _func_expr_scale(func):
     directly (a "sum" pool coming back 1000x-plus too large, a "general"
     x0*x1+2 not landing anywhere near the intended small constant).
     Returns None if the function isn't actually driving a target pool yet
-    (nothing to scale against)."""
-    target_id, _ = _stim_field(func)
-    if target_id is None:
+    (nothing to scale against), or if it's wired to setN/setNInit rather
+    than setConc/setConcInit -- verified directly (a Function driving setN
+    with a plain, unscaled "x0*2" landed exactly on 2*(source pool's own
+    n), no correction needed or applied) that an n-domain target's own x0,
+    x1, ... are already the connected pools' raw N -- exactly what
+    FuncTerm::operator() evaluates against regardless of dest field -- so
+    there's nothing for this correction to undo in that case; it only
+    exists to convert that same raw-N evaluation back into the
+    concentration-domain terms a conc/concInit target's expr is authored
+    in."""
+    target_id, dest_field = _stim_field(func)
+    if target_id is None or dest_field not in ("setConc", "setConcInit"):
         return None
     return _FUNC_NA * moose.element(target_id).volume
 

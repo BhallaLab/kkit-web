@@ -18,6 +18,12 @@ import {
 } from './layoutSeed';
 import { computeFlowGroupLayout, computeUniformFlowLayout, DEFAULT_FLOW_WEIGHTS, SQUARE_FLOW_WEIGHTS } from './layoutGrid';
 import { computeLayoutScore } from './layoutScore';
+import {
+  DEFAULT_TIME_UNIT,
+  DEFAULT_CONC_UNIT,
+  DEFAULT_VOLUME_UNIT,
+  DEFAULT_LENGTH_UNIT,
+} from './unitConversions';
 
 const API_BASE = `http://${window.location.hostname}:5001`;
 
@@ -1145,6 +1151,14 @@ function absoluteFlowPosition(nodeId, flowNodes) {
 export default function App() {
   const [flowGraph, setFlowGraph] = useState({ nodes: [], edges: [] });
   const [status, setStatus] = useState('starting new model...');
+  // The Units menu's own four choices -- lifted here (rather than kept
+  // local to UnitsMenuBox) so every dialog/plot that needs to convert a
+  // native backend value can read the current selection. See
+  // unitConversions.js for the actual conversion math.
+  const [timeUnit, setTimeUnit] = useState(DEFAULT_TIME_UNIT);
+  const [concUnit, setConcUnit] = useState(DEFAULT_CONC_UNIT);
+  const [volumeUnit, setVolumeUnit] = useState(DEFAULT_VOLUME_UNIT);
+  const [lengthUnit, setLengthUnit] = useState(DEFAULT_LENGTH_UNIT);
   // A transient, always-visible popup (regardless of which left-menu tab is
   // showing) for actionable warnings like an invalid drop -- distinct from
   // `status`, which nothing renders anymore (see FileMenuBox's own removal
@@ -3575,6 +3589,14 @@ export default function App() {
         onConnect={onConnect}
         isValidConnection={isValidConnection}
         onEdgesChange={onEdgesChange}
+        timeUnit={timeUnit}
+        setTimeUnit={setTimeUnit}
+        concUnit={concUnit}
+        setConcUnit={setConcUnit}
+        volumeUnit={volumeUnit}
+        setVolumeUnit={setVolumeUnit}
+        lengthUnit={lengthUnit}
+        setLengthUnit={setLengthUnit}
       />
     </>
   );
