@@ -5,4 +5,7 @@ import { createContext } from 'react';
 // through node.data, which would risk stale closures.
 export const NodeActionsContext = createContext({
   onContainerResize: () => {},
+  cellWidthPx: 150,
+  cellHeightPx: 75,
+  iconScale: 1,
 });

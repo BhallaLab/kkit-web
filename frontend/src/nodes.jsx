@@ -45,17 +45,59 @@ function useFlipRemeasure(id, flipped, extra) {
   }, [id, flipped, extra, updateNodeInternals]);
 }
 
+// Same mechanism as useFlipRemeasure, for a different trigger: ScaleIcons
+// (NodeActionsContext's own iconScale) is a single GLOBAL value, not
+// per-node data, so EVERY node -- not just the one whose own flip/
+// orientation changed -- needs a remeasure the moment it changes, since it
+// resizes every Handle's own containing shape. Without this, a wire kept
+// rendering from each handle's pre-change position (visibly drifting off
+// the now-resized icon) until some UNRELATED edit happened to force a
+// remeasure (collapsing/expanding a group, etc.) -- verified directly:
+// this was exactly the "connectors don't hold onto the handles... until I
+// force a full redraw" bug report. Kept as its own hook (not folded into
+// useFlipRemeasure's own `extra` slot) since EnzNode/ConcChanNode already
+// use that slot for parentSide -- a node needs both triggers independently.
+function useIconScaleRemeasure(id, iconScale) {
+  const updateNodeInternals = useUpdateNodeInternals();
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    updateNodeInternals(id);
+  }, [id, iconScale, updateNodeInternals]);
+}
+
 // Shared with ContainerNode's own expanded-label sizing ("a font only 2
 // points bigger than the font used for pool names") -- kept as one named
 // constant rather than two copies of the literal 28 that could quietly
 // drift apart.
 const POOL_FONT_SIZE = 28;
 
-const baseStyle = {
-  padding: '4px 10px',
-  fontSize: POOL_FONT_SIZE,
-  border: '1px solid #333',
-};
+// baseStyle/complexPoolStyle used to be plain style objects; now that the
+// icon's own rendered size is a separate `iconScale` multiplier from the
+// node's fixed grid-cell size (see NodeActionsContext), every one of their
+// own pixel constants (padding, font size) has to scale with it at the
+// point of use -- these are now small factories, not static objects.
+function scaledBaseStyle(iconScale) {
+  return {
+    padding: `${4 * iconScale}px ${10 * iconScale}px`,
+    fontSize: POOL_FONT_SIZE * iconScale,
+    // `normal` (a font-relative KEYWORD, recomputed per element from its
+    // own font-size), not the browser default -- index.css's `:root` sets
+    // `font: 18px/145%`, and a PERCENTAGE line-height computes to a fixed
+    // px value at the point it's declared, which then INHERITS as that
+    // same fixed px into every descendant regardless of its own font-size
+    // (a well-known CSS gotcha). Left unset, this element's auto-sized
+    // height was governed by that inherited fixed px, not by its own
+    // (iconScale-scaled) fontSize -- verified directly: this was exactly
+    // why a pool's rendered box grew wider but not taller as ScaleIcons
+    // increased, text visibly overflowing a height that never grew.
+    lineHeight: 'normal',
+    border: '1px solid #333',
+  };
+}
 
 // An enzyme's hidden "cplx" pool is an implementation detail, not a
 // molecule the user manages directly -- rendered at a fraction of a normal
@@ -63,11 +105,15 @@ const baseStyle = {
 // transform wouldn't change what React Flow's ResizeObserver measures, and
 // Handles would end up anchored to the pre-transform box instead of the
 // visibly smaller one).
-const complexPoolStyle = {
-  padding: '1px 5px',
-  fontSize: 12,
-  border: '1px solid #333',
-};
+function scaledComplexPoolStyle(iconScale) {
+  return {
+    padding: `${1 * iconScale}px ${5 * iconScale}px`,
+    fontSize: 12 * iconScale,
+    // See scaledBaseStyle's own comment on why this is needed.
+    lineHeight: 'normal',
+    border: '1px solid #333',
+  };
+}
 
 function selectedStyle(selected) {
   return selected ? { boxShadow: '0 0 0 3px #1a73e8' } : {};
@@ -177,7 +223,15 @@ function ProductHandle({ flipped }) {
 export function PoolNode({ id, data, selected }) {
   const flipped = !!data.flipped;
   useFlipRemeasure(id, flipped);
-  const style = data.isEnzComplex ? complexPoolStyle : baseStyle;
+  const { cellWidthPx, cellHeightPx, iconScale } = useContext(NodeActionsContext);
+  useIconScaleRemeasure(id, iconScale);
+  // "Wide" (double grid-cell width) is only a thing for a long-named pool.
+  // ASSUMPTION: this file has no existing long-name flag/convention of its
+  // own to read (no data.isLongName etc.), so this mirrors App.jsx's
+  // presumed LONG_POOL_NAME_THRESHOLD with a plain character-count check --
+  // flag for reconciliation against that actual constant.
+  const isWide = (data.name?.length ?? 0) > 10;
+  const style = data.isEnzComplex ? scaledComplexPoolStyle(iconScale) : scaledBaseStyle(iconScale);
 
   const handleBadgeDragStart = (event) => {
     event.dataTransfer.setData('application/kkit-unplot', JSON.stringify({ poolId: id }));
@@ -185,16 +239,36 @@ export function PoolNode({ id, data, selected }) {
   };
 
   return (
-    // The extra wrapper (rather than putting the badge directly alongside
-    // the styled div) keeps its own box exactly the size of the pool
-    // rectangle -- the badge is positioned absolutely and protrudes outside
-    // it, which doesn't enlarge an inline-block parent's own layout size,
-    // so the Handles below are unaffected by whether the badge is showing.
-    <div style={{ position: 'relative', display: 'inline-block' }}>
+    // The outer wrapper is now the node's fixed grid-cell slot (same size
+    // for every pool of this wideness, regardless of its own rendered
+    // content) -- the inner styled div is flex-centered inside it and free
+    // to render at whatever size its own (iconScale-scaled) padding/font
+    // give it, overflowing the slot visibly if it's bigger than it.
+    <div
+      style={{
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'visible',
+        width: cellWidthPx * (isWide ? 2 : 1),
+        height: cellHeightPx,
+      }}
+    >
       <div
         style={{
           ...style,
           ...selectedStyle(selected),
+          // The nearest `position:relative` ancestor is what a Handle's
+          // own `position:absolute` percentages resolve against -- without
+          // this, they'd anchor to the OUTER (fixed grid-cell) wrapper
+          // instead of this div's own (content/iconScale-driven) box,
+          // silently detaching the connection point from wherever the
+          // pool's own visible edge actually ends up once it's not the
+          // same size as the cell (verified directly: this was exactly
+          // why a wire's endpoint stayed put while the pool itself visibly
+          // grew/shrank under it).
+          position: 'relative',
           background: data.color,
           color: getContrastTextColor(data.color),
           borderRadius: 2,
@@ -233,21 +307,50 @@ export function PoolNode({ id, data, selected }) {
 export function ReacNode({ id, data, selected }) {
   const flipped = !!data.flipped;
   useFlipRemeasure(id, flipped);
+  const { cellWidthPx, cellHeightPx, iconScale } = useContext(NodeActionsContext);
+  useIconScaleRemeasure(id, iconScale);
   return (
+    // Same fixed-outer/scaled-inner split as PoolNode -- a reac circle's
+    // own size is driven by its own (iconScale-scaled) padding+fontSize,
+    // NOT given the cell's own fixed width/height directly: doing that
+    // (an earlier version of this component) meant the circle never
+    // changed size at all as ScaleIcons changed (only the glyph's own
+    // font-size did, invisibly, inside an unchanging box) and rendered as
+    // a squashed OVAL at the cell's own 2:1 width:height ratio instead of
+    // a circle.
     <div
       style={{
-        ...baseStyle,
-        ...selectedStyle(selected),
-        background: data.color,
-        color: getContrastTextColor(data.color),
-        borderRadius: '50%',
-        textAlign: 'center',
-        fontSize: 48,
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'visible',
+        width: cellWidthPx,
+        height: cellHeightPx,
       }}
     >
-      <SubstrateHandle flipped={flipped} />
-      <ProductHandle flipped={flipped} />
-      &#8596;
+      <div
+        style={{
+          ...scaledBaseStyle(iconScale),
+          ...selectedStyle(selected),
+          // The nearest `position:relative` ancestor for the Handles below
+          // -- see PoolNode's own matching comment.
+          position: 'relative',
+          boxSizing: 'border-box',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: data.color,
+          color: getContrastTextColor(data.color),
+          borderRadius: '50%',
+          textAlign: 'center',
+          fontSize: 48 * iconScale,
+        }}
+      >
+        <SubstrateHandle flipped={flipped} />
+        <ProductHandle flipped={flipped} />
+        &#8596;
+      </div>
     </div>
   );
 }
@@ -273,6 +376,8 @@ export function EnzNode({ id, data, selected }) {
   const flipped = !!data.flipped;
   const parentSide = data.parentSide === 'top' ? 'top' : 'bottom';
   useFlipRemeasure(id, flipped, parentSide);
+  const { cellWidthPx, cellHeightPx, iconScale } = useContext(NodeActionsContext);
+  useIconScaleRemeasure(id, iconScale);
 
   // An enzyme's hidden complex pool is plotted via *this* icon (see
   // App.jsx's handleCanvasDrop/handleUnplot) rather than needing its own
@@ -287,43 +392,81 @@ export function EnzNode({ id, data, selected }) {
   };
 
   return (
-    // The clip-path lives on an inner decorative layer, not this outer
-    // container -- otherwise it would also clip away the substrate/product
-    // triangles, which deliberately protrude outside the visible shape.
-    <div style={{ position: 'relative', boxSizing: 'border-box', width: ENZ_WIDTH, height: ENZ_HEIGHT }}>
+    // The outer wrapper is the node's fixed grid-cell slot (same for every
+    // enzyme, regardless of iconScale). Inside it, a SECOND, unclipped
+    // wrapper sized to exactly the (scaled) ENZ_WIDTH/ENZ_HEIGHT is what
+    // the clip-path shape and every Handle below actually live in -- this
+    // is the Handles' own nearest `position:relative` ancestor (see
+    // PoolNode's own matching comment on why that matters), so their
+    // percentage offsets track the icon's own scaled size, not the outer
+    // cell's fixed one. The clip-path itself has to go on an INNER div one
+    // level further in (filling this wrapper), not on this wrapper
+    // directly: clip-path clips a whole element's painted subtree,
+    // including absolutely-positioned descendants that intentionally
+    // protrude past its own box (the substrate/product triangles) --
+    // putting it here instead would silently clip those triangles off.
+    <div
+      style={{
+        position: 'relative',
+        boxSizing: 'border-box',
+        width: cellWidthPx,
+        height: cellHeightPx,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'visible',
+      }}
+    >
       <div
         style={{
-          position: 'absolute',
-          inset: 0,
-          background: data.color,
-          clipPath: flipped ? ENZ_CLIP_PATH_LEFT : ENZ_CLIP_PATH_RIGHT,
-          ...selectedGlow(selected),
+          position: 'relative',
+          width: ENZ_WIDTH * iconScale,
+          height: ENZ_HEIGHT * iconScale,
+          // Without this, the outer wrapper's `display:flex` applies its
+          // DEFAULT flex-shrink:1 to this wrapper once its own explicit
+          // (iconScale-scaled) width/height exceed the outer cell's fixed
+          // size -- silently squeezing it back down toward the cell's own
+          // width instead of actually rendering at its intended scaled
+          // size (verified directly: at iconScale 2, a 220px-wide shape
+          // rendered at ~93px, clamped to roughly the cell's own width).
+          flexShrink: 0,
+          overflow: 'visible',
         }}
-      />
-      <SubstrateHandle flipped={flipped} />
-      <ProductHandle flipped={flipped} />
-      {/* The structural link to the enzyme's own real parent molecule --
-          on the top or bottom edge (mirroring the arrow's own notch at
-          75%/25% down, the same distance from the shaft's edge as the
-          opposite notch), never left/right so it never competes visually
-          with the substrate/product arrows there. Which of the two edges
-          is picked -- App.jsx's computeInitialParentSides, persisted as
-          data.parentSide -- is whichever one actually faces the real
-          parent pool, so the connector reads as "attached to the molecule"
-          instead of routing all the way around to a fixed side that may
-          be facing away from it. The 30/70 split still mirrors along with
-          the shaft on flip, moving from [0,65]% to [35,100]%. */}
-      <Handle
-        type="target"
-        position={parentSide === 'top' ? Position.Top : Position.Bottom}
-        id="enzSite"
-        style={{
-          ...dotHandleStyle,
-          left: flipped ? '70%' : '30%',
-          top: parentSide === 'top' ? '25%' : '75%',
-          transform: 'translate(-50%, -50%)',
-        }}
-      />
+      >
+        <div
+          style={{
+            width: '100%',
+            height: '100%',
+            background: data.color,
+            clipPath: flipped ? ENZ_CLIP_PATH_LEFT : ENZ_CLIP_PATH_RIGHT,
+            ...selectedGlow(selected),
+          }}
+        />
+        <SubstrateHandle flipped={flipped} />
+        <ProductHandle flipped={flipped} />
+        {/* The structural link to the enzyme's own real parent molecule --
+            on the top or bottom edge (mirroring the arrow's own notch at
+            75%/25% down, the same distance from the shaft's edge as the
+            opposite notch), never left/right so it never competes visually
+            with the substrate/product arrows there. Which of the two edges
+            is picked -- App.jsx's computeInitialParentSides, persisted as
+            data.parentSide -- is whichever one actually faces the real
+            parent pool, so the connector reads as "attached to the molecule"
+            instead of routing all the way around to a fixed side that may
+            be facing away from it. The 30/70 split still mirrors along with
+            the shaft on flip, moving from [0,65]% to [35,100]%. */}
+        <Handle
+          type="target"
+          position={parentSide === 'top' ? Position.Top : Position.Bottom}
+          id="enzSite"
+          style={{
+            ...dotHandleStyle,
+            left: flipped ? '70%' : '30%',
+            top: parentSide === 'top' ? '25%' : '75%',
+            transform: 'translate(-50%, -50%)',
+          }}
+        />
+      </div>
       {data.complexPlotWindow && (
         <div
           draggable
@@ -361,57 +504,82 @@ export function ConcChanNode({ id, data, selected }) {
   const flipped = !!data.flipped;
   const parentSide = data.parentSide === 'top' ? 'top' : 'bottom';
   useFlipRemeasure(id, flipped, parentSide);
-  const { width, height } = CONC_CHAN_SIZE;
-  const capRx = 10;
-  const railY = 6;
+  const { cellWidthPx, cellHeightPx, iconScale } = useContext(NodeActionsContext);
+  useIconScaleRemeasure(id, iconScale);
+  // The tube's own drawn geometry (overall size plus cap radius/rail
+  // offset) all scales together by iconScale, so the cylinder stays
+  // proportional rather than distorting at iconScale !== 1.
+  const width = CONC_CHAN_SIZE.width * iconScale;
+  const height = CONC_CHAN_SIZE.height * iconScale;
+  const capRx = 10 * iconScale;
+  const railY = 6 * iconScale;
   return (
-    <div style={{ position: 'relative', width, height }}>
-      <svg
-        width={width}
-        height={height}
-        style={{ position: 'absolute', inset: 0, overflow: 'visible', ...selectedGlow(selected) }}
-      >
-        <line x1={capRx} y1={railY} x2={width - capRx} y2={railY} stroke="#333" strokeWidth="2" />
-        <line x1={capRx} y1={height - railY} x2={width - capRx} y2={height - railY} stroke="#333" strokeWidth="2" />
-        <ellipse cx={capRx} cy={height / 2} rx={capRx - 1} ry={height / 2 - railY} fill={data.color} stroke="#333" strokeWidth="2" />
-        <ellipse
-          cx={width - capRx}
-          cy={height / 2}
-          rx={capRx - 1}
-          ry={height / 2 - railY}
-          fill={data.color}
-          stroke="#333"
-          strokeWidth="2"
+    // Outer wrapper is the fixed grid-cell slot. A SECOND, unclipped
+    // wrapper sized to exactly the (scaled) tube dimensions holds the svg
+    // plus every Handle and the name label -- the Handles' own nearest
+    // `position:relative` ancestor (see PoolNode's/EnzNode's own matching
+    // comment), so their percentage offsets track the tube's own scaled
+    // size, not the outer cell's fixed one.
+    <div
+      style={{
+        position: 'relative',
+        width: cellWidthPx,
+        height: cellHeightPx,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'visible',
+      }}
+    >
+      {/* flexShrink:0 -- see EnzNode's own matching comment. */}
+      <div style={{ position: 'relative', width, height, flexShrink: 0, overflow: 'visible' }}>
+        <svg
+          width={width}
+          height={height}
+          style={{ overflow: 'visible', ...selectedGlow(selected) }}
+        >
+          <line x1={capRx} y1={railY} x2={width - capRx} y2={railY} stroke="#333" strokeWidth="2" />
+          <line x1={capRx} y1={height - railY} x2={width - capRx} y2={height - railY} stroke="#333" strokeWidth="2" />
+          <ellipse cx={capRx} cy={height / 2} rx={capRx - 1} ry={height / 2 - railY} fill={data.color} stroke="#333" strokeWidth="2" />
+          <ellipse
+            cx={width - capRx}
+            cy={height / 2}
+            rx={capRx - 1}
+            ry={height / 2 - railY}
+            fill={data.color}
+            stroke="#333"
+            strokeWidth="2"
+          />
+        </svg>
+        {/* Same real-parent-pool side selection as EnzNode's own enzSite
+            (see computeInitialParentSides/data.parentSide) -- mirrors
+            between the tube's two rails (0%/100% down) rather than
+            enzSite's 25%/75%, since a ConcChan has no shaft notch to line
+            up with. */}
+        <Handle
+          type="target"
+          position={parentSide === 'top' ? Position.Top : Position.Bottom}
+          id="chanParent"
+          style={{ ...dotHandleStyle, left: '50%', top: parentSide === 'top' ? '0%' : '100%', transform: 'translate(-50%, -50%)' }}
         />
-      </svg>
-      {/* Same real-parent-pool side selection as EnzNode's own enzSite
-          (see computeInitialParentSides/data.parentSide) -- mirrors
-          between the tube's two rails (0%/100% down) rather than
-          enzSite's 25%/75%, since a ConcChan has no shaft notch to line
-          up with. */}
-      <Handle
-        type="target"
-        position={parentSide === 'top' ? Position.Top : Position.Bottom}
-        id="chanParent"
-        style={{ ...dotHandleStyle, left: '50%', top: parentSide === 'top' ? '0%' : '100%', transform: 'translate(-50%, -50%)' }}
-      />
-      <ChanInHandle flipped={flipped} />
-      <ChanOutHandle flipped={flipped} />
-      {/* The name sits inside the hollow of the tube, between the two
-          rails, rather than floating above it. */}
-      <div
-        style={{
-          position: 'absolute',
-          inset: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: 12,
-          fontWeight: 'bold',
-          pointerEvents: 'none',
-        }}
-      >
-        {data.name}
+        <ChanInHandle flipped={flipped} />
+        <ChanOutHandle flipped={flipped} />
+        {/* The name sits inside the hollow of the tube, between the two
+            rails, rather than floating above it. */}
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 12 * iconScale,
+            fontWeight: 'bold',
+            pointerEvents: 'none',
+          }}
+        >
+          {data.name}
+        </div>
       </div>
     </div>
   );
@@ -423,36 +591,61 @@ export function ConcChanNode({ id, data, selected }) {
 // as an enzyme's structural parent link.
 export const STIM_CLIP_PATH = 'polygon(55% 0%, 15% 55%, 45% 55%, 30% 100%, 85% 40%, 55% 40%)';
 
-export function StimNode({ data, selected }) {
+export function StimNode({ id, data, selected }) {
+  const { cellWidthPx, cellHeightPx, iconScale } = useContext(NodeActionsContext);
+  useIconScaleRemeasure(id, iconScale);
   return (
-    <div style={{ position: 'relative', width: 46, height: 56 }}>
-      <div
-        style={{
-          position: 'absolute',
-          inset: 0,
-          background: data.color,
-          clipPath: STIM_CLIP_PATH,
-          ...selectedGlow(selected),
-        }}
-      />
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        id="stimTip"
-        style={{ ...dotHandleStyle, left: '38%', top: '95%', transform: 'translate(-50%, -50%)' }}
-      />
-      <div
-        style={{
-          position: 'absolute',
-          bottom: -16,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          fontSize: 11,
-          fontWeight: 'bold',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {data.name}
+    // Outer wrapper is the fixed grid-cell slot. A SECOND, unclipped
+    // wrapper sized to exactly the (scaled) 46x56 bolt dimensions holds
+    // the clip-path shape, its Handle, and the name label -- the Handle's
+    // own nearest `position:relative` ancestor (see PoolNode's/EnzNode's
+    // own matching comment), so its offset tracks the bolt's own scaled
+    // size rather than the outer cell's fixed one; also keeps the Handle
+    // out from under the clip-path itself (same reasoning as EnzNode's
+    // own matching comment -- the bolt's clip-path has a lot of "empty",
+    // clipped-away area within its own bounding box the handle could
+    // otherwise land in).
+    <div
+      style={{
+        position: 'relative',
+        width: cellWidthPx,
+        height: cellHeightPx,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'visible',
+      }}
+    >
+      {/* flexShrink:0 -- see EnzNode's own matching comment. */}
+      <div style={{ position: 'relative', width: 46 * iconScale, height: 56 * iconScale, flexShrink: 0, overflow: 'visible' }}>
+        <div
+          style={{
+            width: '100%',
+            height: '100%',
+            background: data.color,
+            clipPath: STIM_CLIP_PATH,
+            ...selectedGlow(selected),
+          }}
+        />
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          id="stimTip"
+          style={{ ...dotHandleStyle, left: '38%', top: '95%', transform: 'translate(-50%, -50%)' }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            bottom: -16,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            fontSize: 11,
+            fontWeight: 'bold',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {data.name}
+        </div>
       </div>
     </div>
   );
@@ -474,26 +667,46 @@ export function StimNode({ data, selected }) {
 export function FuncNode({ id, data, selected }) {
   const flipped = !!data.flipped;
   useFlipRemeasure(id, flipped);
+  const { cellWidthPx, cellHeightPx, iconScale } = useContext(NodeActionsContext);
+  useIconScaleRemeasure(id, iconScale);
   return (
+    // Same fixed-outer/scaled-inner split as ReacNode above.
     <div
       style={{
-        ...baseStyle,
-        ...selectedStyle(selected),
-        background: data.color,
-        color: getContrastTextColor(data.color),
-        borderRadius: '50%',
-        textAlign: 'center',
-        fontSize: 48,
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'visible',
+        width: cellWidthPx,
+        height: cellHeightPx,
       }}
     >
-      <Handle type="target" position={flipped ? Position.Right : Position.Left} />
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        id="stimTip"
-        style={{ ...dotHandleStyle, left: '50%', top: '95%', transform: 'translate(-50%, -50%)' }}
-      />
-      &#931;
+      <div
+        style={{
+          ...scaledBaseStyle(iconScale),
+          ...selectedStyle(selected),
+          position: 'relative',
+          boxSizing: 'border-box',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: data.color,
+          color: getContrastTextColor(data.color),
+          borderRadius: '50%',
+          textAlign: 'center',
+          fontSize: 48 * iconScale,
+        }}
+      >
+        <Handle type="target" position={flipped ? Position.Right : Position.Left} />
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          id="stimTip"
+          style={{ ...dotHandleStyle, left: '50%', top: '95%', transform: 'translate(-50%, -50%)' }}
+        />
+        &#931;
+      </div>
     </div>
   );
 }
@@ -513,49 +726,71 @@ export function FuncNode({ id, data, selected }) {
 export function GenFuncNode({ id, data, selected }) {
   const flipped = !!data.flipped;
   useFlipRemeasure(id, flipped);
+  const { cellWidthPx, cellHeightPx, iconScale } = useContext(NodeActionsContext);
+  useIconScaleRemeasure(id, iconScale);
   const numInputs = data.numInputs ?? 0;
   return (
+    // Same fixed-outer/scaled-inner split as ReacNode/FuncNode above; the
+    // numInputs badge anchors to the INNER (scaled) circle, same as the
+    // Handles, so it tracks the circle's own corner rather than the outer
+    // cell's fixed one.
     <div
       style={{
-        ...baseStyle,
-        ...selectedStyle(selected),
         position: 'relative',
-        background: data.color,
-        color: getContrastTextColor(data.color),
-        borderRadius: '50%',
-        textAlign: 'center',
-        fontSize: 32,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'visible',
+        width: cellWidthPx,
+        height: cellHeightPx,
       }}
     >
-      <Handle type="target" position={flipped ? Position.Right : Position.Left} />
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        id="stimTip"
-        style={{ ...dotHandleStyle, left: '50%', top: '95%', transform: 'translate(-50%, -50%)' }}
-      />
       <div
-        title={`Handles ${numInputs} input${numInputs === 1 ? '' : 's'} -- connect a pool to the left/right dot, referred to in the expression above as x0, x1, ... in the order they're connected`}
         style={{
-          position: 'absolute',
-          top: -10,
-          right: -10,
-          minWidth: 18,
-          height: 18,
-          padding: '0 3px',
-          borderRadius: 9,
-          background: '#333',
-          color: '#fff',
-          fontSize: 11,
-          fontWeight: 'bold',
+          ...scaledBaseStyle(iconScale),
+          ...selectedStyle(selected),
+          position: 'relative',
+          boxSizing: 'border-box',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
+          background: data.color,
+          color: getContrastTextColor(data.color),
+          borderRadius: '50%',
+          textAlign: 'center',
+          fontSize: 32 * iconScale,
         }}
       >
-        {numInputs}
+        <Handle type="target" position={flipped ? Position.Right : Position.Left} />
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          id="stimTip"
+          style={{ ...dotHandleStyle, left: '50%', top: '95%', transform: 'translate(-50%, -50%)' }}
+        />
+        <div
+          title={`Handles ${numInputs} input${numInputs === 1 ? '' : 's'} -- connect a pool to the left/right dot, referred to in the expression above as x0, x1, ... in the order they're connected`}
+          style={{
+            position: 'absolute',
+            top: -10,
+            right: -10,
+            minWidth: 18,
+            height: 18,
+            padding: '0 3px',
+            borderRadius: 9,
+            background: '#333',
+            color: '#fff',
+            fontSize: 11,
+            fontWeight: 'bold',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          {numInputs}
+        </div>
+        f(x)
       </div>
-      f(x)
     </div>
   );
 }

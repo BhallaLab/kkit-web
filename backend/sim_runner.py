@@ -20,6 +20,17 @@ def _compartment_path(model_path):
     return kinetics if moose.exists(kinetics) else model_path
 
 
+def _default_simdt_for(runtime):
+    """chemDt for a call with no recorded trace of its own (Dose Response,
+    FindSim) to smooth -- see build_solver's own comment for why a fixed
+    small constant is the wrong instinct here: runtime/100 gives an
+    adaptive solver a call granularity that scales with how long this
+    particular call actually runs (a 20s dose-response settle and a 3000s
+    one shouldn't use the same tick), floored at _DEFAULT_SIMDT so a very
+    short call still gets a reasonably fine one."""
+    return max(_DEFAULT_SIMDT, runtime / 100.0)
+
+
 def build_solver(model_path, simdt=_DEFAULT_SIMDT, stochastic=False):
     """(Re)builds the Ksolve/Gsolve/Dsolve/Stoich trio that actually drives
     the reaction system -- moose.loadModel(..., 'ee') only parses the model
@@ -46,16 +57,33 @@ def build_solver(model_path, simdt=_DEFAULT_SIMDT, stochastic=False):
     in the data, not a Plotly rendering choice) before jumping to the next
     actual solver update.
 
-    `simdt` is the caller's business, not this function's -- run_simulation
-    (the only caller that actually records a Table2 trace) clamps it to its
-    own plot_dt so the solver never updates *less* often than the trace is
-    sampled; everything else (Dose Response, FindSim) only ever samples a
-    pool's live value once per level/checkpoint, so there's no staircase to
-    guard against and no reason to run any finer than the plain default --
-    verified directly that silently inheriting a small plot_dt from the Run
-    panel's shared state (e.g. after fine-tuning a regular Run's plot) made
-    an otherwise-trivial FindSim run on a single-reaction model extraordinarily
-    slow for no benefit, since nothing was even reading the finer samples.
+    `simdt` is the caller's business, not this function's -- every caller
+    (run_simulation, start_dose_response, findsim_runner's own checkpoint
+    runs) is expected to derive it from that call's own actual runtime (see
+    _default_simdt_for) and pass the SAME value here for both ksolve and
+    dsolve, so "chemDt" is never split across pieces that could silently
+    drift out of step. Functions get no separate clock of their own for the
+    same reason (see the comment below) -- their own evaluation already
+    happens at exactly this same dt, automatically.
+
+    A *smaller* simdt is NOT "more correct" for an adaptive solver: LSODA
+    (and Gsolve's own event-driven algorithm) integrate accurately across
+    whatever interval they're asked for, internally sub-stepping as needed
+    -- verified directly against a 322-pool/126-reac/109-enz model
+    (synSynth7.g): simdt 0.01 vs 0.1 vs 1.0 landed within 5-6 significant
+    figures of each other on every pool checked, while simdt=0.01 made a
+    20s run take 13.6s wall-clock and a 3000s run take minutes (still
+    unfinished after 120s), against 0.7s and well under a minute
+    respectively at simdt=1.0 -- there's a real, substantial fixed cost per
+    call into the solver (each one restarting/re-evaluating the whole
+    reaction system from scratch), and asking for a needlessly short
+    interval buys nothing but many more of those calls. The failure mode a
+    too-large simdt actually risks is a Function/Stimulus whose own input
+    changes faster than simdt (aliasing, not an integration-accuracy
+    problem at all) -- something only a small runtime-relative simdt can
+    miss, which is why the floor below is expressed as a *fraction of that
+    call's own runtime*, not a fixed constant tuned for whatever model
+    happened to be tested last.
     """
     compt_path = _compartment_path(model_path)
     for name in ("stoich", "ksolve", "dsolve"):
@@ -160,12 +188,14 @@ def start_dose_response(model_path, input_id, output_id, concs, runtime, buffere
     Builds the solver once up front (this is one continuous series, not
     independent runs) and snapshots the input pool's original concInit/
     isBuffered so step_dose_response's caller can restore them via
-    finish_dose_response once the series ends or is halted. Uses
-    build_solver's plain default simdt -- each level only ever samples the
-    output pool's live value once, at the end of its settle time, so
-    there's no recorded trace whose smoothness a finer dt would improve
-    (see build_solver's own docstring)."""
-    build_solver(model_path)
+    finish_dose_response once the series ends or is halted. chemDt scales
+    with this call's own settle-time runtime (see _default_simdt_for) --
+    each level only ever samples the output pool's live value once, at the
+    end of its settle time, so there's no recorded trace whose smoothness a
+    finer dt would improve (see build_solver's own docstring), and a big
+    model run for a long settle time gets exactly the same speed win a
+    regular Run does."""
+    build_solver(model_path, _default_simdt_for(runtime))
     input_pool = moose.element(input_id)
     moose.reinit()
     return {
@@ -231,16 +261,24 @@ def run_simulation(model_path, runtime, plot_dt, stochastic=False):
     # A plot interval any finer than runtime/1000 buys essentially nothing
     # in a displayed trace while directly costing solver steps -- clamp up
     # rather than trust an arbitrarily small typed value; runtime/100 is
-    # already a comfortably smooth plot. Solving no finer than plot_dt
-    # itself (not a fraction of it) is enough to avoid a visible staircase
-    # -- the solver (LSODA, adaptive -- see build_solver) integrates
-    # accurately across whatever interval it's given, a fixed-step method's
-    # concern, not an adaptive one's. (Gsolve/GSSA has no such adaptive
-    # integration to rely on -- it's a discrete-event method -- but reusing
-    # the same clamped plot_dt as the solve tick here is still harmless,
-    # just a slightly finer sampling than strictly necessary.)
+    # already a comfortably smooth plot.
+    #
+    # chemDt is then set to this same (already-floored) plot_dt exactly --
+    # not min()'d against some separate, smaller constant, which is what
+    # this used to do (verified directly to be the actual cause of a
+    # 322-pool model taking minutes for a run that finishes in seconds once
+    # this matches plot_dt instead -- see build_solver's own comment for
+    # why that unconditional floor was never buying anything). Solving no
+    # finer than plot_dt itself (not a fraction of it) is enough to avoid a
+    # visible staircase in the recorded trace -- the solver (LSODA,
+    # adaptive -- see build_solver) integrates accurately across whatever
+    # interval it's given, a fixed-step method's concern, not an adaptive
+    # one's. (Gsolve/GSSA has no such adaptive integration to rely on --
+    # it's a discrete-event method -- but reusing the same plot_dt as the
+    # solve tick here is still harmless, just a slightly finer sampling
+    # than strictly necessary.)
     plot_dt = max(plot_dt, runtime / 1000.0)
-    build_solver(model_path, min(_DEFAULT_SIMDT, plot_dt), stochastic=stochastic)
+    build_solver(model_path, plot_dt, stochastic=stochastic)
     tables = build_plot_tables(model_path)
     moose.setClock(8, plot_dt)
     moose.useClock(8, _plots_path(model_path) + "/##", "process")

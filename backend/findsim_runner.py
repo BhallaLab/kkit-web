@@ -19,7 +19,7 @@ import math
 import moose
 
 from moose_graph import is_enz_complex
-from sim_runner import build_solver, start_dose_response, step_dose_response, finish_dose_response
+from sim_runner import build_solver, start_dose_response, step_dose_response, finish_dose_response, _default_simdt_for
 
 
 class FindSimError(Exception):
@@ -222,12 +222,6 @@ def run_findsim_timeseries(model_path, parsed, entity_map):
         raise FindSimError(f"no pool selected for readout entity '{readout['entityName']}'")
     out_pool = moose.element(out_id)
 
-    # Plain default simdt -- readouts are sampled directly off the pool's
-    # live value at each checkpoint (see build_solver's own docstring), not
-    # off a recorded Table2 trace, so there's nothing for a finer dt to
-    # smooth out here.
-    build_solver(model_path)
-
     # (time, priority, kind, pool, value) -- priority 0 (stim) sorts before
     # 1 (read) at equal t, so a readout landing on the same instant as a
     # stimulus sees the value it just set, mirroring FindSim's own
@@ -242,6 +236,16 @@ def run_findsim_timeseries(model_path, parsed, entity_map):
     for row in readout["data"]:
         events.append((row[0] * readout_tscale, 1, None, None))
     events.sort(key=lambda e: (e[0], e[1]))
+
+    # chemDt scales with this experiment's own total span (see
+    # sim_runner._default_simdt_for) -- readouts are sampled directly off
+    # the pool's live value at each checkpoint (see build_solver's own
+    # docstring), not off a recorded Table2 trace, so there's nothing for a
+    # finer dt to smooth out here; it only needs to be fine enough that no
+    # stimulus's own change is missed between checkpoints, same as any
+    # other caller.
+    total_span = events[-1][0] if events else 0.0
+    build_solver(model_path, _default_simdt_for(total_span))
 
     moose.reinit()
     sim_points = []

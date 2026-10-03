@@ -97,7 +97,13 @@ export function relaxPositions(ids, adjacency, initialPos, lockedIds) {
 // level) actually reach in practice. The candidate cells are anchored at
 // the relaxed cluster's own top-left corner (not a fixed (0,0)) so
 // distance comparisons are meaningful regardless of where in the model
-// this particular group actually sits.
+// this particular group actually sits. Each candidate's own x/y is its
+// CELL CENTRE (+colWidth/2, -rowHeight/2 from its corner), not its
+// corner -- `relaxedPos` is likewise expected to already be centre-based
+// (see chooseBestOrder's own initialPos, which is where real per-entity
+// positions enter this pipeline); comparing corner-anchored entities
+// against centre-anchored cells (or vice versa) would bias every match by
+// a systematic half-cell offset.
 export function assignNearestCells(orderedIds, relaxedPos, cols, colWidth, rowHeight) {
   const xs = orderedIds.map((id) => relaxedPos.get(id).x);
   const ys = orderedIds.map((id) => relaxedPos.get(id).y);
@@ -106,8 +112,8 @@ export function assignNearestCells(orderedIds, relaxedPos, cols, colWidth, rowHe
   const open = orderedIds.map((_, i) => ({
     col: i % cols,
     row: Math.floor(i / cols),
-    x: originX + (i % cols) * colWidth,
-    y: originY - Math.floor(i / cols) * rowHeight,
+    x: originX + (i % cols) * colWidth + colWidth / 2,
+    y: originY - Math.floor(i / cols) * rowHeight - rowHeight / 2,
   }));
 
   const assignment = new Map();
@@ -404,7 +410,19 @@ export function chooseBestOrder({ children, edges, rawById, sizes, cols, colWidt
   const unlockedAdjacency = buildLocalAdjacency(unlockedIds, edges);
   const cellSize = Math.max(colWidth, rowHeight);
   const origin = currentOrigin(children);
-  const initialPos = new Map(children.map((c) => [c.id, { x: c.x, y: c.y }]));
+  // Each entity's own CENTRE, not its raw top-left corner -- this is the
+  // real position that eventually reaches assignNearestCells' own
+  // centre-anchored candidate cells (via forceDirectedSeed's relaxation,
+  // which just carries whatever coordinate convention it's seeded with
+  // through to its output); using the raw corner here for entities of
+  // varying sizes systematically nearest-matched them to the wrong
+  // neighboring cell once cell size and entity size diverged.
+  const initialPos = new Map(
+    children.map((c) => {
+      const size = sizes.get(c.id) ?? { width: AUTO_LAYOUT_CELL, height: AUTO_LAYOUT_CELL };
+      return [c.id, { x: c.x + size.width / 2, y: c.y - size.height / 2 }];
+    })
+  );
 
   const seeds = [
     { strategy: 'force-directed', positions: forceDirectedSeed(ids, adjacency, initialPos, lockedIds, cellSize) },

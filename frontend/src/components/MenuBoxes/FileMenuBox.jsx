@@ -67,9 +67,24 @@ function formatTimestamp(iso) {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
-export default function FileMenuBox({ onGraphLoaded, flowGraph, plots, collapsedMap, runtime, setRuntime, plotDt, setPlotDt }) {
+export default function FileMenuBox({
+  onGraphLoaded,
+  flowGraph,
+  plots,
+  collapsedMap,
+  runtime,
+  setRuntime,
+  plotDt,
+  setPlotDt,
+  onPrintLayout,
+  onSaveLayoutSvg,
+  sx,
+  scaleIcons,
+}) {
   const [modelNotes, setModelNotes] = useState('');
   const [fileName, setFileName] = useState('model.xml');
+  const [svgFileName, setSvgFileName] = useState('layout.svg');
+  const [pdfFileName, setPdfFileName] = useState('layout.pdf');
   const [creator, setCreator] = useState('');
   const [license, setLicense] = useState(NO_LICENSE);
   const [modified, setModified] = useState('');
@@ -133,6 +148,8 @@ export default function FileMenuBox({ onGraphLoaded, flowGraph, plots, collapsed
         creator,
         license: license === NO_LICENSE ? '' : license,
         modified: nowIso,
+        sx,
+        scaleIcons,
       }),
     }).then((r) => r.json());
     if (res.error) return;
@@ -243,7 +260,7 @@ export default function FileMenuBox({ onGraphLoaded, flowGraph, plots, collapsed
         <Box sx={{ display: 'flex', gap: 0.5 }}>
           <Button
             variant="contained"
-            sx={{ ...MUTED_BUTTON_SX, minWidth: 56, flexShrink: 0 }}
+            sx={{ ...MUTED_BUTTON_SX, minWidth: 100, flexShrink: 0 }}
             onClick={handleSave}
           >
             Save
@@ -303,9 +320,40 @@ export default function FileMenuBox({ onGraphLoaded, flowGraph, plots, collapsed
 
         <Divider sx={{ my: 0.25 }} />
 
-        <Button variant="contained" sx={MUTED_BUTTON_SX} onClick={() => window.print()}>
-          Print Layout
-        </Button>
+        <Box sx={{ display: 'flex', gap: 0.5 }}>
+          <Button
+            variant="contained"
+            sx={{ ...MUTED_BUTTON_SX, minWidth: 100, flexShrink: 0 }}
+            onClick={() => onSaveLayoutSvg(svgFileName)}
+          >
+            Layout -&gt; SVG
+          </Button>
+          <TextField
+            fullWidth
+            size="small"
+            label="File name"
+            value={svgFileName}
+            onChange={(e) => setSvgFileName(e.target.value)}
+            sx={COMPACT_FIELD_SX}
+          />
+        </Box>
+        <Box sx={{ display: 'flex', gap: 0.5 }}>
+          <Button
+            variant="contained"
+            sx={{ ...MUTED_BUTTON_SX, minWidth: 100, flexShrink: 0 }}
+            onClick={() => onPrintLayout(pdfFileName)}
+          >
+            Layout -&gt; PDF
+          </Button>
+          <TextField
+            fullWidth
+            size="small"
+            label="File name"
+            value={pdfFileName}
+            onChange={(e) => setPdfFileName(e.target.value)}
+            sx={COMPACT_FIELD_SX}
+          />
+        </Box>
         <Button variant="contained" sx={MUTED_BUTTON_SX} onClick={() => setAboutKkitOpen(true)}>
           About KKIT
         </Button>

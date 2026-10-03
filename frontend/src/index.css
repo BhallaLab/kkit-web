@@ -135,12 +135,18 @@ code {
   background: var(--code-bg);
 }
 
-/* File menu's own "Print Layout" (see FileMenuBox.jsx) just calls
-   window.print() -- printing the whole page (menu bar, left panel, tabs)
-   would be useless, so this hides everything except the reaction-layout
-   canvas itself (#printable-canvas, set on its wrapper in AppLayout.jsx)
-   for the print pass only, then restores it for `visibility: visible`
-   (not `display`, so layout/sizing is unaffected on screen). */
+/* File menu's own "Print Layout"/"Save Layout to SVG" (see FileMenuBox.jsx)
+   -- printing (or exporting) the whole page (menu bar, left panel, the
+   Reaction Layout/Plots tab strip, the Pool/Enz/... palette row) would
+   show controls nobody wants in a printout, so this hides everything
+   except the diagram itself (#printable-canvas, set on MainDisplay's own
+   Canvas wrapper, deliberately *below* the tabs/palette in the tree, not
+   on some ancestor that would drag them along) for the print pass only,
+   restoring it with `visibility: visible` (not `display`, so layout/sizing
+   is unaffected on screen). App.jsx's own handlePrintLayout also force-
+   switches to the Reaction Layout tab first -- #printable-canvas is
+   `display: none` while the Plots tab is showing, and `visibility` alone
+   can't override that. */
 @media print {
   body * {
     visibility: hidden;
@@ -155,5 +161,15 @@ code {
     left: 0;
     width: 100%;
     height: 100%;
+  }
+  /* React Flow's own zoom/fit-view/lock/visual-mode buttons and the dotted
+     background grid live *inside* #printable-canvas too (see MainDisplay's
+     own <Controls>/<Background>) -- controls same as the tabs/palette
+     outside it, not "model contents", so these are excluded here on top of
+     the visibility flip above. handleSaveLayoutSvg's own html-to-image
+     `filter` skips the same two classes for the SVG export path. */
+  .react-flow__controls,
+  .react-flow__background {
+    display: none !important;
   }
 }

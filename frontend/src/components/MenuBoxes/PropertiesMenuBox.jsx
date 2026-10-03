@@ -254,6 +254,9 @@ function initialFieldsFor(node, units) {
   // (mM) or n/nInit (# of molecules), see the Controls Field toggle below.
   if (node.type === 'stim' || node.type === 'func' || node.type === 'genfunc') fields.field = node.data.field || 'conc';
   fields.flipped = !!node.data.flipped;
+  if (node.type === 'enz' || node.type === 'concchan') {
+    fields.parentSide = node.data.parentSide === 'top' ? 'top' : 'bottom';
+  }
   if (node.data.type === 'group' || node.data.type === 'compartment') {
     fields.collapsed = !!node.data.collapsed;
   }
@@ -306,14 +309,18 @@ export default function PropertiesMenuBox({
   parentName,
   onSave,
   onToggleFlip,
+  onToggleParentSide,
   onToggleCollapse,
   onAutoLayoutGroup,
   onAutoLayoutGroupByFlow,
   onAutoLayoutRecursive,
   onAutoLayoutRecursiveFlow,
   onClearLayoutLocks,
+  onSnapGroupToGrid,
   layoutRunning,
   layoutProgress,
+  snapToGrid,
+  setSnapToGrid,
   selectedGroupScore,
   onUndoLayout,
   canUndoLayout,
@@ -323,7 +330,33 @@ export default function PropertiesMenuBox({
   lengthUnit,
 }) {
   const units = { timeUnit, concUnit, volumeUnit, lengthUnit };
-  const [fields, setFields] = useState(null);
+  // eslint-disable-next-line prefer-const -- reassigned below (render-time
+  // correction), not just read.
+  let [fields, setFields] = useState(null);
+  // Render-time safety net, not a replacement for the reset effect below
+  // (which still owns the EVENTUAL state update plus the flush-on-
+  // switch-away side effect): an effect only runs AFTER the render that
+  // already has the NEW `node` prop, so without this there's one render
+  // where `node.type` already points at a freshly-selected node (e.g. a
+  // func/genfunc/stim, whose Controls-field section further down reads
+  // `fields.field`) while `fields` itself still belongs to whatever was
+  // selected BEFORE -- most other types never set a `field` key at all --
+  // verified directly: that exact one-frame mismatch is what crashed with
+  // "fields.field.startsWith is undefined" the instant a func node was
+  // selected (including via a click that doubles as a drag-start) right
+  // after some other node type had been showing. Keyed on node?.id (not
+  // the `node` object itself, whose identity can also change for reasons
+  // that don't mean "a different entity is now selected", e.g. a locked
+  // flag toggling) so this only recomputes when the selection actually
+  // changes, and corrects the LOCAL `fields` binding immediately (not just
+  // the state, which wouldn't take effect until next render) so nothing
+  // below in this same render ever reads the stale value.
+  const lastFieldsNodeId = useRef(node?.id);
+  if (lastFieldsNodeId.current !== node?.id) {
+    lastFieldsNodeId.current = node?.id;
+    fields = node ? initialFieldsFor(node, units) : null;
+    setFields(fields);
+  }
   // Tracks whether `fields` has any edit not yet sent to the backend --
   // set by setField, cleared on every explicit Save and whenever a fresh
   // node is selected. Read from a ref (not state) purely so the flush
@@ -652,6 +685,12 @@ export default function PropertiesMenuBox({
                 </Box>
               </Grid>
             )}
+            <Grid size={12}>
+              <FormControlLabel
+                control={<Checkbox checked={snapToGrid} onChange={(e) => setSnapToGrid(e.target.checked)} />}
+                label="Snap to grid (manual drag snaps to the nearest grid cell)"
+              />
+            </Grid>
             {selectedGroupScore && (
               <Grid size={12}>
                 <Tooltip title="Lower is better -- weighted total of connector length, crossings, icon overlaps, and footprint area. Same score auto-layout itself uses to judge a candidate.">
@@ -787,6 +826,18 @@ export default function PropertiesMenuBox({
                 Unlock Placed Items
               </Button>
             </Grid>
+            <Grid size={12}>
+              <Button
+                fullWidth
+                size="small"
+                variant="outlined"
+                disabled={layoutRunning}
+                onClick={() => onSnapGroupToGrid(node.id)}
+                title="Moves every direct child onto the nearest grid cell exactly where it already is -- unlike Square/Flow, never reorders or repacks anything. Use this to pull children back onto alignment after a resize or an edit made with Snap to grid turned off."
+              >
+                Snap to Grid
+              </Button>
+            </Grid>
           </Grid>
         )}
 
@@ -810,6 +861,24 @@ export default function PropertiesMenuBox({
                   ? 'Flip orientation (swap influx/efflux sides)'
                   : 'Flip orientation (swap substrate/product sides)'
               }
+            />
+          </Grid>
+        )}
+
+        {(node.type === 'enz' || node.type === 'concchan') && (
+          <Grid size={12}>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={fields.parentSide === 'top'}
+                  onChange={(e) => {
+                    const parentSide = e.target.checked ? 'top' : 'bottom';
+                    setField('parentSide', parentSide);
+                    onToggleParentSide(node.id, parentSide);
+                  }}
+                />
+              }
+              label="Flip vertically (swap top/bottom attachment side)"
             />
           </Grid>
         )}

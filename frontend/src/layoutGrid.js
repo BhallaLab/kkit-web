@@ -42,27 +42,19 @@ const FLOW_EDGE_TYPES = new Set(['substrate', 'product', 'chanIn', 'chanOut', 's
 // this module which ids need two cells -- see derivePitches' own
 // longNameWidth below).
 //
-// NOT a fixed module constant -- see computeFlowGroupLayout's own
-// `cellUnit` parameter and derivePitches below. AUTO_LAYOUT_CELL (and
-// everything scaled off it here) is a plain "kkit unit" count, with no
-// idea what a kkit unit maps to in actual screen pixels -- that mapping
-// is `scale` (App.jsx), computed FRESH per model file since different
-// .g files use wildly different native coordinate spacing (see
-// App.jsx's own computeAutoScale). A model whose native coordinates are
-// unusually large (verified directly against a real file, Vinu_23Sep_
-// with_gr.g: median nearest-neighbor spacing ~591 units, vs.
-// Kholodenko.g's own 3.0) drives `scale` down to its own floor -- but a
-// FIXED kkit-unit cell pitch, unaware of that, keeps reserving the same
-// small number of kkit units regardless, which now maps to far FEWER
-// pixels than usual, while an icon's own rendered CSS size doesn't
-// shrink to match -- exactly what read as icons "crammed too close...
-// in relation to their size and text size." Deriving the pitch from the
-// SAME per-model `cellUnit` App.jsx already computes (see its own
-// AUTO_LAYOUT_CELL_PX_TARGET) keeps a roughly constant ON-SCREEN cell
-// size regardless of a file's own native unit convention, instead of a
-// constant kkit-unit one.
-function derivePitches(cellUnit) {
-  const cellPitch = cellUnit * 1.5;
+// SX is THE grid pitch, directly -- the user's own explicit design (see
+// the "Integer grid rebuild" plan): a single global constant, in kkit
+// units, with NO independent per-object or per-group scale factor
+// anywhere. `vx = ix * SX` for columns, `vy = iy * (SX/2)` for rows (the
+// user's own point 3 -- rows sit half as far apart as columns). SX
+// itself is computed once per model load from the CANVAS's own on-screen
+// width (see App.jsx's own SX computation), not derived here -- this
+// function just hands back the two pitches callers already use
+// everywhere (`cellPitch`/`rowPitch`, kept under those existing names
+// rather than renamed, since that would touch every call site in this
+// file for no behavioural reason).
+export function derivePitches(SX) {
+  const cellPitch = SX;
   return {
     cellPitch,
     // Rows sit half as far apart (vertically) as columns do (horizontally)
@@ -72,7 +64,7 @@ function derivePitches(cellUnit) {
     // which is a horizontal quantity -- see gridToPixels' own comment) is
     // untouched.
     rowPitch: cellPitch / 2,
-    longNameWidth: cellUnit * 1.9, // childFootprint's own "long pool name" width is cellUnit*2; a bit of slack for float compare
+    longNameWidth: cellPitch * 1.9, // childFootprint's own "long pool name" width is cellPitch*2; a bit of slack for float compare
   };
 }
 
@@ -445,8 +437,48 @@ function computePhosphoKey(ids, rawById, seriesClusters) {
 // already-fixed category. There is no code path that could put a pool
 // on an even row or a non-pool on an odd one, rather than a check that
 // catches it after the fact.
-function categoryOf(id, rawById) {
+export function categoryOf(id, rawById) {
   return rawById[id]?.type === 'pool' ? 'pool' : 'nonpool';
+}
+
+// Inverse of gridToPixels' own row/col -> pixel math (see its own comment
+// for the forward direction) -- given a point ALREADY expressed as a
+// plain offset relative to the immediate parent's own stored absolute
+// position (`relX = absX - parentAbsX`, `relY = parentAbsY - absY` --
+// the caller's job; never a "centre of some footprint", see the
+// "Integer grid rebuild" plan's own point on why there is no longer
+// anything to centre) and which side of the pool/non-pool alternation
+// it belongs to, finds the nearest valid grid cell (ix, iy -- returned
+// as `{row, col}` for historical naming, row===iy, col===ix). Snaps to
+// the nearest row of the *correct* parity (pool rows are always odd,
+// non-pool always even -- see categoryOf's own comment on why that's
+// structural, never just checked after the fact) rather than the
+// nearest row overall, then the nearest column accounting for that
+// row's own half-cellPitch stagger when useOffset is on.
+export function nearestGridCell(relX, relY, category, cellPitch, rowPitch, useOffset = true) {
+  const rawRow = -relY / rowPitch;
+  const wantOdd = category === 'pool';
+  const rounded = Math.round(rawRow);
+  const roundedIsOdd = Math.abs(rounded % 2) === 1;
+  let row;
+  if (roundedIsOdd === wantOdd) {
+    row = rounded;
+  } else {
+    const lower = rounded - 1;
+    const upper = rounded + 1;
+    row = Math.abs(rawRow - lower) <= Math.abs(rawRow - upper) ? lower : upper;
+  }
+  // Negative row/col are legitimate (the user's own explicit allowance)
+  // -- the parent's own stored absolute position is ALWAYS used directly
+  // as the origin, with no rounding step (nothing to round: every write
+  // path guarantees it's already an exact SX-multiple from ITS OWN
+  // parent -- see the "Integer grid rebuild" plan), so an entity sitting
+  // left of or above that origin has every right to a negative
+  // column/row, not a floor of 0 that would otherwise silently pile
+  // every such entity onto the same edge row/column.
+  const shift = useOffset && Math.abs(row % 2) === 1 ? cellPitch / 2 : 0;
+  const col = Math.round((relX - shift) / cellPitch);
+  return { row, col };
 }
 
 // A tiny wrapper around a Map<'row,col', cell> plus a reverse id->{row,col}
@@ -515,6 +547,22 @@ function distributeSlotCounts(totalSlots, numRows) {
   return Array.from({ length: numRows }, (_, i) => base + (i < extra ? 1 : 0));
 }
 
+// Advances `col` past any cell `grid` already considers occupied --
+// pre-set blank, or (see buildInitialGrid's own locked-cell reservation
+// above) a locked sibling already `setEntity`'d in -- looping since a
+// locked entity can itself be wide (occupying two consecutive cells,
+// same as any other wide entity here), so a single-step check isn't
+// always enough. Subsumes the old single-blank-column-only skipBlank():
+// with only one blank ever reserved per row, this loop's `blank` check
+// still only ever fires once, so it's a strict superset, not a behavior
+// change for the no-locked-entity case.
+function nextFreeCol(grid, row, col, wide) {
+  while (grid.get(row, col) || (wide && grid.get(row, col + 1))) {
+    col += 1;
+  }
+  return col;
+}
+
 function fillSide(grid, sortedIds, rows, numCols, isWide, randomizeBlanks = false) {
   // One blank reserved per row BEFORE any entity is placed -- item 7/8's
   // "intersperse a blank in the middle of each row, to simplify
@@ -545,14 +593,10 @@ function fillSide(grid, sortedIds, rows, numCols, isWide, randomizeBlanks = fals
   let col = 0;
   let placedInRow = 0;
 
-  function skipBlank() {
-    if (col === blankColByRow.get(row)) col += 1;
-  }
-
   sortedIds.forEach((id) => {
     const wide = isWide(id);
     const cost = wide ? 2 : 1;
-    skipBlank();
+    col = nextFreeCol(grid, row, col, wide);
     // Advance BEFORE placing whenever this item would overshoot the
     // current row's own target, but only once the row already has at
     // least one real item in it -- an empty row still takes its first
@@ -577,11 +621,8 @@ function fillSide(grid, sortedIds, rows, numCols, isWide, randomizeBlanks = fals
       row = rows[rowIdx];
       col = 0;
       placedInRow = 0;
-      skipBlank();
+      col = nextFreeCol(grid, row, col, wide);
     }
-    // A wide entity's own SECOND cell landing exactly on the reserved
-    // blank would silently overwrite it -- shift one more column first.
-    if (wide && col + 1 === blankColByRow.get(row)) col += 1;
     grid.setEntity(row, col, id, wide);
     col += cost;
     placedInRow += cost;
@@ -632,7 +673,20 @@ function shuffled(arr) {
   return a;
 }
 
-function buildInitialGrid({ ids, edges, rawById, sizes, longNameWidth, randomizeItems = false, randomizeBlanks = false }) {
+function buildInitialGrid({
+  ids,
+  edges,
+  rawById,
+  sizes,
+  longNameWidth,
+  cellPitch,
+  rowPitch,
+  useOffset = true,
+  lockedIds = new Set(),
+  origin = { x: 0, y: 0 },
+  randomizeItems = false,
+  randomizeBlanks = false,
+}) {
   const pools = ids.filter((id) => rawById[id]?.type === 'pool');
   const nonPools = ids.filter((id) => rawById[id]?.type !== 'pool');
   const isWide = (id) => (sizes.get(id)?.width ?? 0) > longNameWidth;
@@ -673,6 +727,37 @@ function buildInitialGrid({ ids, edges, rawById, sizes, longNameWidth, randomize
   const grid = makeGrid();
   const poolRowIndices = Array.from({ length: rowsPerSide }, (_, i) => 2 * i + 1);
   const nonPoolRowIndices = Array.from({ length: rowsPerSide }, (_, i) => 2 * i);
+
+  // Reserve every locked sibling's own grid cell BEFORE placing the
+  // unlocked entities below (this is the actual fix for "a locked
+  // entity's position is ignored by subsequent auto-layout": previously
+  // buildInitialGrid had zero input about where a locked sibling already
+  // sits, so fillSide (below) could -- and did -- land an unlocked
+  // entity's cell right on top of it). `fillSide`'s own cell scan (see
+  // its own comment) already treats any pre-set entity cell as occupied,
+  // exactly like a pre-set blank, so nothing else needs to change there.
+  lockedIds.forEach((id) => {
+    const raw = rawById[id];
+    if (!raw) return;
+    // `raw.x`/`raw.y` is already the plain top-left of this entity's own
+    // grid cell (the "Integer grid rebuild" plan's own design -- no
+    // footprint/centre subtraction, ever) -- `origin` (the parent
+    // group's own current stored absolute position, used directly, no
+    // rounding) converts it to the parent-relative offset this whole
+    // function (and gridToPixels, downstream) operates in, so a locked
+    // sibling's cell lands on the SAME (row, col) an unlocked entity
+    // would be given if placed at this same absolute spot.
+    const relX = (raw.x ?? 0) - origin.x;
+    const relY = (raw.y ?? 0) - origin.y;
+    const { row, col } = nearestGridCell(relX, relY, categoryOf(id, rawById), cellPitch, rowPitch, useOffset);
+    // Two locked siblings snapping to the exact same nearest cell is a
+    // genuine on-screen overlap already (both are real, deliberately
+    // placed positions) -- nothing this function can resolve, so the
+    // first one reserved simply wins and the second is left unreserved
+    // rather than silently clobbering the first's own grid bookkeeping.
+    if (!grid.get(row, col)) grid.setEntity(row, col, id, isWide(id));
+  });
+
   fillSide(grid, sortedPools, poolRowIndices, numCols, isWide, randomizeBlanks);
   // A long-named entity gets the same double-cell treatment on EITHER
   // side, not just pools -- an enzyme's own real rendered width also
@@ -1226,6 +1311,16 @@ export function computeFlowGroupLayout({
   cellUnit = AUTO_LAYOUT_CELL,
   randomizeItems = false,
   randomizeBlanks = false,
+  // The group's own grid origin in ABSOLUTE kkit coordinates -- the same
+  // value the caller adds back to this function's own returned
+  // `positions` to place an unlocked child absolutely (see
+  // onAutoLayoutGroup's own originX/originY). Needed here only to convert
+  // a LOCKED child's own absolute x/y into this function's internal,
+  // origin-relative frame before reserving its cell (see
+  // buildInitialGrid's own comment) -- defaults to (0,0) for a caller
+  // that doesn't (yet) pass it, matching "no locked children" harmlessly
+  // since nothing is reserved in that case anyway.
+  origin = { x: 0, y: 0 },
 }) {
   const unlocked = children.filter((c) => !c.locked);
   const ids = unlocked.map((c) => c.id);
@@ -1233,7 +1328,13 @@ export function computeFlowGroupLayout({
   const localEdges = edges.filter((e) => idSet.has(e.source) && idSet.has(e.target));
   const seriesClusters = detectSeriesClusters(ids, rawById);
   const { inputBias } = computeFlowOrderAndBias(ids, localEdges, rawById);
-  const lockedIds = new Set(); // already excluded from `ids` entirely, matching the previous design's own locked-node treatment
+  // Real locked ids, not empty -- `ids` above already excludes them from
+  // the search entirely (matching the previous design's own locked-node
+  // treatment), but buildInitialGrid still needs the real set to reserve
+  // their own cells, and trySwapStep's own `lockedIds.has(cell.id)` guard
+  // (see its own comment) needs it to actually protect a locked cell it
+  // encounters while scanning for a swap partner.
+  const lockedIds = new Set(children.filter((c) => c.locked).map((c) => c.id));
   const lockedFlipped = (id) => !!rawById[id]?.flipped;
   // `cellUnit` defaults to the plain AUTO_LAYOUT_CELL constant for any
   // caller that doesn't (yet) pass App.jsx's own per-model, scale-aware
@@ -1242,7 +1343,19 @@ export function computeFlowGroupLayout({
   // convention pushes `scale` far from its usual range.
   const { cellPitch, rowPitch, longNameWidth } = derivePitches(cellUnit);
 
-  const { grid, numRows, numCols } = buildInitialGrid({ ids, edges: localEdges, rawById, sizes, longNameWidth, randomizeItems, randomizeBlanks });
+  const { grid, numRows, numCols } = buildInitialGrid({
+    ids,
+    edges: localEdges,
+    rawById,
+    sizes,
+    longNameWidth,
+    cellPitch,
+    rowPitch,
+    lockedIds,
+    origin,
+    randomizeItems,
+    randomizeBlanks,
+  });
   const startingGrid = cloneGrid(grid, ids, numRows, numCols);
   // Item 9's own flip pass now happens inside computeTotalLoss itself
   // (see its own comment, and layoutScore.js's refineFlips) -- every
@@ -1425,9 +1538,22 @@ function buildGroupRollupEdges(ids, allEdges, rawById) {
 // what gives the flow ordering and the distance/crossing scoring
 // something real to work with, since no real edge ever connects two
 // group boxes directly.
-export function computeUniformFlowLayout({ children, edges, rawById, sizes, weights = DEFAULT_FLOW_WEIGHTS, maxCycles = MAX_CYCLES, force = false }) {
+export function computeUniformFlowLayout({
+  children,
+  edges,
+  rawById,
+  sizes,
+  weights = DEFAULT_FLOW_WEIGHTS,
+  maxCycles = MAX_CYCLES,
+  force = false,
+  // Same reasoning as computeFlowGroupLayout's own `origin` param -- see
+  // its comment.
+  origin = { x: 0, y: 0 },
+}) {
   const unlocked = children.filter((c) => !c.locked);
   const ids = unlocked.map((c) => c.id);
+  const lockedChildren = children.filter((c) => c.locked);
+  const lockedIds = new Set(lockedChildren.map((c) => c.id));
   const localEdges = buildGroupRollupEdges(ids, edges, rawById);
   const lockedFlipped = () => false; // a group has no flip concept
   const seriesClusters = detectSeriesClusters(ids, rawById); // always empty for group names in practice -- harmless
@@ -1442,24 +1568,65 @@ export function computeUniformFlowLayout({ children, edges, rawById, sizes, weig
     ids.map((id) => sizes.get(id) ?? { width: AUTO_LAYOUT_CELL, height: AUTO_LAYOUT_CELL })
   );
   const numCols = cols;
-  const numRows = Math.max(1, Math.ceil(ids.length / numCols));
+  // Over-provisioned by `lockedChildren.length` rather than the exact
+  // count that will actually land inside this rectangle -- which locked
+  // cells fall inside it depends on where nearestUniformCell (below)
+  // places them, circular if this size were computed from that. Any
+  // locked cell landing OUTSIDE the plain unlocked-only rectangle can
+  // never collide with anything placeInOrder puts inside it anyway, so
+  // the worst case this needs to cover is literally every locked child
+  // landing inside -- a few unused blank rows in the (rare) worst case is
+  // a fine trade for guaranteeing every unlocked id still gets a real
+  // cell.
+  const numRows = Math.max(1, Math.ceil((ids.length + lockedChildren.length) / numCols));
   // Every id shares this same category -- see trySwapStep's own
   // categoryFn comment on how that collapses its usual pool/non-pool
   // split into "every occupied row is a legal candidate."
   const categoryFn = () => 'group';
 
+  // Inverse of this level's own plain (unoffset) grid<->pixel math (see
+  // gridToPixels with useOffset=false) -- there's no pool/non-pool
+  // alternation at this level (categoryFn above is uniform), so
+  // nearestGridCell's own row-parity enforcement doesn't apply here;
+  // this is the parity-agnostic equivalent used only at this outer,
+  // all-groups level.
+  function nearestUniformCell(relX, relY) {
+    const row = Math.max(0, Math.round(-relY / rowHeight));
+    const col = Math.max(0, Math.round(relX / colWidth));
+    return { row, col };
+  }
+
   function placeInOrder(orderedIds) {
     const g = makeGrid();
-    orderedIds.forEach((id, i) => g.setEntity(Math.floor(i / numCols), i % numCols, id, false));
-    // Every leftover cell in the grid's own rectangle (whenever N isn't an
-    // exact multiple of numCols) is marked blank, not left unset -- an
-    // unset cell is invisible to the swap search entirely (see
-    // trySwapStep's own bestCandidateFor: `if (!cell) continue`), so
-    // leaving it unset would silently waste that space rather than
-    // making it usable.
+    // Reserve every locked group's own cell first -- same fix as
+    // buildInitialGrid's own locked-cell reservation (see its comment),
+    // applied here since this level uses a completely separate,
+    // sequential-index packer instead of buildInitialGrid/fillSide.
+    lockedChildren.forEach((c) => {
+      // Same absolute -> parent-relative conversion as
+      // computeFlowGroupLayout's own locked-cell reservation -- see its
+      // comment. No footprint/centre involved: `c.x`/`c.y` is already the
+      // plain top-left of this group's own cell.
+      const relX = (c.x ?? 0) - origin.x;
+      const relY = (c.y ?? 0) - origin.y;
+      const { row, col } = nearestUniformCell(relX, relY);
+      if (!g.get(row, col)) g.setEntity(row, col, c.id, false);
+    });
+    let i = 0;
     for (let r = 0; r < numRows; r++) {
       for (let c = 0; c < numCols; c++) {
-        if (!g.get(r, c)) g.setBlank(r, c);
+        if (g.get(r, c)) continue; // already occupied by a locked sibling
+        if (i < orderedIds.length) {
+          g.setEntity(r, c, orderedIds[i], false);
+          i += 1;
+        } else {
+          // Every leftover cell in the grid's own rectangle is marked
+          // blank, not left unset -- an unset cell is invisible to the
+          // swap search entirely (see trySwapStep's own bestCandidateFor:
+          // `if (!cell) continue`), so leaving it unset would silently
+          // waste that space rather than making it usable.
+          g.setBlank(r, c);
+        }
       }
     }
     return g;
@@ -1498,7 +1665,7 @@ export function computeUniformFlowLayout({ children, edges, rawById, sizes, weig
     const innerStepsCap = MAX_INNER_STEPS_SAFETY_CAP(ids.length);
     const scoreCtx = { sizes, lockedFlipped, localEdges, cellPitch: colWidth, rowPitch: rowHeight, useOffset: false, categoryFn };
     for (let step = 0; step < innerStepsCap; step++) {
-      const swapped = trySwapStep(grid, ids, rawById, new Set(), positions, neighborsOf, numCols, triedThisCycle, scoreCtx);
+      const swapped = trySwapStep(grid, ids, rawById, lockedIds, positions, neighborsOf, numCols, triedThisCycle, scoreCtx);
       if (!swapped) break;
       swapped.forEach((id) => triedThisCycle.add(id));
       const updated = gridToPixels(grid, numRows, colWidth, rowHeight, false);

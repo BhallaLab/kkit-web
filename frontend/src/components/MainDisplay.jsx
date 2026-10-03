@@ -5,7 +5,7 @@ import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
 import ZoomInMapIcon from '@mui/icons-material/ZoomInMap';
 import '@xyflow/react/dist/style.css';
-import { nodeTypes } from '../nodes';
+import { nodeTypes, ENZ_CLIP_PATH_RIGHT } from '../nodes';
 import BendableEdge from '../BendableEdge';
 import { EdgeActionsContext } from '../EdgeContext';
 import { NodeActionsContext } from '../NodeActionsContext';
@@ -74,6 +74,26 @@ function DecoratedIcon() {
       <circle cx="12" cy="1" r="1.4" fill="currentColor" stroke="none" />
     </svg>
   );
+}
+
+// The user's own later request: a ScaleIcons +/- pair in the floating
+// Controls panel (not the Tools menu, where it lived first) -- a large and
+// a tiny enzyme shape (the same ENZ_CLIP_PATH_RIGHT nodes.jsx itself draws
+// an enzyme with) stand in for "bigger"/"smaller" icons directly, rather
+// than a generic zoom-style glyph that would read as changing the VIEW'S
+// own zoom (already covered by React Flow's own +/- above this) instead of
+// each icon's own rendered size.
+function EnzSizeIcon({ size }) {
+  return <div style={{ width: size, height: (size * 80) / 110, background: '#333', clipPath: ENZ_CLIP_PATH_RIGHT }} />;
+}
+
+// 0.1 per click (the user's own explicit step), clamped to a sensible
+// floor -- 0 or negative would collapse every icon to nothing, with no way
+// to see it to click back up from.
+const SCALE_ICONS_STEP = 0.1;
+const SCALE_ICONS_MIN = 0.1;
+function roundToStep(v) {
+  return Math.round(v * 10) / 10;
 }
 
 const VISUAL_MODE_ICON = {
@@ -200,8 +220,39 @@ function Canvas({
   visualMode,
   onCycleVisualMode,
   selectedNodeId,
+  canvasApiRef,
+  scaleIcons,
+  setScaleIcons,
 }) {
-  const { screenToFlowPosition, fitView } = useReactFlow();
+  const { screenToFlowPosition, fitView, getViewport, setViewport, getInternalNode } = useReactFlow();
+  const handleScaleIconsUp = useCallback(() => {
+    setScaleIcons((s) => roundToStep(s + SCALE_ICONS_STEP));
+  }, [setScaleIcons]);
+  const handleScaleIconsDown = useCallback(() => {
+    setScaleIcons((s) => Math.max(SCALE_ICONS_MIN, roundToStep(s - SCALE_ICONS_STEP)));
+  }, [setScaleIcons]);
+  // Exposes fitView/getViewport/setViewport up to App.jsx's own
+  // handlePrintLayout/handleSaveLayoutSvg (outside the ReactFlowProvider,
+  // so useReactFlow isn't callable there directly) -- a plain ref object
+  // populated here rather than forwardRef/useImperativeHandle threaded
+  // through MainDisplay and AppLayout, both otherwise-untouched
+  // pass-through layers for this. See App.jsx's own comment on why
+  // fitView specifically matters: onlyRenderVisibleElements (below) means
+  // a node currently panned/zoomed out of view isn't just visually
+  // clipped, it's not in the DOM at all, so print/SVG export silently
+  // missed it before a print/export first fits the whole diagram in.
+  // getCanvasWidth: the React Flow pane's own measured clientWidth, for
+  // the "Integer grid rebuild" plan's own SX derivation (a percentage of
+  // *this*, not window.innerWidth -- the side menu panels eat real width
+  // that useReactFlow itself has no concept of). Queried directly off the
+  // DOM (React Flow's own well-known `.react-flow` wrapper class) rather
+  // than a dedicated ref, since useReactFlow exposes no size accessor of
+  // its own and this is only ever called once per model load, not on
+  // every render.
+  const getCanvasWidth = useCallback(() => document.querySelector('.react-flow')?.clientWidth ?? null, []);
+  useEffect(() => {
+    if (canvasApiRef) canvasApiRef.current = { fitView, getViewport, setViewport, getInternalNode, getCanvasWidth };
+  }, [canvasApiRef, fitView, getViewport, setViewport, getInternalNode, getCanvasWidth]);
   // Only enabled once the selected node is actually part of what's
   // currently rendered -- a plain entity hidden inside a collapsed group,
   // or something no longer selected at all, has no on-screen box for
@@ -323,6 +374,20 @@ function Canvas({
         >
           <Background />
           <Controls>
+            {/* The user's own explicit placement: directly under React
+                Flow's own built-in +/- zoom buttons (which <Controls>
+                always renders first, ahead of any children here), not
+                interleaved with the other custom buttons below. */}
+            <ControlButton onClick={handleScaleIconsUp} title="Enlarge icons (ScaleIcons += 0.1)">
+              <EnzSizeIcon size={16} />
+            </ControlButton>
+            <ControlButton
+              onClick={handleScaleIconsDown}
+              disabled={scaleIcons <= SCALE_ICONS_MIN + 1e-9}
+              title="Shrink icons (ScaleIcons -= 0.1)"
+            >
+              <EnzSizeIcon size={6} />
+            </ControlButton>
             <ControlButton
               onClick={handleToggleAllCollapsed}
               title={allCollapsed ? 'Expand every group/compartment' : 'Collapse every group/compartment'}
@@ -379,6 +444,9 @@ export default function MainDisplay({
   setDisplayTab,
   concUnit,
   timeUnit,
+  canvasApiRef,
+  scaleIcons,
+  setScaleIcons,
 }) {
   const canAddEnz = selectedNode?.type === 'pool' && !selectedNode.data.isEnzComplex;
 
@@ -414,7 +482,7 @@ export default function MainDisplay({
           onUnplot={onUnplot}
           canAddEnz={canAddEnz}
         />
-        <Box sx={{ flexGrow: 1, position: 'relative' }}>
+        <Box id="printable-canvas" sx={{ flexGrow: 1, position: 'relative' }}>
           <ReactFlowProvider>
             <Canvas
               flowGraph={displayGraph}
@@ -434,6 +502,9 @@ export default function MainDisplay({
               visualMode={visualMode}
               onCycleVisualMode={onCycleVisualMode}
               selectedNodeId={selectedNode?.id}
+              canvasApiRef={canvasApiRef}
+              scaleIcons={scaleIcons}
+              setScaleIcons={setScaleIcons}
             />
           </ReactFlowProvider>
         </Box>

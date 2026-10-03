@@ -2059,6 +2059,8 @@ def save_sbml():
     # rather than re-deriving it server-side, since there's no invariant
     # depending on it actually being accurate to the second.
     modified = body.get("modified", "")
+    sx = body.get("sx")
+    scale_icons = body.get("scaleIcons")
     snapshot = _snapshot_positions(_current_model_path)
     group_snapshot = _snapshot_group_boxes(_current_model_path)
     stim_snapshot = _snapshot_stims(_current_model_path)
@@ -2076,7 +2078,7 @@ def save_sbml():
     content = _inject_stim_annotations(content, _current_model_path, stim_snapshot)
     content = _inject_collapsed_annotations(content, _current_model_path, collapsed)
     have_meta = creator or license_ or modified
-    if notes or (runtime is not None and plot_dt is not None) or have_meta:
+    if notes or (runtime is not None and plot_dt is not None) or have_meta or sx is not None:
         doc = libsbml.readSBMLFromString(content)
         model = doc.getModel()
         if notes:
@@ -2098,6 +2100,14 @@ def save_sbml():
                 f'<kkit:modelMeta xmlns:kkit="{_KKIT_NS}" creator="{html.escape(creator)}" '
                 f'license="{html.escape(license_)}" modified="{html.escape(modified)}"/>'
             )
+        if sx is not None:
+            # Frontend-only layout settings (kkit-unit grid pitch and the
+            # icon-size multiplier) -- same model-level-annotation
+            # mechanism as runSettings/modelMeta above.
+            annotation += (
+                f'<kkit:layoutGrid xmlns:kkit="{_KKIT_NS}" sx="{sx}" '
+                f'scaleIcons="{scale_icons if scale_icons is not None else 0.4}"/>'
+            )
         if annotation:
             model.setAnnotation(annotation)
         content = libsbml.writeSBMLToString(doc)
@@ -2108,6 +2118,7 @@ _RUN_SETTINGS_RE = re.compile(r'<kkit:runSettings\b[^>]*\bruntime="([^"]*)"[^>]*
 _MODEL_META_RE = re.compile(
     r'<kkit:modelMeta\b[^>]*\bcreator="([^"]*)"[^>]*\blicense="([^"]*)"[^>]*\bmodified="([^"]*)"'
 )
+_LAYOUT_GRID_RE = re.compile(r'<kkit:layoutGrid\b[^>]*\bsx="([^"]*)"[^>]*\bscaleIcons="([^"]*)"')
 
 
 @app.post("/api/load_sbml")
@@ -2118,6 +2129,7 @@ def load_sbml():
     notes = ""
     run_settings = None
     model_meta = None
+    layout_grid = None
     doc = libsbml.readSBMLFromString(content)
     model = doc.getModel()
     if model is not None:
@@ -2133,6 +2145,9 @@ def load_sbml():
                 "license": html.unescape(m.group(2)),
                 "modified": html.unescape(m.group(3)),
             }
+        m = _LAYOUT_GRID_RE.search(annotation)
+        if m:
+            layout_grid = {"sx": float(m.group(1)), "scaleIcons": float(m.group(2))}
     content_for_moose = _ensure_reaction_present(content, model)
     fd, path = tempfile.mkstemp(suffix=".xml")
     with os.fdopen(fd, "w") as f:
@@ -2151,6 +2166,7 @@ def load_sbml():
     result["notes"] = notes
     result["runSettings"] = run_settings
     result["modelMeta"] = model_meta
+    result["layoutGrid"] = layout_grid
     return jsonify(result)
 
 

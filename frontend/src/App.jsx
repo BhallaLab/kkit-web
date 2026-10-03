@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Snackbar, Alert } from '@mui/material';
 import { applyNodeChanges, applyEdgeChanges } from '@xyflow/react';
+import { buildStandaloneSvg } from './exportSvg';
 import AppLayout from './AppLayout';
 import { RAINBOW_16, resolveGroupColor } from './colorUtils';
 import {
@@ -16,7 +17,15 @@ import {
   computeFlipUpdates,
   optimizeGroupLayout,
 } from './layoutSeed';
-import { computeFlowGroupLayout, computeUniformFlowLayout, DEFAULT_FLOW_WEIGHTS, SQUARE_FLOW_WEIGHTS } from './layoutGrid';
+import {
+  computeFlowGroupLayout,
+  computeUniformFlowLayout,
+  DEFAULT_FLOW_WEIGHTS,
+  SQUARE_FLOW_WEIGHTS,
+  categoryOf,
+  nearestGridCell,
+  derivePitches,
+} from './layoutGrid';
 import { computeLayoutScore } from './layoutScore';
 import {
   DEFAULT_TIME_UNIT,
@@ -469,7 +478,23 @@ function buildContainerIndex(rawNodes, rawById) {
 // `boxById` memoizes results across calls within one build (recursion, not
 // insertion order, resolves the "inner box needed before outer box"
 // dependency regardless of which order containers appear in graph.nodes).
-function effectiveContainerBox(n, index, boxById) {
+// `cellPitch` is SX (the global grid pitch, see the "Integer grid
+// rebuild" plan) -- used ONLY for the auto-fit (never-explicitly-sized)
+// branch below, as a flat one-cell margin around whatever children
+// already occupy. This replaces the old CONTAINER_PADDING/
+// CONTAINER_NESTING_PADDING fractional-kkit-unit margins, which bounded
+// only each child's own top-left ANCHOR point (see the loop below -- it
+// still does, unchanged), relying on a margin generous enough to also
+// cover each child's own real footprint past that anchor. A flat SX
+// margin safely covers any NORMAL (one-cell) child's own full extent;
+// it's the plan's own accepted, deliberately simple approximation for
+// this auto-fit fallback path specifically -- a container a user has
+// EXPLICITLY resized (the common case once a layout is actually being
+// worked on) goes through onContainerResize's own exact, per-child
+// integer min-size containment instead, which this auto-fit shortcut
+// never overrides (its own `n.width > 0 || n.height > 0` branch above
+// always wins once that's happened).
+function effectiveContainerBox(n, index, boxById, cellPitch = AUTO_LAYOUT_CELL) {
   if (boxById[n.id]) return boxById[n.id];
   if (n.width > 0 || n.height > 0) {
     const box = { x: n.x, y: n.y, width: n.width, height: n.height };
@@ -481,7 +506,7 @@ function effectiveContainerBox(n, index, boxById) {
   const ys = [];
   const nestedContainers = index.directContainerChildren[n.id] ?? [];
   nestedContainers.forEach((other) => {
-    const childBox = effectiveContainerBox(other, index, boxById);
+    const childBox = effectiveContainerBox(other, index, boxById, cellPitch);
     xs.push(childBox.x, childBox.x + childBox.width);
     ys.push(childBox.y, childBox.y - childBox.height);
   });
@@ -497,7 +522,7 @@ function effectiveContainerBox(n, index, boxById) {
     boxById[n.id] = box;
     return box;
   }
-  const padding = touchesNestedContainer ? CONTAINER_NESTING_PADDING : CONTAINER_PADDING;
+  const padding = touchesNestedContainer ? CONTAINER_NESTING_PADDING : cellPitch;
   const box = {
     x: Math.min(...xs) - padding,
     y: Math.max(...ys) + padding,
@@ -562,9 +587,9 @@ function effectiveContainerBox(n, index, boxById) {
 // fixed size regardless of name (see nodes.jsx's EnzNode -- no name is
 // drawn on the icon at all), so it doesn't need this treatment.
 //
-// `cellUnit` -- the per-model, scale-aware "kkit unit" size (see
-// effectiveAutoLayoutCell below), NOT the plain AUTO_LAYOUT_CELL
-// constant directly: a fixed kkit-unit cell size stops corresponding to
+// `cellUnit` -- the per-model SX (see computeDefaultSx below), NOT the
+// plain AUTO_LAYOUT_CELL constant directly: a fixed kkit-unit cell size
+// stops corresponding to
 // a consistent ON-SCREEN size once `scale` (computeAutoScale, picked
 // fresh per model to fit that file's OWN native coordinate convention)
 // drifts far from its usual range -- verified directly against a real
@@ -579,24 +604,47 @@ function effectiveContainerBox(n, index, boxById) {
 // the box as it stood *before* the whole operation started).
 const LONG_POOL_NAME_THRESHOLD = 10;
 
-// AUTO_LAYOUT_CELL (=3) was calibrated to look right at DEFAULT_SCALE
-// (=50px/unit) -- i.e. a target of roughly 3*50=150px per auto-layout
-// cell on screen. Recomputing the kkit-unit size as that SAME pixel
-// target divided by whatever `scale` THIS model actually got keeps the
-// on-screen result consistent regardless of a file's own native units,
-// instead of a fixed kkit-unit count that only happens to look right at
-// scales near the default.
-const AUTO_LAYOUT_CELL_PX_TARGET = AUTO_LAYOUT_CELL * DEFAULT_SCALE;
-function effectiveAutoLayoutCell(scale) {
-  return AUTO_LAYOUT_CELL_PX_TARGET / scale;
+// SX derivation (the "Integer grid rebuild" plan's own design, message
+// 2): a percentage of the canvas pane's own measured width (not
+// window.innerWidth -- the side menu panels eat real width), so icons
+// fit comfortably on screen with a default ScaleIcons regardless of a
+// file's own native coordinate scale. ~0.09 picked to match this app's
+// previous fixed 150px-per-cell default (AUTO_LAYOUT_CELL * DEFAULT_SCALE)
+// at a typical ~1650px-wide pane. `canvasWidthPx` is null only before the
+// canvas has actually mounted and reported a size (see MainDisplay's own
+// getCanvasWidth) -- CANVAS_WIDTH_FALLBACK_PX is a reasonable desktop
+// pane width for that moment, same role AUTO_LAYOUT_CELL_PX_TARGET's old
+// fixed 150px played.
+const SX_SCREEN_FRACTION = 0.09;
+const CANVAS_WIDTH_FALLBACK_PX = 1650;
+function computeDefaultSx(scale, canvasWidthPx) {
+  const widthPx = canvasWidthPx ?? CANVAS_WIDTH_FALLBACK_PX;
+  return (SX_SCREEN_FRACTION * widthPx) / scale;
 }
+const DEFAULT_SX = computeDefaultSx(DEFAULT_SCALE, CANVAS_WIDTH_FALLBACK_PX);
 
-function childFootprint(c, containerIndex, boxById, cellUnit = AUTO_LAYOUT_CELL) {
+// The user's own explicit correction: 1.0 read as "icons fill the entire
+// space between grid points", much too crowded -- 0.4 is the actual
+// intended starting point for a comfortable default fit.
+const DEFAULT_SCALE_ICONS = 0.4;
+
+// The SOLE, authoritative footprint source anywhere in this app (the
+// "Integer grid rebuild" plan's own point 2: NO independent scale factor
+// for any object or group) -- a plain entity's own footprint is always
+// EXACTLY one grid cell (`SX` wide, `SX/2` tall), two cells wide for a
+// long-named pool (`isLongName`, a binary name-length classification,
+// never a DOM measurement). A container's own footprint is its current
+// effective box (see effectiveContainerBox -- either explicitly
+// resized, already an exact SX-multiple by construction, or auto-fit
+// from its own content using the same `cellPitch` margin) plus the
+// fixed, non-SX `CONTAINER_NESTING_PADDING` visual gap so its own
+// border doesn't sit flush against whatever nests it.
+function childFootprint(c, containerIndex, boxById, cellPitch = AUTO_LAYOUT_CELL) {
   if (!CONTAINER_TYPES.includes(c.type)) {
     const isLongName = c.type === 'pool' && (c.name?.length ?? 0) > LONG_POOL_NAME_THRESHOLD;
-    return { width: isLongName ? cellUnit * 2 : cellUnit, height: cellUnit };
+    return { width: isLongName ? cellPitch * 2 : cellPitch, height: cellPitch / 2 };
   }
-  const box = effectiveContainerBox(c, containerIndex, boxById);
+  const box = effectiveContainerBox(c, containerIndex, boxById, cellPitch);
   return { width: box.width + CONTAINER_NESTING_PADDING, height: box.height + CONTAINER_NESTING_PADDING };
 }
 
@@ -656,13 +704,13 @@ async function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, bo
     }
   }
   if (directChildren.length === 0) {
-    const currentBox = effectiveContainerBox(rawById[rootId], containerIndex, boxById);
+    const currentBox = effectiveContainerBox(rawById[rootId], containerIndex, boxById, cellUnit);
     localLayouts[rootId] = { children: [], width: currentBox.width, height: currentBox.height };
     if (onProgress) await onProgress();
     return;
   }
 
-  const currentBox = effectiveContainerBox(rawById[rootId], containerIndex, boxById);
+  const currentBox = effectiveContainerBox(rawById[rootId], containerIndex, boxById, cellUnit);
   const lockedContainers = directChildren.filter((c) => CONTAINER_TYPES.includes(c.type) && c.locked);
   // Everything else actually gets a position -- an unlocked entity/
   // container, freshly packed below, or a locked *plain entity* (no
@@ -723,23 +771,60 @@ async function computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, bo
   });
 
   const lockedContainerBounds = lockedContainers.map((c) => {
-    const box = effectiveContainerBox(c, containerIndex, boxById);
+    const box = effectiveContainerBox(c, containerIndex, boxById, cellUnit);
     const localX = c.x - currentBox.x;
     const localY = c.y - currentBox.y;
     return { localX, localY, right: localX + box.width, bottom: localY - box.height };
   });
 
+  // A locked entity's own real position is folded into this level's
+  // bounding-box/collision accounting above (lockedEntityPlacements), but
+  // that never stopped the sequential grid pack below from landing an
+  // unlocked child's cell right on top of it -- optimizeGroupLayout's own
+  // `order` has no concept of grid cells at all, just a good ordering.
+  // Reserve each locked entity's own nearest cell first (same
+  // nearest-cell math as computeUniformFlowLayout's own locked-group
+  // reservation, just local to this container instead of pixel-absolute),
+  // then skip any reserved index while sequentially assigning the
+  // unlocked order below.
+  const lockedCellKeys = new Set(
+    lockedEntities.map((c) => {
+      const footprint = sizesMap.get(c.id);
+      const centerX = c.x - currentBox.x + footprint.width / 2;
+      const centerY = c.y - currentBox.y - footprint.height / 2;
+      const row = Math.max(0, Math.round(-centerY / rowHeight));
+      const col = Math.max(0, Math.round(centerX / colWidth));
+      return `${row},${col}`;
+    })
+  );
+  let nextIdx = 0;
+  function nextFreeIdx() {
+    while (lockedCellKeys.has(`${Math.floor(nextIdx / cols)},${nextIdx % cols}`)) nextIdx += 1;
+    return nextIdx;
+  }
   // CONTAINER_PADDING is baked into each child's own localX/localY here
   // (matching onAutoLayoutGroup's single-level originX/originY) -- so
   // assignAbsolutePositions below only ever has to add a container's own
   // real origin to these, never a second padding offset on top.
-  const gridPacking = optimized.order.map((child, i) => ({
-    id: child.id,
-    localX: CONTAINER_PADDING + (i % cols) * colWidth,
-    localY: -CONTAINER_PADDING - Math.floor(i / cols) * rowHeight,
-    right: CONTAINER_PADDING + (i % cols) * colWidth + colWidth,
-    bottom: -CONTAINER_PADDING - Math.floor(i / cols) * rowHeight - rowHeight,
-  }));
+  // Unlike the pitch-based grids elsewhere (cellPitch is center-to-center
+  // spacing, not a box size), colWidth/rowHeight here genuinely ARE each
+  // slot's own box size (computeGridCells sizes them to the largest
+  // child) -- so centering a smaller child within its own slot means
+  // splitting the leftover (colWidth - footprint.width)/(rowHeight -
+  // footprint.height) evenly on both sides, not just subtracting half the
+  // child's own footprint the way the pitch-based grids do.
+  const gridPacking = optimized.order.map((child) => {
+    const i = nextFreeIdx();
+    nextIdx += 1;
+    const footprint = sizesMap.get(child.id);
+    return {
+      id: child.id,
+      localX: CONTAINER_PADDING + (i % cols) * colWidth + (colWidth - footprint.width) / 2,
+      localY: -CONTAINER_PADDING - Math.floor(i / cols) * rowHeight - (rowHeight - footprint.height) / 2,
+      right: CONTAINER_PADDING + (i % cols) * colWidth + colWidth,
+      bottom: -CONTAINER_PADDING - Math.floor(i / cols) * rowHeight - rowHeight,
+    };
+  });
 
   // A per-level "discarded" result (see optimizeGroupLayout) means "the
   // current arrangement already scores at least as well as anything a
@@ -844,13 +929,13 @@ async function computeLocalFlowLayouts(rootId, rawNodes, rawById, containerIndex
     }
   }
   if (directChildren.length === 0) {
-    const currentBox = effectiveContainerBox(rawById[rootId], containerIndex, boxById);
+    const currentBox = effectiveContainerBox(rawById[rootId], containerIndex, boxById, cellUnit);
     localLayouts[rootId] = { children: [], width: currentBox.width, height: currentBox.height };
     if (onProgress) await onProgress();
     return;
   }
 
-  const currentBox = effectiveContainerBox(rawById[rootId], containerIndex, boxById);
+  const currentBox = effectiveContainerBox(rawById[rootId], containerIndex, boxById, cellUnit);
   const lockedContainers = directChildren.filter((c) => CONTAINER_TYPES.includes(c.type) && c.locked);
   const repositionable = directChildren.filter((c) => !(CONTAINER_TYPES.includes(c.type) && c.locked));
   const unlockedPackable = repositionable.filter((c) => !c.locked);
@@ -867,20 +952,25 @@ async function computeLocalFlowLayouts(rootId, rawNodes, rawById, containerIndex
     })
   );
 
+  // Origin is simply the group's own current stored absolute position,
+  // used directly -- no rounding step (nothing left to round, see the
+  // "Integer grid rebuild" plan: every write path guarantees this is
+  // already an exact SX-multiple from ITS OWN parent).
+  const origin = { x: currentBox.x, y: currentBox.y };
   const { positions, flips } = isRoot
-    ? computeUniformFlowLayout({ children: repositionable, edges, rawById, sizes: sizesMap })
-    : computeFlowGroupLayout({ children: repositionable, edges, rawById, sizes: sizesMap, weights: DEFAULT_FLOW_WEIGHTS, cellUnit });
+    ? computeUniformFlowLayout({ children: repositionable, edges, rawById, sizes: sizesMap, origin })
+    : computeFlowGroupLayout({ children: repositionable, edges, rawById, sizes: sizesMap, weights: DEFAULT_FLOW_WEIGHTS, cellUnit, origin });
   if (flips) Object.assign(flipsOut, flips);
 
-  // CONTAINER_PADDING is baked into each child's own localX/localY here --
-  // same convention computeLocalLayouts/onAutoLayoutGroupByFlow already
-  // use (see either one's own comment) -- so assignAbsolutePositions only
-  // ever has to add a container's own real origin to these.
+  // `positions` is already each child's own plain top-left (`gridToPixels`
+  // relative to `origin`) -- no centring/footprint subtraction (see the
+  // "Integer grid rebuild" plan), so this is a direct copy, not a
+  // computation.
   const packedChildren = unlockedPackable.map((c) => {
     const p = positions.get(c.id);
     const footprint = sizesMap.get(c.id);
-    const localX = CONTAINER_PADDING + p.x;
-    const localY = -CONTAINER_PADDING + p.y;
+    const localX = p.x;
+    const localY = p.y;
     return { id: c.id, localX, localY, right: localX + footprint.width, bottom: localY - footprint.height };
   });
 
@@ -892,7 +982,7 @@ async function computeLocalFlowLayouts(rootId, rawNodes, rawById, containerIndex
   });
 
   const lockedContainerBounds = lockedContainers.map((c) => {
-    const box = effectiveContainerBox(c, containerIndex, boxById);
+    const box = effectiveContainerBox(c, containerIndex, boxById, cellUnit);
     const localX = c.x - currentBox.x;
     const localY = c.y - currentBox.y;
     return { localX, localY, right: localX + box.width, bottom: localY - box.height };
@@ -900,10 +990,18 @@ async function computeLocalFlowLayouts(rootId, rawNodes, rawById, containerIndex
 
   const children = [...packedChildren, ...lockedEntityPlacements];
   const allBounds = [...packedChildren, ...lockedEntityPlacements, ...lockedContainerBounds];
+  // Zero padding in the grid math itself (the "Integer grid rebuild"
+  // plan's own point 9 -- a container's own span is exactly whatever its
+  // content needs, no extra cells; any visual gap is a fixed CSS margin
+  // on the container's own rendering). Rounded UP to a whole SX/(SX/2)
+  // multiple so this container's own footprint -- what its PARENT's own
+  // packing uses -- is itself always exactly grid-aligned.
+  const rawWidth = Math.max(...allBounds.map((b) => b.right)) - Math.min(...allBounds.map((b) => b.localX));
+  const rawHeight = Math.max(...allBounds.map((b) => b.localY)) - Math.min(...allBounds.map((b) => b.bottom));
   localLayouts[rootId] = {
     children,
-    width: Math.max(...allBounds.map((b) => b.right)) - Math.min(...allBounds.map((b) => b.localX)) + CONTAINER_PADDING * 2,
-    height: Math.max(...allBounds.map((b) => b.localY)) - Math.min(...allBounds.map((b) => b.bottom)) + CONTAINER_PADDING * 2,
+    width: Math.ceil(rawWidth / cellUnit) * cellUnit,
+    height: Math.ceil(rawHeight / (cellUnit / 2)) * (cellUnit / 2),
   };
   if (onProgress) await onProgress();
 }
@@ -931,7 +1029,7 @@ function assignAbsolutePositions(containerId, originX, originY, rawById, localLa
 // the latter carry forward frontend-only state (flipped/color/plotWindow)
 // that has no backend representation, keyed by node id; the former just
 // passes empty maps so everything gets freshly computed defaults.
-function buildFlowNodes(graph, scale, preserve = {}) {
+function buildFlowNodes(graph, scale, cellUnit, preserve = {}) {
   const flips = computeInitialFlips(graph);
   const parentSides = computeInitialParentSides(graph);
   const rawById = {};
@@ -946,7 +1044,7 @@ function buildFlowNodes(graph, scale, preserve = {}) {
   const containerIndex = buildContainerIndex(graph.nodes, rawById);
   graph.nodes.forEach((n) => {
     if (CONTAINER_TYPES.includes(n.type)) {
-      effectiveContainerBox(n, containerIndex, boxById);
+      effectiveContainerBox(n, containerIndex, boxById, cellUnit);
     }
   });
 
@@ -1027,6 +1125,15 @@ function buildFlowNodes(graph, scale, preserve = {}) {
       // back from a saved SBML file's own custom annotation (see
       // server.py's _extract_collapsed) on first load.
       node.data.collapsed = preserve.collapsed?.[n.id] ?? n.collapsed ?? false;
+      // Frontend-only, same reasoning as collapsed just above -- which
+      // auto-layout mode ('square' | 'flow') this container was last
+      // packed with, set by onAutoLayoutGroup/onAutoLayoutGroupByFlow (and
+      // their Recurse variants) so a later manual drag's own snap-to-grid
+      // (see onNodeDragStop) knows whether this container's grid uses
+      // Flow's x-offset stagger or Square's plain array. Absent (null)
+      // for a container never auto-laid-out this session -- treated as
+      // Flow's own staggered convention by the reader, not defaulted here.
+      node.data.layoutMode = preserve.layoutMode?.[n.id] ?? n.layoutMode ?? null;
     }
     // Frontend-only, same reasoning as flipped/collapsed just above --
     // set whenever the user manually drags, resizes, or flips something
@@ -1095,8 +1202,8 @@ function buildFlowNodes(graph, scale, preserve = {}) {
   return { nodes, edges };
 }
 
-function toFlowGraph(graph, scale) {
-  return buildFlowNodes(graph, scale);
+function toFlowGraph(graph, scale, cellUnit) {
+  return buildFlowNodes(graph, scale, cellUnit);
 }
 
 // Which group/compartment (if any) a drop point at (kx, ky) -- in the same
@@ -1109,7 +1216,7 @@ function toFlowGraph(graph, scale) {
 // geometric test against that would never match despite it visually
 // covering most of the canvas. Picks the smallest (most specific/innermost)
 // match when boxes overlap.
-function findContainerAt(kx, ky, flowNodes) {
+function findContainerAt(kx, ky, flowNodes, cellUnit = AUTO_LAYOUT_CELL) {
   const rawNodes = flowNodes.map((n) => n.data);
   const rawById = {};
   rawNodes.forEach((n) => {
@@ -1119,11 +1226,213 @@ function findContainerAt(kx, ky, flowNodes) {
   const containerIndex = buildContainerIndex(rawNodes, rawById);
   const candidates = rawNodes
     .filter((n) => CONTAINER_TYPES.includes(n.type))
-    .map((n) => ({ id: n.id, box: effectiveContainerBox(n, containerIndex, boxById) }))
+    .map((n) => ({ id: n.id, box: effectiveContainerBox(n, containerIndex, boxById, cellUnit) }))
     .filter(({ box }) => kx >= box.x && kx <= box.x + box.width && ky <= box.y && ky >= box.y - box.height);
   if (candidates.length === 0) return null;
   candidates.sort((a, b) => a.box.width * a.box.height - b.box.width * b.box.height);
   return candidates[0].id;
+}
+
+// The user's own drag-to-swap request: among `rawById`'s entries sharing
+// `parentId` and `categoryOf`'s own pool/non-pool split with the dragged
+// node (excluding itself), finds the one whose own (row, col) grid cell
+// is EXACTLY the drop point's own (row, col) -- exact integer cell
+// identity, not an overlapping box test. This is what fixes "dropped in
+// blank space near a neighbour, swapped anyway" by construction: a
+// neighbour's hit-box used to be based on a generous, type-blind nominal
+// footprint that reached well past its own visible edges into what reads
+// as blank space between grid points (verified directly: "drag to a
+// blank space with something at the grid point to the right" swapped
+// with it instead of landing in the blank cell) -- under the new model
+// there is no footprint to compare against at all, only "landed on the
+// SAME cell another sibling already occupies". Deliberately same-parent
+// only (a different group's own same-category node at the same drop
+// point is a coincidence, not something the user meant to swap with).
+function findSwapTargetAt(draggedId, kx, ky, category, parentId, rawById, cellUnit) {
+  const parentRaw = rawById[parentId];
+  if (!parentRaw) return null;
+  const { cellPitch, rowPitch } = derivePitches(cellUnit);
+  const useOffset = (parentRaw.layoutMode ?? 'flow') !== 'square';
+  const originX = parentRaw.x;
+  const originY = parentRaw.y;
+  const dropCell = nearestGridCell(kx - originX, ky - originY, category, cellPitch, rowPitch, useOffset);
+  const candidate = Object.values(rawById).find((n) => {
+    if (n.id === draggedId || n.parentId !== parentId) return false;
+    if (categoryOf(n.id, rawById) !== category) return false;
+    const cell = nearestGridCell((n.x ?? 0) - originX, (n.y ?? 0) - originY, category, cellPitch, rowPitch, useOffset);
+    if (cell.row !== dropCell.row) return false;
+    // A "wide" (double-cell) long-named pool occupies BOTH its own
+    // anchor column and the one after it -- the drop point landing on
+    // EITHER one still counts as "landed on this sibling", not a miss.
+    // Without this, a regular pool dropped onto the second half of a
+    // wide one just sat there overlapping it instead of swapping, since
+    // only the wide pool's own first/anchor cell was ever checked
+    // (verified directly: this was exactly the reported "regular pool
+    // just goes and sits on the double one" bug).
+    const isWide = n.type === 'pool' && (n.name?.length ?? 0) > LONG_POOL_NAME_THRESHOLD;
+    return dropCell.col === cell.col || (isWide && dropCell.col === cell.col + 1);
+  });
+  return candidate?.id ?? null;
+}
+
+// Clamps a centre point so the entity's own box (centre +/- half its real
+// size) stays fully *inside* `box` -- the user's own explicit request:
+// never place something straddling a group's own edge. Previously a grid
+// point (or a raw drop point) near the edge was accepted as-is, with no
+// regard for how far the entity's own real footprint extends past it --
+// verified directly: that's exactly what read as "placed right at the
+// edge, but sticking out, until the box is manually resized to fit."
+// Degenerate case (the entity's own real size is bigger than the box in
+// some axis) falls back to that axis' own centre rather than an inverted
+// clamp range.
+// Every grid computation anywhere in this app (auto-layout, manual
+// drag-snap, new-object-drop, locked-cell reservation) needs an `origin`
+// to convert between a (row, col) and a real kkit position. Every one of
+// those call sites used to compute it as `groupBox.x + CONTAINER_PADDING`
+// -- the group's own CURRENT box corner -- which is exactly backwards
+// from how a stable grid has to work: that raw value is an arbitrary
+// real number that shifts with every resize, auto-fit recompute, or
+// manual box edit, so the WHOLE lattice silently re-phased itself every
+// time the box moved even slightly, leaving already-placed (locked)
+// entities and freshly snapped/packed ones misaligned by a fraction of a
+// cell relative to each other even though nothing about their own
+// positions changed. The underlying integer grid has to be the stable
+// thing, with the box treated as a loose, moveable window onto it (the
+// user's own explicit framing) -- not the other way around.
+//
+// This rounds the group's own current corner onto the NEAREST point of
+// the single, shared cellPitch/rowPitch lattice every group in the model
+// already uses (cellPitch/rowPitch depend only on the global `scale`, not
+// on any particular group), so the origin only ever moves in whole
+// cellPitch/rowPeriod steps -- and never at all for a resize smaller than
+// half a cell. `rowPeriod` is `rowPitch * 2` (one full pool+nonpool row
+// pair), not `rowPitch` itself: rounding Y to a whole number of
+// *rowPeriods* guarantees any shift in origin changes an existing
+// entity's own computed row index by an EVEN number, which preserves its
+// pool/non-pool row parity exactly -- rounding to single rowPitch steps
+// could flip an already-placed pool onto what reads as a non-pool row (or
+// vice versa) purely from the origin itself moving, which would be a
+// second, worse source of instability than the one this fixes. Negative
+// row/col indices (the user's own explicit allowance) fall out for free
+// from this: nearestGridCell/gridToPixels never assumed row/col can't be
+// negative except where buildInitialGrid's own fresh-pack numbering
+// deliberately starts at 0 for an entirely new layout.
+// Integer replacement for the old clampCenterToBox -- the "Integer grid
+// rebuild" plan's own point 9: "content never moves outside bounds of a
+// group", done in ix/iy terms, not screen/kkit floats. `numRows`/
+// `numCols` is the container's own current integer span (its effective
+// box's width/height divided by the pitch -- always an exact multiple
+// by construction, see onContainerResize/effectiveContainerBox). Row
+// parity (pool=odd, non-pool=even) is re-enforced after clamping --
+// clamping to a bound can otherwise land on the wrong parity right at
+// the edge.
+function clampCellToBounds(row, col, category, wide, numRows, numCols) {
+  const maxRow = Math.max(0, numRows - 1);
+  let r = Math.min(Math.max(row, 0), maxRow);
+  const wantOdd = category === 'pool';
+  if ((Math.abs(r % 2) === 1) !== wantOdd) {
+    r = r + 1 <= maxRow ? r + 1 : Math.max(0, r - 1);
+  }
+  const maxCol = Math.max(0, numCols - (wide ? 2 : 1));
+  const c = Math.min(Math.max(col, 0), maxCol);
+  return { row: r, col: c };
+}
+
+// A manual drag/drop's own snap-to-grid has no "repack everything"
+// collision search the way auto-layout's own buildInitialGrid does (see
+// its own locked-cell reservation) -- it only ever considers the ONE
+// entity actually being placed. Dropping near (but not exactly on top
+// of) an existing sibling can therefore compute the SAME nearest cell
+// that sibling already occupies and silently land right on it, since
+// drag-to-swap only fires when the drop point is literally inside that
+// sibling's own rendered box (verified directly: this is a real,
+// separate gap from the lattice-stability fix above, not caused by it).
+// Given the desired (row, col) is already taken (per `occupied`, a
+// Set of "row,col" strings), this walks outward ring by ring over every
+// OTHER cell of the same category (rows two apart, same as every other
+// category-aware search in this app) and returns the nearest free one by
+// real pixel distance.
+function findFreeGridCell(row, col, cellPitch, rowPitch, occupied) {
+  const key = (r, c) => `${r},${c}`;
+  if (!occupied.has(key(row, col))) return { row, col };
+  for (let radius = 1; radius <= 40; radius++) {
+    const candidates = [];
+    for (let k = -radius; k <= radius; k++) {
+      for (let m = -radius; m <= radius; m++) {
+        if (Math.max(Math.abs(k), Math.abs(m)) !== radius) continue;
+        candidates.push({ row: row + 2 * k, col: col + m });
+      }
+    }
+    candidates.sort((a, b) => {
+      const da = Math.hypot((a.col - col) * cellPitch, (a.row - row) * rowPitch);
+      const db = Math.hypot((b.col - col) * cellPitch, (b.row - row) * rowPitch);
+      return da - db;
+    });
+    const free = candidates.find((c) => !occupied.has(key(c.row, c.col)));
+    if (free) return free;
+  }
+  return { row, col };
+}
+
+// The occupied-cell Set findFreeGridCell needs: every OTHER direct child
+// of `parentId` (excluding `excludeId`, the entity actually being placed)
+// of the SAME category, mapped to its own (row, col) under the SAME
+// origin/lattice. Under the integer-grid rebuild every sibling's own
+// stored x/y IS its plain top-left grid-cell corner already (no
+// footprint/centre computation -- nothing to subtract), so this is a
+// direct relative-offset lookup.
+function occupiedGridCells(rawById, parentId, excludeId, category, originX, originY, cellPitch, rowPitch, useOffset) {
+  const occupied = new Set();
+  Object.values(rawById).forEach((sibling) => {
+    if (sibling.id === excludeId || sibling.parentId !== parentId) return;
+    if (categoryOf(sibling.id, rawById) !== category) return;
+    const relX = (sibling.x ?? 0) - originX;
+    const relY = (sibling.y ?? 0) - originY;
+    const { row, col } = nearestGridCell(relX, relY, category, cellPitch, rowPitch, useOffset);
+    occupied.add(`${row},${col}`);
+    // A "wide" (double-cell) long-named pool also occupies the column
+    // after its own anchor -- marking only the anchor cell left a
+    // regular pool's own snap-to-grid free to land right on top of a
+    // wide sibling's second half, reading as an overlap rather than a
+    // miss (see findSwapTargetAt's own matching comment).
+    const isWide = sibling.type === 'pool' && (sibling.name?.length ?? 0) > LONG_POOL_NAME_THRESHOLD;
+    if (isWide) occupied.add(`${row},${col + 1}`);
+  });
+  return occupied;
+}
+
+// Snaps a creation drop-point into the SAME grid a manual drag already
+// snaps to (see onNodeDragStop's own matching logic) -- the user's own
+// later request: dragging a NEW pool/reaction in from the palette should
+// land on the grid too, not just repositioning an existing one. The
+// origin is the parent's own current stored absolute position, used
+// directly (no rounding -- under the new model every container's own
+// position is already guaranteed to be an exact SX-multiple of its own
+// parent, so there is nothing left to snap it onto). `footprint` is
+// only needed to know whether this is a "wide" (2-cell) entity, for the
+// bounds clamp. `excludeId` is null for a brand new entity (no id yet to
+// exclude); an existing entity being repositioned passes its own id, so
+// it doesn't collide with its own current cell.
+function snapPointToGrid(kx, ky, parentRaw, rawById, containerIndex, boxById, cellUnit, category, footprint, excludeId = null) {
+  if (!parentRaw || !CONTAINER_TYPES.includes(parentRaw.type)) return { x: kx, y: ky };
+  const parentBox = effectiveContainerBox(parentRaw, containerIndex, boxById, cellUnit);
+  const { cellPitch, rowPitch } = derivePitches(cellUnit);
+  const originX = parentBox.x;
+  const originY = parentBox.y;
+  const useOffset = (parentRaw.layoutMode ?? 'flow') !== 'square';
+  let { row, col } = nearestGridCell(kx - originX, ky - originY, category, cellPitch, rowPitch, useOffset);
+  const occupied = occupiedGridCells(rawById, parentRaw.id, excludeId, category, originX, originY, cellPitch, rowPitch, useOffset);
+  ({ row, col } = findFreeGridCell(row, col, cellPitch, rowPitch, occupied));
+  const numCols = Math.max(1, Math.round(parentBox.width / cellPitch));
+  const numRows = Math.max(1, Math.round(parentBox.height / rowPitch));
+  const wide = footprint.width > cellPitch * 1.5;
+  ({ row, col } = clampCellToBounds(row, col, category, wide, numRows, numCols));
+  // Math.abs: row can be negative now (see nearestGridCell's own
+  // comment) -- plain `% 2` keeps the dividend's own sign in JS, so a
+  // negative odd row (-1, -3, ...) would otherwise read as !== 1 and
+  // silently miss its own stagger shift.
+  const shift = useOffset && Math.abs(row % 2) === 1 ? cellPitch / 2 : 0;
+  return { x: originX + shift + col * cellPitch, y: originY - row * rowPitch };
 }
 
 // React Flow reports a nested node's own `position` relative to its parent
@@ -1175,6 +1484,14 @@ export default function App() {
     setWarningKey((k) => k + 1);
   }, []);
   const [selectedNodeId, setSelectedNodeId] = useState(null);
+  // Populated by MainDisplay's own Canvas (see its matching comment) with
+  // {fitView, getViewport, setViewport, getInternalNode} once the
+  // ReactFlowProvider inside it actually mounts. fitView/getViewport/
+  // setViewport: handlePrintLayout/handleSaveLayoutSvg use these to fit
+  // the whole diagram into view before capturing it, since
+  // onlyRenderVisibleElements means anything panned/zoomed out of the
+  // current view isn't just clipped, it's missing from the DOM entirely.
+  const canvasApiRef = useRef(null);
   const [activeMenu, setActiveMenu] = useState('File');
   const [plotData, setPlotData] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -1231,6 +1548,17 @@ export default function App() {
   // incremental edits (drag, single add) -- so a drag or single new node
   // never rescales/shifts everything else already laid out.
   const [scale, setScale] = useState(DEFAULT_SCALE);
+  // SX (the "Integer grid rebuild" plan's own global grid pitch, in kkit
+  // units) and ScaleIcons (a pure rendering multiplier on icon size, zero
+  // effect on SX or any stored coordinate) -- both computed/defaulted
+  // once per model load (see handleGraphResult), never recomputed on
+  // resize or when ScaleIcons itself changes, and persisted with the
+  // SBML file (see FileMenuBox's handleSave/handleLoadSbmlFile) so
+  // reopening a saved model reproduces the exact same lattice rather
+  // than a freshly-recomputed one that no longer matches the file's own
+  // stored absolute coordinates.
+  const [sx, setSx] = useState(DEFAULT_SX);
+  const [scaleIcons, setScaleIcons] = useState(DEFAULT_SCALE_ICONS);
   // Bumped on every full graph load (not incremental edits) so MainDisplay
   // knows to re-fit the viewport to the new node set -- React Flow's own
   // `fitView` prop only ever runs once, on initial mount.
@@ -1249,6 +1577,12 @@ export default function App() {
   // would race against work already in flight. PropertiesMenuBox disables
   // the whole Layout section while this is true.
   const [layoutRunning, setLayoutRunning] = useState(false);
+  // Whether a manual drag snaps the dragged node's own centre to its
+  // parent group's nearest grid cell (see onNodeDragStop) -- on by
+  // default per the user's own explicit stipulation. Lifted here (not
+  // local to PropertiesMenuBox) since onNodeDragStop itself needs to read
+  // it, not just the checkbox that toggles it.
+  const [snapToGrid, setSnapToGrid] = useState(true);
   // Only ever set during a Recurse Square/Flow run (see onAutoLayoutRecursive/
   // onAutoLayoutRecursiveFlow's own onProgress) -- null the rest of the
   // time, including during a plain single-level Square/Flow, which finishes
@@ -1307,7 +1641,18 @@ export default function App() {
     }
     const newScale = computeAutoScale(graph);
     setScale(newScale);
-    setFlowGraph(toFlowGraph(graph, newScale));
+    // The file's own saved sx/scaleIcons (see backend's kkit:layoutGrid
+    // annotation) reproduce the EXACT lattice it was saved with -- a
+    // freshly-computed SX would almost certainly differ slightly (a
+    // different canvas width at load time) and silently invalidate every
+    // already-on-lattice stored position in that file. Only missing for a
+    // legacy file (or a brand new model) -- computed fresh then, with
+    // ScaleIcons defaulting to 1.0.
+    const newSx = graph.layoutGrid?.sx ?? computeDefaultSx(newScale, canvasApiRef.current?.getCanvasWidth?.());
+    const newScaleIcons = graph.layoutGrid?.scaleIcons ?? DEFAULT_SCALE_ICONS;
+    setSx(newSx);
+    setScaleIcons(newScaleIcons);
+    setFlowGraph(toFlowGraph(graph, newScale, newSx));
     setSelectedNodeId(null);
     setStatus(`loaded ${graph.nodes.length} nodes, ${graph.edges.length} edges`);
     // A dose-response curve/session refers to pool ids from whatever model
@@ -1398,7 +1743,7 @@ export default function App() {
     if (directChildren.length === 0) return null;
     const containerIndex = buildContainerIndex(rawNodes, rawById);
     const boxById = {};
-    const cellUnit = effectiveAutoLayoutCell(scale);
+    const cellUnit = sx;
     const scoreNodes = directChildren.map((c) => {
       const size = childFootprint(c, containerIndex, boxById, cellUnit);
       return {
@@ -1414,7 +1759,7 @@ export default function App() {
     });
     const scoreEdges = flowGraph.edges.map((e) => ({ id: e.id, source: e.source, target: e.target, type: e.data?.type }));
     return computeLayoutScore(scoreNodes, scoreEdges);
-  }, [selectedNode, flowGraph.nodes, flowGraph.edges, scale]);
+  }, [selectedNode, flowGraph.nodes, flowGraph.edges, sx]);
 
   // An enz complex pool is never its own citizen on the canvas -- see
   // buildFlowNodes' own comment on why (no meaningful position, no edges,
@@ -1536,6 +1881,96 @@ export default function App() {
     setDoseParams((p) => ({ ...p, picking: p.picking === field ? null : field }));
     setDisplayTab(0);
   }, []);
+
+  // Shared by handlePrintLayout/handleSaveLayoutSvg below -- force-switches
+  // to Reaction Layout (that tab's own content is display:none otherwise,
+  // which visibility:hidden/visible in index.css's print rule can't
+  // override) and fits the WHOLE diagram into view before either one
+  // captures anything. Fitting first matters because of Canvas's own
+  // onlyRenderVisibleElements=true (see MainDisplay.jsx): a node currently
+  // panned/zoomed out of view isn't just visually clipped, it's flat out
+  // not in the DOM, so print/SVG export silently dropped it entirely
+  // before this existed (verified directly against a real multi-group
+  // model -- both the printout and the saved SVG only ever showed
+  // whatever fit in the on-screen viewport at the moment of capture, e.g.
+  // badLayout.svg). duration: 0 (an instant snap, not fitView's usual
+  // animated pan/zoom) so there's nothing to wait out except React's own
+  // next render -- still needs a short wait for onlyRenderVisibleElements
+  // to actually mount the newly-visible nodes, hence the second delay.
+  // Returns a restore() that puts the viewport back the way the user had
+  // it, since a print/export isn't a request to change what they were
+  // looking at.
+  const prepareCanvasForCapture = useCallback(async () => {
+    setDisplayTab(0);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const api = canvasApiRef.current;
+    const prevViewport = api?.getViewport?.();
+    api?.fitView?.({ padding: 0.1, duration: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const zoom = api?.getViewport?.()?.zoom ?? 1;
+    const restore = () => {
+      if (prevViewport) api?.setViewport?.(prevViewport, { duration: 0 });
+    };
+    return { restore, zoom };
+  }, []);
+
+  // FileMenuBox's own "Layout -> PDF" (File name field alongside it, same
+  // [button][filename] row Save itself uses) -- see index.css's own
+  // @media print block, which hides everything except #printable-canvas
+  // (MainDisplay's Canvas wrapper, deliberately below the tabs/palette in
+  // the tree) for the print pass. There's no JS API to emit a PDF file
+  // directly (window.print() always goes through the browser/OS's own
+  // print dialog, which is how the user actually picks "Save as PDF") --
+  // the filename field's only real effect is the *suggested* filename
+  // that dialog offers, via the same document.title trick browsers'
+  // own "print to PDF" flow already keys off of.
+  const handlePrintLayout = useCallback(
+    async (filename) => {
+      const { restore } = await prepareCanvasForCapture();
+      const originalTitle = document.title;
+      const suggested = (filename || 'layout').trim().replace(/\.pdf$/i, '') || 'layout';
+      document.title = suggested;
+      window.print();
+      document.title = originalTitle;
+      restore();
+    },
+    [prepareCanvasForCapture]
+  );
+
+  // FileMenuBox's own "Layout -> SVG" -- same #printable-canvas element
+  // and same fit-the-whole-diagram-in prep as handlePrintLayout above.
+  // buildStandaloneSvg (see its own module comment) builds a plain
+  // <rect>/<ellipse>/<path>/<text> SVG straight from this app's own node/
+  // edge data -- no <foreignObject>, no inlined computed styles -- so the
+  // result is small and renders in any standard SVG viewer, not just a
+  // browser (verified directly: the earlier html-to-image-based version
+  // produced a 1.6MB file for a small diagram, 95% of it inlined per-
+  // element computed style, and didn't render at all in eog/librsvg).
+  const handleSaveLayoutSvg = useCallback(
+    async (filename) => {
+      const { restore, zoom } = await prepareCanvasForCapture();
+      try {
+        const node = document.getElementById('printable-canvas');
+        if (!node) return;
+        const svgText = buildStandaloneSvg(node, flowGraph.nodes, flowGraph.edges, zoom);
+        const blob = new Blob([svgText], { type: 'image/svg+xml' });
+        const url = URL.createObjectURL(blob);
+        const trimmed = (filename || 'layout.svg').trim() || 'layout.svg';
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = /\.svg$/i.test(trimmed) ? trimmed : `${trimmed}.svg`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        showWarning(`Save Layout to SVG failed: ${err}`);
+      } finally {
+        restore();
+      }
+    },
+    [prepareCanvasForCapture, flowGraph.nodes, flowGraph.edges, showWarning]
+  );
 
   // The user's own later bug report: pressing Delete/Backspace on a
   // selected pool/reaction/etc removed it from the canvas but left it
@@ -1670,6 +2105,7 @@ export default function App() {
     const abs = absoluteFlowPosition(node.id, flowGraph.nodes);
     const x = abs.x / scale;
     const y = -abs.y / scale;
+    const isContainer = CONTAINER_TYPES.includes(node.data.type);
 
     const dragInfo = dragStartInfoRef.current;
     dragStartInfoRef.current = null;
@@ -1677,7 +2113,7 @@ export default function App() {
       // Excludes the dragged node itself from consideration -- only
       // relevant when it's a group/compartment being dragged (its own box
       // could otherwise "contain" the very point it just moved to).
-      const newParentId = findContainerAt(x, y, flowGraph.nodes.filter((n) => n.id !== node.id));
+      const newParentId = findContainerAt(x, y, flowGraph.nodes.filter((n) => n.id !== node.id), sx);
       if (newParentId && newParentId !== dragInfo.parentId) {
         fetch(`${API_BASE}/api/update_position`, {
           method: 'POST',
@@ -1716,30 +2152,190 @@ export default function App() {
       return;
     }
 
-    fetch(`${API_BASE}/api/update_position`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: node.id, x, y }),
-    })
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.error) {
-          setStatus(`error: ${res.error}`);
+    // Drag-to-swap and snap-to-grid (the user's own later requests) only
+    // ever apply to a node with a real parent group/compartment -- both
+    // are about that parent's own grid, which a top-level node isn't part
+    // of. `x`/`y` (the raw drop point, computed above) is the fallback
+    // for either check finding nothing to do.
+    let finalX = x;
+    let finalY = y;
+    let targetFinalX = null;
+    let targetFinalY = null;
+    let swapTargetId = null;
+    // Built unconditionally (not just when node.parentId is set) -- a
+    // CONTAINER being dragged needs its own descendant cascade (see
+    // below) regardless of whether it itself has a parent; a plain
+    // top-level node with no parent never reaches the swap/snap logic
+    // below, which still guards on `node.parentId` itself.
+    const rawNodes = flowGraph.nodes.map((n) => n.data);
+    const rawById = {};
+    rawNodes.forEach((n) => {
+      rawById[n.id] = n;
+    });
+    const containerIndex = buildContainerIndex(rawNodes, rawById);
+    const boxById = {};
+    const cellUnit = sx;
+    if (node.parentId) {
+      // Under the integer grid rebuild, every stored x/y IS already the
+      // plain top-left of its own cell -- `footprint` is only needed here
+      // to tell snapPointToGrid whether this is a "wide" (2-cell) entity.
+      const footprint = childFootprint(node.data, containerIndex, boxById, cellUnit);
+      const category = categoryOf(node.id, rawById);
+      const parentRaw = rawById[node.parentId];
+      const parentBox =
+        parentRaw && CONTAINER_TYPES.includes(parentRaw.type) ? effectiveContainerBox(parentRaw, containerIndex, boxById, cellUnit) : null;
+
+      // Checked first, per the plan: dropping one pool/non-pool directly
+      // onto another same-category sibling's own EXACT grid cell (see
+      // findSwapTargetAt's own comment -- exact integer cell identity,
+      // not an overlapping box) swaps their stored positions instead of
+      // moving either one into a fresh grid slot. Never for a CONTAINER,
+      // though -- swapping two whole nested sub-trees (each needing its
+      // own descendant cascade) isn't something this has been asked for,
+      // and a plain snapped move (or the cascade below) is the right
+      // fallback for one.
+      swapTargetId = isContainer ? null : findSwapTargetAt(node.id, x, y, category, node.parentId, rawById, cellUnit);
+      if (swapTargetId) {
+        // A swap is just trading the two stored top-left positions
+        // directly -- no centre/size bookkeeping needed at all now that
+        // position IS the cell's own corner.
+        const targetRaw = rawById[swapTargetId];
+        finalX = targetRaw.x;
+        finalY = targetRaw.y;
+        targetFinalX = node.data.x;
+        targetFinalY = node.data.y;
+      } else if (snapToGrid && parentBox) {
+        const snapped = snapPointToGrid(x, y, parentRaw, rawById, containerIndex, boxById, cellUnit, category, footprint, node.id);
+        finalX = snapped.x;
+        finalY = snapped.y;
+      }
+    }
+
+    // React Flow's own `position` (relative to the parent, in scaled
+    // screen pixels -- see buildFlowNodes' own matching formula) is
+    // SEPARATE from this app's own `data.x/y` -- React Flow already moved
+    // it to the raw drop point as part of the native drag, but a swap or
+    // a grid snap can move the final, PERSISTED spot away from that raw
+    // point. Without also recomputing `position` here, the node would
+    // keep rendering at the raw drop point until some unrelated action
+    // (adding/deleting a node, which fully rebuilds every node's position
+    // from scratch) happened to refresh it.
+    function toFlowPosition(absX, absY, parentId) {
+      const parentBox = parentId ? effectiveContainerBox(rawById[parentId], containerIndex, boxById, cellUnit) : null;
+      const relX = parentBox ? absX - parentBox.x : absX;
+      const relY = parentBox ? absY - parentBox.y : absY;
+      return { x: relX * scale, y: -relY * scale };
+    }
+
+    if (swapTargetId) {
+      const draggedNewPos = toFlowPosition(finalX, finalY, node.parentId);
+      const targetNewPos = toFlowPosition(targetFinalX, targetFinalY, node.parentId);
+      Promise.all([
+        fetch(`${API_BASE}/api/update_position`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: node.id, x: finalX, y: finalY }),
+        }).then((r) => r.json()),
+        fetch(`${API_BASE}/api/update_position`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          // Swapped by centre, each accounting for its own real size --
+          // see the comment above where targetFinalX/Y were computed --
+          // not simply the dragged node's own OLD stored corner.
+          body: JSON.stringify({ id: swapTargetId, x: targetFinalX, y: targetFinalY }),
+        }).then((r) => r.json()),
+      ])
+        .then(([res1, res2]) => {
+          const failed = [res1, res2].find((r) => r.error);
+          if (failed) {
+            setStatus(`error: ${failed.error}`);
+            return;
+          }
+          setFlowGraph((g) => ({
+            ...g,
+            // Both ends of a swap are now just as deliberately placed as
+            // if the user had dragged each one directly -- see the plan's
+            // own reasoning.
+            nodes: g.nodes.map((n) => {
+              if (n.id === node.id) return { ...n, position: draggedNewPos, data: { ...n.data, x: finalX, y: finalY, locked: true } };
+              if (n.id === swapTargetId) return { ...n, position: targetNewPos, data: { ...n.data, x: targetFinalX, y: targetFinalY, locked: true } };
+              return n;
+            }),
+          }));
+        })
+        .catch((err) => setStatus(`error: ${err}`));
+      return;
+    }
+
+    const snappedPos = finalX !== x || finalY !== y ? toFlowPosition(finalX, finalY, node.parentId) : null;
+
+    // A group's own children are meant to move AS ONE with it (the
+    // user's own explicit design: a child's placement is conceptually an
+    // offset from the group's own corner, not an independent absolute
+    // position) -- so moving the group has to shift every descendant's
+    // own stored absolute x/y by the SAME delta, or they're silently left
+    // behind (verified directly: this is exactly what "molecules piled at
+    // the bottom after moving the group up" turned out to be --
+    // snap-to-grid was reading each child's own stale, pre-move absolute
+    // position against the group's NEW box, which reads as "very far
+    // outside the box" and clamps every one of them to the same edge).
+    // Deliberately NOT buildContainerIndex's own `descendants` map here --
+    // that only ever registers *leaf* entities, skipping nested
+    // sub-containers entirely (see its own comment), which would leave a
+    // nested sub-container's own position relative to THIS move
+    // unintentionally shifting. A plain entity (isContainer false) never
+    // has descendants, so cascadeTargets is just empty for it -- same
+    // code path, no extra branching needed.
+    const cascadeTargets = isContainer
+      ? rawNodes.filter((n) => n.id !== node.id && isDescendantOf(n.id, node.id, rawById))
+      : [];
+    const dx = finalX - node.data.x;
+    const dy = finalY - node.data.y;
+    const cascadeUpdates = cascadeTargets.map((n) => ({ id: n.id, x: n.x + dx, y: n.y + dy }));
+
+    Promise.all(
+      [{ id: node.id, x: finalX, y: finalY }, ...cascadeUpdates].map((u) =>
+        fetch(`${API_BASE}/api/update_position`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(u),
+        }).then((r) => r.json())
+      )
+    )
+      .then((results) => {
+        const failed = results.find((r) => r.error);
+        if (failed) {
+          setStatus(`error: ${failed.error}`);
           return;
         }
+        const cascadeById = new Map(cascadeUpdates.map((u) => [u.id, u]));
         setFlowGraph((g) => ({
           ...g,
-          // A manual drag is exactly the "manually positioned" case
-          // data.locked exists to flag -- see its own comment -- so a
-          // later auto-layout run leaves this node exactly where the user
-          // just put it instead of repacking it.
-          nodes: g.nodes.map((n) =>
-            n.id === node.id ? { ...n, data: { ...n.data, x, y, locked: true } } : n
-          ),
+          nodes: g.nodes.map((n) => {
+            // A manual drag is exactly the "manually positioned" case
+            // data.locked exists to flag -- see its own comment -- so a
+            // later auto-layout run leaves this node exactly where the
+            // user just put it instead of repacking it. Only the node
+            // actually dragged gets locked -- a cascaded descendant was
+            // carried along, not individually placed, so its own lock
+            // status (if any) is left exactly as it already was.
+            if (n.id === node.id) {
+              return { ...n, ...(snappedPos ? { position: snappedPos } : {}), data: { ...n.data, x: finalX, y: finalY, locked: true } };
+            }
+            // A cascaded descendant's own RENDERED position never
+            // changes -- it's relative to its own immediate parent (the
+            // dragged container, or a nested sub-container that's ALSO
+            // shifting by this same delta), and a uniform shift leaves
+            // that relative offset exactly as it was. Only its stored
+            // absolute x/y needs updating, for future reference (the
+            // next drag, the next auto-layout, a save).
+            const u = cascadeById.get(n.id);
+            return u ? { ...n, data: { ...n.data, x: u.x, y: u.y } } : n;
+          }),
         }));
       })
       .catch((err) => setStatus(`error: ${err}`));
-  }, [scale, flowGraph.nodes, showWarning]);
+  }, [scale, flowGraph.nodes, showWarning, snapToGrid, sx]);
 
   // A group/compartment's resize handle (nodes.jsx's NodeResizer, via
   // NodeActionsContext) reports its new box in the same relative-to-parent
@@ -1763,49 +2359,139 @@ export default function App() {
         ay += parent.position.y;
         parentId = parent.parentId;
       }
-      const x = ax / scale;
-      const y = -ay / scale;
-      const width = box.width / scale;
-      const height = box.height / scale;
-      fetch(`${API_BASE}/api/update_position`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: nodeId, x, y, width, height }),
-      })
-        .then((r) => r.json())
-        .then((res) => {
-          if (res.error) {
-            setStatus(`error: ${res.error}`);
+      const rawX = ax / scale;
+      const rawY = -ay / scale;
+      const rawWidth = box.width / scale;
+      const rawHeight = box.height / scale;
+
+      const rawNodes = flowGraph.nodes.map((n) => n.data);
+      const rawById = {};
+      rawNodes.forEach((n) => {
+        rawById[n.id] = n;
+      });
+      const containerIndex = buildContainerIndex(rawNodes, rawById);
+      const boxById = {};
+      const cellUnit = sx;
+      const { cellPitch, rowPitch } = derivePitches(cellUnit);
+
+      // The user's own explicit design: a group "cannot shrink smaller
+      // than the extent of any of the group objects" -- computed in
+      // whole grid cells, with ZERO extra padding folded into the math
+      // (spec point 9 says nothing about padding; any visual breathing
+      // room is a fixed CSS margin on the group's own rendering, never a
+      // term here). Every direct child's own fixed footprint
+      // (childFootprint -- no DOM measurement needed any more, see the
+      // integer-grid rebuild's own notes) is anchored at its own stored
+      // top-left corner, and the proposed box is clamped to still contain
+      // all of them, independently per edge (so dragging, say, only the
+      // left handle past some child's own left edge is clamped there
+      // without also forcing the untouched right edge to move).
+      const directChildren = rawNodes.filter(
+        (n) => n.parentId === nodeId && !(n.type === 'pool' && n.isEnzComplex)
+      );
+      let x = rawX;
+      let y = rawY;
+      let right = rawX + rawWidth;
+      let bottom = rawY - rawHeight;
+      if (directChildren.length > 0) {
+        const extents = directChildren.map((child) => {
+          const size = childFootprint(child, containerIndex, boxById, cellUnit);
+          return { left: child.x, right: child.x + size.width, top: child.y, bottom: child.y - size.height };
+        });
+        const contentLeft = Math.min(...extents.map((e) => e.left));
+        const contentRight = Math.max(...extents.map((e) => e.right));
+        const contentTop = Math.max(...extents.map((e) => e.top));
+        const contentBottom = Math.min(...extents.map((e) => e.bottom));
+        x = Math.min(x, contentLeft);
+        right = Math.max(right, contentRight);
+        y = Math.max(y, contentTop);
+        bottom = Math.min(bottom, contentBottom);
+      }
+
+      // Edges snapped onto the SAME global lattice everything else in
+      // this app uses (the user's own explicit design: "groups are
+      // placed on square grid points and their boundaries are also
+      // aligned to the grid") -- floor/ceil, not round-to-nearest,
+      // specifically so snapping never shrinks the box back past the
+      // content-safe bounds just computed: each edge only ever moves
+      // further AWAY from the content it has to contain, never toward it.
+      x = Math.floor(x / cellPitch) * cellPitch;
+      right = Math.ceil(right / cellPitch) * cellPitch;
+      y = Math.ceil(y / rowPitch) * rowPitch;
+      bottom = Math.floor(bottom / rowPitch) * rowPitch;
+      const width = right - x;
+      const height = y - bottom;
+
+      const oldRaw = byId[nodeId]?.data;
+      const dx = oldRaw ? x - oldRaw.x : 0;
+      const dy = oldRaw ? y - oldRaw.y : 0;
+      // The user's own explicit design: a group's children move AS ONE
+      // with it -- same cascade onNodeDragStop's own container-move
+      // branch uses (see its own comment), needed here too since
+      // resizing from a top/left handle moves the box's own corner
+      // exactly the same way a plain drag does.
+      const cascadeTargets = rawNodes.filter((n) => n.id !== nodeId && isDescendantOf(n.id, nodeId, rawById));
+      const cascadeUpdates = cascadeTargets.map((n) => ({ id: n.id, x: n.x + dx, y: n.y + dy }));
+
+      Promise.all(
+        [{ id: nodeId, x, y, width, height }, ...cascadeUpdates].map((u) =>
+          fetch(`${API_BASE}/api/update_position`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(u),
+          }).then((r) => r.json())
+        )
+      )
+        .then((results) => {
+          const failed = results.find((r) => r.error);
+          if (failed) {
+            setStatus(`error: ${failed.error}`);
             return;
           }
+          // The box actually applied can differ from the resize handle's
+          // own live, unsnapped `box` (clamped to content, snapped to the
+          // lattice) -- position/style have to reflect the REAL final
+          // box, in the same relative-to-parent flow-pixel space `box`
+          // itself was given in, not the handle's own raw, pre-clamp
+          // report.
+          const parentBoxNow = oldRaw?.parentId ? effectiveContainerBox(rawById[oldRaw.parentId], containerIndex, boxById, cellUnit) : null;
+          const relX = parentBoxNow ? x - parentBoxNow.x : x;
+          const relY = parentBoxNow ? y - parentBoxNow.y : y;
+          const flowPos = { x: relX * scale, y: -relY * scale };
+          const flowStyle = { width: width * scale, height: height * scale };
+          const cascadeById = new Map(cascadeUpdates.map((u) => [u.id, u]));
           setFlowGraph((g) => ({
             ...g,
-            nodes: g.nodes.map((n) =>
-              n.id === nodeId
-                ? {
-                    ...n,
-                    position: { x: box.x, y: box.y },
-                    style: { width: box.width, height: box.height },
-                    // expandedStyle has to move in lockstep with the manual
-                    // resize, not just node.style -- it's the value
-                    // buildFlowNodes recomputes this container's own real
-                    // box from on every future refreshGraph, and until now
-                    // it was only ever set once, back at the last
-                    // buildFlowNodes call; left unsynced here, the next
-                    // refresh (or a save/reload round-trip) would silently
-                    // snap this container back to its pre-resize box.
-                    // A manual resize (like a manual drag, see
-                    // onNodeDragStop) counts as "manually positioned" --
-                    // see data.locked's own comment.
-                    data: { ...n.data, x, y, width, height, expandedStyle: { width: box.width, height: box.height }, locked: true },
-                  }
-                : n
-            ),
+            nodes: g.nodes.map((n) => {
+              if (n.id === nodeId) {
+                return {
+                  ...n,
+                  position: flowPos,
+                  style: flowStyle,
+                  // expandedStyle has to move in lockstep with the manual
+                  // resize, not just node.style -- it's the value
+                  // buildFlowNodes recomputes this container's own real
+                  // box from on every future refreshGraph, and until now
+                  // it was only ever set once, back at the last
+                  // buildFlowNodes call; left unsynced here, the next
+                  // refresh (or a save/reload round-trip) would silently
+                  // snap this container back to its pre-resize box.
+                  // A manual resize (like a manual drag, see
+                  // onNodeDragStop) counts as "manually positioned" --
+                  // see data.locked's own comment.
+                  data: { ...n.data, x, y, width, height, expandedStyle: flowStyle, locked: true },
+                };
+              }
+              // A cascaded descendant's own RENDERED position never
+              // changes -- see onNodeDragStop's own matching comment.
+              const u = cascadeById.get(n.id);
+              return u ? { ...n, data: { ...n.data, x: u.x, y: u.y } } : n;
+            }),
           }));
         })
         .catch((err) => setStatus(`error: ${err}`));
     },
-    [flowGraph.nodes, scale]
+    [flowGraph.nodes, scale, sx]
   );
 
   // A group's own "auto-layout children" action (Properties panel) --
@@ -1864,11 +2550,15 @@ export default function App() {
       setLayoutRunning(true);
       const containerIndex = buildContainerIndex(rawNodes, rawById);
       const boxById = {};
-      const cellUnit = effectiveAutoLayoutCell(scale);
+      const cellUnit = sx;
       const sizes = new Map(directChildren.map((c) => [c.id, childFootprint(c, containerIndex, boxById, cellUnit)]));
-      const groupBox = effectiveContainerBox(group, containerIndex, boxById);
-      const originX = groupBox.x + CONTAINER_PADDING;
-      const originY = groupBox.y - CONTAINER_PADDING;
+      const groupBox = effectiveContainerBox(group, containerIndex, boxById, cellUnit);
+      // The group's own stored position is the origin, used directly --
+      // every write path now guarantees it's already an exact SX-multiple
+      // of ITS OWN parent (see the "Integer grid rebuild" plan), so there
+      // is nothing left to round here.
+      const originX = groupBox.x;
+      const originY = groupBox.y;
 
       // Item 4 (later feedback): "redo Square... almost same algorithm,
       // just force the pool vs non-pool row structure." Square now
@@ -1892,7 +2582,11 @@ export default function App() {
         force,
         randomizeItems,
         randomizeBlanks,
+        origin: { x: originX, y: originY },
       });
+      // `p.x`/`p.y` (gridToPixels, layoutGrid.js) is already the plain
+      // top-left of the grid cell, relative to the origin -- no footprint
+      // subtraction needed, see the "Integer grid rebuild" plan.
       const placements = unlockedChildren.map((child) => {
         const p = positions.get(child.id);
         return { child, x: originX + p.x, y: originY + p.y };
@@ -1954,8 +2648,15 @@ export default function App() {
             ...lockedFootprints.map((f) => f.y - f.height),
           ];
           const topEdges = [...placements.map((p) => p.y), ...lockedFootprints.map((f) => f.y)];
-          const width = Math.max(...rightEdges) - Math.min(...leftEdges) + CONTAINER_PADDING * 2;
-          const height = Math.max(...topEdges) - Math.min(...bottomEdges) + CONTAINER_PADDING * 2;
+          // Zero padding folded into the grid math (spec point 9 -- see
+          // onContainerResize's own matching comment) -- rounded UP to a
+          // whole SX/rowPitch cell in case a locked child's own old
+          // position isn't currently exact (e.g. never touched since a
+          // legacy load); every freshly-packed placement already lands
+          // exactly on a cell, so this is a no-op for them.
+          const { cellPitch: finalCellPitch, rowPitch: finalRowPitch } = derivePitches(cellUnit);
+          const width = Math.ceil((Math.max(...rightEdges) - Math.min(...leftEdges)) / finalCellPitch) * finalCellPitch;
+          const height = Math.ceil((Math.max(...topEdges) - Math.min(...bottomEdges)) / finalRowPitch) * finalRowPitch;
           return fetch(`${API_BASE}/api/update_position`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1971,12 +2672,17 @@ export default function App() {
           // onAutoLayoutGroupByFlow's own matching comment) already
           // reflect whichever grid it actually chose, verified against
           // the real layout score -- no need to re-derive them here.
-          if (Object.keys(squareFlips).length > 0) {
-            setFlowGraph((g) => ({
-              ...g,
-              nodes: g.nodes.map((n) => (squareFlips[n.id] !== undefined ? { ...n, data: { ...n.data, flipped: squareFlips[n.id] } } : n)),
-            }));
-          }
+          // Also tags the group itself with data.layoutMode: 'square' --
+          // see buildFlowNodes' own comment -- so a later manual drag's
+          // snap-to-grid (onNodeDragStop) knows this group's grid is a
+          // plain, unoffset array, not Flow's staggered one.
+          setFlowGraph((g) => ({
+            ...g,
+            nodes: g.nodes.map((n) => {
+              if (n.id === groupId) return { ...n, data: { ...n.data, layoutMode: 'square' } };
+              return squareFlips[n.id] !== undefined ? { ...n, data: { ...n.data, flipped: squareFlips[n.id] } } : n;
+            }),
+          }));
           setAutoLayoutUndoSnapshot(undoSnapshot);
           refreshGraphRef.current?.();
           // Deliberately NOT bumping loadGeneration (and so NOT re-fitting
@@ -1989,7 +2695,7 @@ export default function App() {
         .catch((err) => setStatus(`error: ${err}`))
         .finally(() => setLayoutRunning(false));
     },
-    [flowGraph.nodes, flowGraph.edges, scale]
+    [flowGraph.nodes, flowGraph.edges, scale, sx]
   );
 
   // Sibling to onAutoLayoutGroup above, using computeFlowGroupLayout (a
@@ -2030,11 +2736,13 @@ export default function App() {
       setLayoutRunning(true);
       const containerIndex = buildContainerIndex(rawNodes, rawById);
       const boxById = {};
-      const cellUnit = effectiveAutoLayoutCell(scale);
+      const cellUnit = sx;
       const sizes = new Map(directChildren.map((c) => [c.id, childFootprint(c, containerIndex, boxById, cellUnit)]));
-      const groupBox = effectiveContainerBox(group, containerIndex, boxById);
-      const originX = groupBox.x + CONTAINER_PADDING;
-      const originY = groupBox.y - CONTAINER_PADDING;
+      const groupBox = effectiveContainerBox(group, containerIndex, boxById, cellUnit);
+      // The group's own stored position, used directly -- see
+      // onAutoLayoutGroup's own matching comment.
+      const originX = groupBox.x;
+      const originY = groupBox.y;
 
       const { positions, flips: flowFlips } = computeFlowGroupLayout({
         children: directChildren,
@@ -2045,7 +2753,10 @@ export default function App() {
         cellUnit,
         randomizeItems,
         randomizeBlanks,
+        origin: { x: originX, y: originY },
       });
+      // `p.x`/`p.y` is already the plain top-left of the grid cell -- see
+      // onAutoLayoutGroup's own matching comment.
       const placements = unlockedChildren.map((child) => {
         const p = positions.get(child.id);
         return { child, x: originX + p.x, y: originY + p.y };
@@ -2092,8 +2803,15 @@ export default function App() {
             ...lockedFootprints.map((f) => f.y - f.height),
           ];
           const topEdges = [...placements.map((p) => p.y), ...lockedFootprints.map((f) => f.y)];
-          const width = Math.max(...rightEdges) - Math.min(...leftEdges) + CONTAINER_PADDING * 2;
-          const height = Math.max(...topEdges) - Math.min(...bottomEdges) + CONTAINER_PADDING * 2;
+          // Zero padding folded into the grid math (spec point 9 -- see
+          // onContainerResize's own matching comment) -- rounded UP to a
+          // whole SX/rowPitch cell in case a locked child's own old
+          // position isn't currently exact (e.g. never touched since a
+          // legacy load); every freshly-packed placement already lands
+          // exactly on a cell, so this is a no-op for them.
+          const { cellPitch: finalCellPitch, rowPitch: finalRowPitch } = derivePitches(cellUnit);
+          const width = Math.ceil((Math.max(...rightEdges) - Math.min(...leftEdges)) / finalCellPitch) * finalCellPitch;
+          const height = Math.ceil((Math.max(...topEdges) - Math.min(...bottomEdges)) / finalRowPitch) * finalRowPitch;
           return fetch(`${API_BASE}/api/update_position`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2113,19 +2831,22 @@ export default function App() {
           // -- recomputing it here instead would silently throw away
           // that verification and could re-introduce a flip the search
           // had already confirmed was worse.
-          if (Object.keys(flowFlips).length > 0) {
-            setFlowGraph((g) => ({
-              ...g,
-              nodes: g.nodes.map((n) => (flowFlips[n.id] !== undefined ? { ...n, data: { ...n.data, flipped: flowFlips[n.id] } } : n)),
-            }));
-          }
+          // Also tags the group itself with data.layoutMode: 'flow' -- see
+          // onAutoLayoutGroup's own matching comment.
+          setFlowGraph((g) => ({
+            ...g,
+            nodes: g.nodes.map((n) => {
+              if (n.id === groupId) return { ...n, data: { ...n.data, layoutMode: 'flow' } };
+              return flowFlips[n.id] !== undefined ? { ...n, data: { ...n.data, flipped: flowFlips[n.id] } } : n;
+            }),
+          }));
           setAutoLayoutUndoSnapshot(undoSnapshot);
           refreshGraphRef.current?.();
         })
         .catch((err) => setStatus(`error: ${err}`))
         .finally(() => setLayoutRunning(false));
     },
-    [flowGraph.nodes, flowGraph.edges, scale]
+    [flowGraph.nodes, flowGraph.edges, scale, sx]
   );
 
   // Reverts whatever onAutoLayoutGroup/onAutoLayoutRecursive/
@@ -2211,7 +2932,7 @@ export default function App() {
         setLayoutProgress({ done: doneCount, total: containerCount });
         await yieldToBrowser();
       };
-      await computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, flowGraph.edges, perLevelBudgetMs, effectiveAutoLayoutCell(scale), onProgress);
+      await computeLocalLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, flowGraph.edges, perLevelBudgetMs, sx, onProgress);
       if (localLayouts[rootId].children.length === 0) {
         setLayoutRunning(false);
         setLayoutProgress(null);
@@ -2222,7 +2943,7 @@ export default function App() {
       // only its *contents* are being rearranged, so there's nothing
       // above it in the tree to anchor a new position against; it does
       // still get resized to fit whatever its own subtree now needs.
-      const rootBox = effectiveContainerBox(root, containerIndex, boxById);
+      const rootBox = effectiveContainerBox(root, containerIndex, boxById, sx);
       const positionUpdates = [];
       const resizeUpdates = [
         { id: rootId, x: rootBox.x, y: rootBox.y, width: localLayouts[rootId].width, height: localLayouts[rootId].height },
@@ -2291,12 +3012,16 @@ export default function App() {
           const lockedIds = new Set(rawNodes.filter((n) => n.locked).map((n) => n.id));
           const candidateIds = positionUpdates.map((u) => u.id);
           const flips = computeFlipUpdates(candidateIds, rawById, flowGraph.edges, xById, lockedIds);
-          if (Object.keys(flips).length > 0) {
-            setFlowGraph((g) => ({
-              ...g,
-              nodes: g.nodes.map((n) => (flips[n.id] !== undefined ? { ...n, data: { ...n.data, flipped: flips[n.id] } } : n)),
-            }));
-          }
+          // Every container this run actually repacked (root plus every
+          // nested unlocked one -- resizedIds) is tagged 'square' -- see
+          // onAutoLayoutGroup's own matching comment.
+          setFlowGraph((g) => ({
+            ...g,
+            nodes: g.nodes.map((n) => {
+              if (resizedIds.has(n.id)) return { ...n, data: { ...n.data, layoutMode: 'square' } };
+              return flips[n.id] !== undefined ? { ...n, data: { ...n.data, flipped: flips[n.id] } } : n;
+            }),
+          }));
           setAutoLayoutUndoSnapshot(undoSnapshot);
           // Unlike the single-level layout actions above (which leave the
           // viewport alone -- see their own "deliberately not bumping"
@@ -2323,7 +3048,7 @@ export default function App() {
           setLayoutProgress(null);
         });
     },
-    [flowGraph.nodes, flowGraph.edges, scale]
+    [flowGraph.nodes, flowGraph.edges, scale, sx]
   );
 
   // Recurse Flow -- see computeLocalFlowLayouts' own comment for the
@@ -2376,14 +3101,14 @@ export default function App() {
         setLayoutProgress({ done: doneCount, total: containerCount });
         await yieldToBrowser();
       };
-      await computeLocalFlowLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, flipsOut, flowGraph.edges, effectiveAutoLayoutCell(scale), true, onProgress);
+      await computeLocalFlowLayouts(rootId, rawNodes, rawById, containerIndex, boxById, localLayouts, flipsOut, flowGraph.edges, sx, true, onProgress);
       if (localLayouts[rootId].children.length === 0) {
         setLayoutRunning(false);
         setLayoutProgress(null);
         return;
       }
 
-      const rootBox = effectiveContainerBox(root, containerIndex, boxById);
+      const rootBox = effectiveContainerBox(root, containerIndex, boxById, sx);
       const positionUpdates = [];
       const resizeUpdates = [
         { id: rootId, x: rootBox.x, y: rootBox.y, width: localLayouts[rootId].width, height: localLayouts[rootId].height },
@@ -2433,12 +3158,22 @@ export default function App() {
           // own comment) are applied directly -- no need to re-derive
           // them afterward with the plain heuristic the way
           // onAutoLayoutRecursive above still does for Square.
-          if (Object.keys(flipsOut).length > 0) {
-            setFlowGraph((g) => ({
-              ...g,
-              nodes: g.nodes.map((n) => (flipsOut[n.id] !== undefined ? { ...n, data: { ...n.data, flipped: flipsOut[n.id] } } : n)),
-            }));
-          }
+          // Every NESTED container this run touched (resizedIds minus the
+          // root itself) was packed with the plain pool/non-pool Flow grid
+          // -- tagged 'flow' for the same snap-to-grid reason as
+          // onAutoLayoutGroupByFlow's own matching comment. The root
+          // itself used computeUniformFlowLayout's own uniform (no pool/
+          // non-pool split) grid instead, which isn't either named mode --
+          // left untagged, so a later manual drag there falls back to the
+          // plan's own "no recorded mode" default (see buildFlowNodes'
+          // comment) rather than mislabeling it.
+          setFlowGraph((g) => ({
+            ...g,
+            nodes: g.nodes.map((n) => {
+              if (n.id !== rootId && resizedIds.has(n.id)) return { ...n, data: { ...n.data, layoutMode: 'flow' } };
+              return flipsOut[n.id] !== undefined ? { ...n, data: { ...n.data, flipped: flipsOut[n.id] } } : n;
+            }),
+          }));
           setAutoLayoutUndoSnapshot(undoSnapshot);
           // See onAutoLayoutRecursive's own matching comment just above.
           return refreshGraphRef.current?.().then(() => setLoadGeneration((g) => g + 1));
@@ -2449,10 +3184,16 @@ export default function App() {
           setLayoutProgress(null);
         });
     },
-    [flowGraph.nodes, flowGraph.edges, scale]
+    [flowGraph.nodes, flowGraph.edges, scale, sx]
   );
 
-  const nodeActions = useMemo(() => ({ onContainerResize }), [onContainerResize]);
+  // cellWidthPx/cellHeightPx: SX's own on-screen size (nodes.jsx's fixed
+  // outer wrapper -- see the "Integer grid rebuild" plan), NOT scaled by
+  // ScaleIcons -- only the icon CONTENT inside that wrapper scales.
+  const nodeActions = useMemo(
+    () => ({ onContainerResize, cellWidthPx: sx * scale, cellHeightPx: (sx / 2) * scale, iconScale: scaleIcons }),
+    [onContainerResize, sx, scale, scaleIcons]
+  );
 
   // {poolId: window} for every pool currently marked plotted -- plotWindow
   // is frontend-only state (see buildFlowNodes), so it has to be sent
@@ -2638,7 +3379,12 @@ export default function App() {
       // all -- true for the live per-field saves (color on click, name on
       // blur) that don't go through the full Properties form, which would
       // otherwise blank out an existing flip on every such save.
-      const { flipped = node.data.flipped, ...backendFields } = fields;
+      // parentSide (like flipped) is frontend-only -- same reasoning,
+      // same treatment, so a Save (or the dirty-field-flush this panel's
+      // own unmount effect triggers whenever ANY field, including this
+      // one, is touched) doesn't wipe out a manual vertical-flip toggle
+      // the moment it's set.
+      const { flipped = node.data.flipped, parentSide = node.data.parentSide, ...backendFields } = fields;
       const endpoint = EDITABLE_ENDPOINTS[node.data.type];
       const body = { id: nodeId, fields: backendFields };
       // A Stimulus's (or summation Function's -- same underlying MOOSE
@@ -2716,7 +3462,7 @@ export default function App() {
           setFlowGraph((g) => ({
             nodes: g.nodes.map((n) =>
               n.id === nodeId
-                ? { ...n, id: updated.id, data: { ...updated, color, flipped, plotWindow, collapsed } }
+                ? { ...n, id: updated.id, data: { ...updated, color, flipped, parentSide, plotWindow, collapsed } }
                 : n
             ),
             edges: renamed
@@ -2765,6 +3511,7 @@ export default function App() {
           const existingCollapsed = {};
           const existingLocked = {};
           const existingParentSide = {};
+          const existingLayoutMode = {};
           g.nodes.forEach((n) => {
             existingFlipped[n.id] = n.data.flipped;
             existingLocked[n.id] = n.data.locked;
@@ -2777,20 +3524,22 @@ export default function App() {
             }
             if (CONTAINER_TYPES.includes(n.data.type)) {
               existingCollapsed[n.id] = n.data.collapsed;
+              existingLayoutMode[n.id] = n.data.layoutMode;
             }
           });
-          return buildFlowNodes(graph, scale, {
+          return buildFlowNodes(graph, scale, sx, {
             flipped: existingFlipped,
             color: existingColor,
             plotWindow: existingPlotWindow,
             collapsed: existingCollapsed,
             locked: existingLocked,
             parentSide: existingParentSide,
+            layoutMode: existingLayoutMode,
           });
         });
       })
       .catch((err) => setStatus(`error: ${err}`));
-  }, [scale]);
+  }, [scale, sx]);
   refreshGraphRef.current = refreshGraph;
 
   const addNodeToGraph = useCallback((nodeData) => {
@@ -2830,6 +3579,22 @@ export default function App() {
     }));
   }, []);
 
+  // The user's own later request: a manual override for which edge (top
+  // or bottom) an enz/concchan's own structural parent-link handle
+  // renders on -- `data.parentSide` (nodes.jsx's EnzNode/ConcChanNode)
+  // otherwise only ever gets computeInitialParentSides' own one-time
+  // automatic guess (see buildFlowNodes), with no way back once that
+  // guess is wrong for how the user actually wants it to read. Frontend-
+  // only, same as `flipped` itself -- not sent to the backend, just
+  // preserved by id across a refresh (see buildFlowNodes' own `preserve`
+  // handling).
+  const onToggleParentSide = useCallback((nodeId, parentSide) => {
+    setFlowGraph((g) => ({
+      ...g,
+      nodes: g.nodes.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, parentSide, locked: true } } : n)),
+    }));
+  }, []);
+
   // Clears data.locked across a whole subtree (the container this was
   // invoked on, plus every descendant) -- the escape hatch for "no, I
   // really do want auto-layout to touch everything here again", since
@@ -2857,6 +3622,97 @@ export default function App() {
       };
     });
   }, []);
+
+  // The user's own later request: a "Snap to grid" button for a group
+  // that pulls every direct child onto the stable lattice exactly where
+  // it already sits -- unlike Square/Flow, this never reorders or
+  // repacks anything, it just
+  // moves each child independently to its own nearest grid cell, the same
+  // computation a manual drag-snap already does for one node at a time.
+  // Meant as the retroactive fix for a group whose children drifted off
+  // the lattice before this session's origin-stability fix existed (or
+  // after a manual edit with snap-to-grid turned off) -- not a substitute
+  // for Square/Flow, which is still how you'd want a genuinely fresh
+  // arrangement. Leaves `locked` exactly as each child already had it --
+  // this is a one-off correction, not a request to pin everything in
+  // place the way a manual drag does.
+  const onSnapGroupToGrid = useCallback(
+    (groupId) => {
+      const rawNodes = flowGraph.nodes.map((n) => n.data);
+      const rawById = {};
+      rawNodes.forEach((n) => {
+        rawById[n.id] = n;
+      });
+      const group = rawById[groupId];
+      if (!group) return;
+      const directChildren = rawNodes.filter(
+        (n) => n.parentId === groupId && !(n.type === 'pool' && n.isEnzComplex)
+      );
+      if (directChildren.length === 0) return;
+      const containerIndex = buildContainerIndex(rawNodes, rawById);
+      const boxById = {};
+      const cellUnit = sx;
+      const groupBox = effectiveContainerBox(group, containerIndex, boxById, cellUnit);
+      const { cellPitch, rowPitch } = derivePitches(cellUnit);
+      const originX = groupBox.x;
+      const originY = groupBox.y;
+      const useOffset = (group.layoutMode ?? 'flow') !== 'square';
+      const numCols = Math.max(1, Math.round(groupBox.width / cellPitch));
+      const numRows = Math.max(1, Math.round(groupBox.height / rowPitch));
+
+      // One shared occupied-cell set, keyed per category, built up as
+      // each child is assigned -- so two children that happen to compute
+      // the SAME nearest cell (the common case this button exists for is
+      // everything already distinct, but nothing guarantees it) land on
+      // two different cells instead of both landing on one (see
+      // findFreeGridCell's own comment).
+      const occupiedByCategory = { pool: new Set(), nonpool: new Set() };
+      const updates = directChildren.map((child) => {
+        const footprint = childFootprint(child, containerIndex, boxById, cellUnit);
+        const category = categoryOf(child.id, rawById);
+        let { row, col } = nearestGridCell(child.x - originX, child.y - originY, category, cellPitch, rowPitch, useOffset);
+        ({ row, col } = findFreeGridCell(row, col, cellPitch, rowPitch, occupiedByCategory[category]));
+        const wide = footprint.width > cellPitch * 1.5;
+        ({ row, col } = clampCellToBounds(row, col, category, wide, numRows, numCols));
+        occupiedByCategory[category].add(`${row},${col}`);
+        const shift = useOffset && Math.abs(row % 2) === 1 ? cellPitch / 2 : 0;
+        return { id: child.id, x: originX + shift + col * cellPitch, y: originY - row * rowPitch };
+      });
+
+      setLayoutRunning(true);
+      Promise.all(
+        updates.map((u) =>
+          fetch(`${API_BASE}/api/update_position`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: u.id, x: u.x, y: u.y }),
+          }).then((r) => r.json())
+        )
+      )
+        .then((results) => {
+          const failed = results.find((r) => r.error);
+          if (failed) {
+            setStatus(`error: ${failed.error}`);
+            return;
+          }
+          const updateById = new Map(updates.map((u) => [u.id, u]));
+          setFlowGraph((g) => ({
+            ...g,
+            nodes: g.nodes.map((n) => {
+              const u = updateById.get(n.id);
+              if (!u) return n;
+              const parentBox = n.parentId ? effectiveContainerBox(rawById[n.parentId], containerIndex, boxById, cellUnit) : null;
+              const relX = parentBox ? u.x - parentBox.x : u.x;
+              const relY = parentBox ? u.y - parentBox.y : u.y;
+              return { ...n, position: { x: relX * scale, y: -relY * scale }, data: { ...n.data, x: u.x, y: u.y } };
+            }),
+          }));
+        })
+        .catch((err) => setStatus(`error: ${err}`))
+        .finally(() => setLayoutRunning(false));
+    },
+    [flowGraph.nodes, scale, sx]
+  );
 
   // Same reasoning as onToggleFlip -- collapsed is frontend-only (see
   // buildFlowNodes/computeCollapsedView), so it applies immediately.
@@ -3189,12 +4045,40 @@ export default function App() {
     (type, flowPosition, hitNodeId) => {
       const kx = flowPosition.x / scale;
       const ky = -flowPosition.y / scale;
-      if (type === 'pool') {
-        handleAddPool(kx, ky, findContainerAt(kx, ky, flowGraph.nodes));
-      } else if (type === 'reac') {
-        handleAddReac(kx, ky, findContainerAt(kx, ky, flowGraph.nodes));
+      if (type === 'pool' || type === 'reac') {
+        const parentId = findContainerAt(kx, ky, flowGraph.nodes, sx);
+        // Snap a freshly-dropped pool/reaction into the same grid a
+        // manual drag already snaps to -- the user's own later request.
+        let dropX = kx;
+        let dropY = ky;
+        if (snapToGrid && parentId) {
+          const rawNodes = flowGraph.nodes.map((n) => n.data);
+          const rawById = {};
+          rawNodes.forEach((n) => {
+            rawById[n.id] = n;
+          });
+          const containerIndex = buildContainerIndex(rawNodes, rawById);
+          const boxById = {};
+          const cellUnit = sx;
+          const footprint = childFootprint({ type, name: '' }, containerIndex, boxById, cellUnit);
+          const snapped = snapPointToGrid(
+            kx,
+            ky,
+            rawById[parentId],
+            rawById,
+            containerIndex,
+            boxById,
+            cellUnit,
+            type === 'pool' ? 'pool' : 'nonpool',
+            footprint
+          );
+          dropX = snapped.x;
+          dropY = snapped.y;
+        }
+        if (type === 'pool') handleAddPool(dropX, dropY, parentId);
+        else handleAddReac(dropX, dropY, parentId);
       } else if (type === 'group') {
-        const parentId = findContainerAt(kx, ky, flowGraph.nodes);
+        const parentId = findContainerAt(kx, ky, flowGraph.nodes, sx);
         if (!parentId) {
           showWarning('Drop the group icon inside an existing compartment (or group).');
           return;
@@ -3305,6 +4189,8 @@ export default function App() {
       createSumFuncOnPool,
       createGenFuncOnPool,
       showWarning,
+      snapToGrid,
+      sx,
     ]
   );
 
@@ -3382,6 +4268,7 @@ export default function App() {
           const existingCollapsed = {};
           const existingLocked = {};
           const existingParentSide = {};
+          const existingLayoutMode = {};
           g.nodes.forEach((n) => {
             existingFlipped[n.id] = n.data.flipped;
             existingLocked[n.id] = n.data.locked;
@@ -3394,15 +4281,17 @@ export default function App() {
             }
             if (CONTAINER_TYPES.includes(n.data.type)) {
               existingCollapsed[n.id] = n.data.collapsed;
+              existingLayoutMode[n.id] = n.data.layoutMode;
             }
           });
-          return buildFlowNodes(graph, scale, {
+          return buildFlowNodes(graph, scale, sx, {
             flipped: existingFlipped,
             color: existingColor,
             plotWindow: existingPlotWindow,
             collapsed: existingCollapsed,
             locked: existingLocked,
             parentSide: existingParentSide,
+            layoutMode: existingLayoutMode,
           });
         });
         setStatus(`reset ${graph.nodes.length} nodes to initial values`);
@@ -3411,7 +4300,7 @@ export default function App() {
         setRunError(null);
       })
       .catch((err) => setRunError(String(err)));
-  }, [scale]);
+  }, [scale, sx]);
 
   // One HTTP request per dose level (not one all-in-one blocking request)
   // so progress can be shown and the user can halt between levels --
@@ -3599,6 +4488,7 @@ export default function App() {
         selectedParentName={selectedParentName}
         onSaveNode={onSaveNode}
         onToggleFlip={onToggleFlip}
+        onToggleParentSide={onToggleParentSide}
         onToggleCollapse={onToggleCollapse}
         onSetAllCollapsed={onSetAllCollapsed}
         visualMode={visualMode}
@@ -3608,9 +4498,15 @@ export default function App() {
         onAutoLayoutRecursive={onAutoLayoutRecursive}
         onAutoLayoutRecursiveFlow={onAutoLayoutRecursiveFlow}
         onClearLayoutLocks={onClearLayoutLocks}
+        onSnapGroupToGrid={onSnapGroupToGrid}
         layoutRunning={layoutRunning}
         layoutProgress={layoutProgress}
+        snapToGrid={snapToGrid}
+        setSnapToGrid={setSnapToGrid}
         selectedGroupScore={selectedGroupScore}
+        scaleIcons={scaleIcons}
+        setScaleIcons={setScaleIcons}
+        sx={sx}
         onUndoLayout={onUndoLayout}
         canUndoLayout={!!autoLayoutUndoSnapshot}
         loadGeneration={loadGeneration}
@@ -3643,6 +4539,9 @@ export default function App() {
         onDoseStart={handleDoseStart}
         onDoseHalt={handleDoseHalt}
         onArmDosePick={handleArmDosePick}
+        onPrintLayout={handlePrintLayout}
+        onSaveLayoutSvg={handleSaveLayoutSvg}
+        canvasApiRef={canvasApiRef}
         findSimParsed={findSimParsed}
         findSimEntityMap={findSimEntityMap}
         findSimFileName={findSimFileName}

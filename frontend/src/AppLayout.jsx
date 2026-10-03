@@ -31,14 +31,18 @@ export default function AppLayout({
   selectedParentName,
   onSaveNode,
   onToggleFlip,
+  onToggleParentSide,
   onToggleCollapse,
   onAutoLayoutGroup,
   onAutoLayoutGroupByFlow,
   onAutoLayoutRecursive,
   onAutoLayoutRecursiveFlow,
   onClearLayoutLocks,
+  onSnapGroupToGrid,
   layoutRunning,
   layoutProgress,
+  snapToGrid,
+  setSnapToGrid,
   selectedGroupScore,
   onUndoLayout,
   canUndoLayout,
@@ -70,6 +74,8 @@ export default function AppLayout({
   onDoseStart,
   onDoseHalt,
   onArmDosePick,
+  onPrintLayout,
+  onSaveLayoutSvg,
   findSimParsed,
   findSimEntityMap,
   findSimFileName,
@@ -87,6 +93,8 @@ export default function AppLayout({
   setVolumeUnit,
   lengthUnit,
   setLengthUnit,
+  scaleIcons,
+  setScaleIcons,
   ...canvasProps
 }) {
   const menuComponents = {
@@ -99,8 +107,12 @@ export default function AppLayout({
         collapsedMap={collapsedMap}
         runtime={runtime}
         setRuntime={setRuntime}
+        onPrintLayout={onPrintLayout}
+        onSaveLayoutSvg={onSaveLayoutSvg}
         plotDt={plotDt}
         setPlotDt={setPlotDt}
+        sx={canvasProps.sx}
+        scaleIcons={scaleIcons}
       />
     ),
     Properties: (
@@ -109,14 +121,18 @@ export default function AppLayout({
         parentName={selectedParentName}
         onSave={onSaveNode}
         onToggleFlip={onToggleFlip}
+        onToggleParentSide={onToggleParentSide}
         onToggleCollapse={onToggleCollapse}
         onAutoLayoutGroup={onAutoLayoutGroup}
         onAutoLayoutGroupByFlow={onAutoLayoutGroupByFlow}
         onAutoLayoutRecursive={onAutoLayoutRecursive}
         onAutoLayoutRecursiveFlow={onAutoLayoutRecursiveFlow}
         onClearLayoutLocks={onClearLayoutLocks}
+        onSnapGroupToGrid={onSnapGroupToGrid}
         layoutRunning={layoutRunning}
         layoutProgress={layoutProgress}
+        snapToGrid={snapToGrid}
+        setSnapToGrid={setSnapToGrid}
         selectedGroupScore={selectedGroupScore}
         onUndoLayout={onUndoLayout}
         canUndoLayout={canUndoLayout}
@@ -202,7 +218,7 @@ export default function AppLayout({
       </AppBar>
       <Box sx={{ display: 'flex', flexGrow: 1, p: 2, gap: 2, minHeight: 0 }}>
         <Box sx={{ width: '33%', height: '100%' }}>{menuComponents[activeMenu]}</Box>
-        <Box id="printable-canvas" sx={{ width: '67%', height: '100%' }}>
+        <Box sx={{ width: '67%', height: '100%' }}>
           <MainDisplay
             {...canvasProps}
             plotData={plotData}
@@ -215,6 +231,8 @@ export default function AppLayout({
             onAddEnz={onAddEnz}
             concUnit={concUnit}
             timeUnit={timeUnit}
+            scaleIcons={scaleIcons}
+            setScaleIcons={setScaleIcons}
           />
         </Box>
       </Box>
