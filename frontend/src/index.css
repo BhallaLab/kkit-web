@@ -147,7 +147,37 @@ code {
    switches to the Reaction Layout tab first -- #printable-canvas is
    `display: none` while the Plots tab is showing, and `visibility` alone
    can't override that. */
+/* `margin: 0` lets #printable-canvas's own 100vw/100vh below fill the
+   whole page without the browser's own default page margins shrinking it
+   back down inside that. The page's own *size* used to be hardcoded here
+   too ("landscape", a fixed keyword) -- replaced by App.jsx's
+   handlePrintLayout, which measures the actual fitted diagram and injects
+   an exact-size @page rule of its own matching it precisely (see that
+   function's own comment): a generic "landscape" still left the page's
+   real aspect ratio mismatched against the diagram's own (portrait-ish
+   models, or a very wide/short one), stretching #printable-canvas's own
+   100vw/100vh to fit a differently-shaped page than the one fitView/
+   getViewport actually computed zoom for -- "only a fraction of the
+   layout window" made it onto the page, the rest pushed off it. */
+@page {
+  margin: 0;
+}
+
 @media print {
+  /* Chrome/most browsers don't print background colors by default (an
+     "ink saving" default meant for ordinary text documents) -- every
+     pool/reac/enz icon's own color is a plain CSS background-color, so
+     without this they printed as blank white/pale outlines regardless of
+     their real on-screen color. Both the standard and the still-required
+     -webkit- prefixed property (Chrome/Safari's own print pipeline reads
+     the prefixed one specifically) are set, and on every element (not just
+     #printable-canvas's own icons) since an ancestor with the unprefixed
+     property set but not the prefixed one -- or vice versa -- doesn't
+     reliably inherit the other for every browser's own print engine. */
+  * {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
   body * {
     visibility: hidden;
   }
@@ -156,18 +186,34 @@ code {
     visibility: visible;
   }
   #printable-canvas {
-    position: absolute;
+    /* fixed, not absolute: #printable-canvas's own immediate parent (the
+       Reaction Layout tab's content wrapper, MainDisplay.jsx) is itself
+       `position: relative` -- an `absolute` top:0/left:0 here resolved
+       against THAT wrapper's own box, which still sits wherever it
+       normally does on screen (offset by the header/side menu panel to
+       its left, still visibility:hidden rather than display:none, so it
+       still reserves its own space) rather than the page's own true
+       origin -- verified directly as the cause of the fitted diagram
+       landing shifted away from the page's own top-left corner and
+       cropped on the far side, even after @page's own size (injected by
+       handlePrintLayout) was already made to match it exactly. `fixed`
+       positions against the page itself regardless of any such ancestor.
+       width/height below are vw/vh for the identical reason: a percentage
+       here would resolve against that same wrapper's own (pre-print,
+       menu-panel-shrunk) size instead of the actual page. */
+    position: fixed;
     top: 0;
     left: 0;
-    width: 100%;
-    height: 100%;
+    width: 100vw;
+    height: 100vh;
   }
   /* React Flow's own zoom/fit-view/lock/visual-mode buttons and the dotted
      background grid live *inside* #printable-canvas too (see MainDisplay's
      own <Controls>/<Background>) -- controls same as the tabs/palette
      outside it, not "model contents", so these are excluded here on top of
-     the visibility flip above. handleSaveLayoutSvg's own html-to-image
-     `filter` skips the same two classes for the SVG export path. */
+     the visibility flip above. buildStandaloneSvg (exportSvg.js) builds its
+     own plain SVG straight from this app's node/edge data for the separate
+     "Save Layout to SVG" path, so it never touches this DOM/CSS at all. */
   .react-flow__controls,
   .react-flow__background {
     display: none !important;

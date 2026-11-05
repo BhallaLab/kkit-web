@@ -639,43 +639,61 @@ def _function_inputs(f):
     return [moose.element(n).path for n in x.neighbors["input"]]
 
 
+def _is_plain_sum_expr(expr, num_vars):
+    """True if expr is EXACTLY 'x0+x1+...+x(num_vars-1)' -- the only shape
+    add_edge's own funcInput handling, or a legacy .g SUMTOTAL, ever
+    produces for a summation function. This is the sole remaining way to
+    recognize one at all: moose's own allowUnknownVariable flag can no
+    longer be set to False by anyone -- verified directly,
+    Function::setAllowUnknownVariable is now a silent no-op in the
+    currently installed moose build, always reading back True regardless
+    of what's assigned, for a .g-loaded SUMTOTAL exactly as much as an
+    SBML-reconstructed one (moose.loadModel's own ReadKkit::buildSumTotal
+    hits the identical no-op)."""
+    if num_vars == 0:
+        return False
+    return expr.replace(' ', '') == '+'.join(f'x{i}' for i in range(num_vars))
+
+
 def describe_stim(path):
-    """A Function is one of three things, purely by what its own
-    allowUnknownVariable/numVars already are (no separate stored flag --
-    this is deliberately reload-robust, since it's re-derived fresh from
-    live moose state every time, regardless of whether the model came
-    from a .g file, an SBML round-trip, or was built interactively this
-    session):
-    - allowUnknownVariable is False: a summation function -- ReadKkit.cpp's
-      own buildSumTotal sets this for a legacy .g SUMTOTAL, and
-      create_sumfunc does the same for one built interactively here, in
-      both cases specifically so ONLY its own x0, x1, ... names are ever
-      legal in its expr. Type "func" (the Sigma icon; no user-editable
-      expr, since add_edge's own funcInput handling always keeps it
-      exactly "x0+x1+..."). This is checked FIRST and independently of
-      numVars/input count -- a freshly created, still zero-input
-      summation function is unambiguously a "func" from the moment it's
-      created, not indistinguishable from a genuine stim the way relying
-      on "has it got any inputs yet" alone would leave it.
-    - allowUnknownVariable is True (moose's own default) and numVars==0: a
-      genuine stimulus, a pure constant/time-based driver with no pool
-      inputs at all -- type "stim".
-    - allowUnknownVariable is True and numVars>0: a general function,
-      user-authored, referencing its own x0, x1, ... inputs however it
-      likes (and possibly other names too, unlike a summation function) --
-      type "genfunc" (the f(x) icon).
+    """A Function is one of three things, by its own numVars and expr (no
+    separate stored flag -- this is deliberately reload-robust, since it's
+    re-derived fresh from live moose state every time, regardless of
+    whether the model came from a .g file, an SBML round-trip, or was built
+    interactively this session):
+    - expr is exactly "x0+x1+...+x(numVars-1)": a summation function --
+      ReadKkit.cpp's own buildSumTotal produces this shape for a legacy .g
+      SUMTOTAL, and create_sumfunc does the same for one built
+      interactively here (add_edge's own funcInput handling never lets a
+      summation function's expr become anything else). Type "func" (the
+      Sigma icon; no user-editable expr). Checked FIRST and independently
+      of numVars/input count otherwise mattering -- a freshly created,
+      still zero-input summation function is unambiguously a "func" from
+      the moment it's created, not indistinguishable from a genuine stim
+      the way relying on "has it got any inputs yet" alone would leave it
+      (see _is_plain_sum_expr's own num_vars==0 guard, though: zero inputs
+      with an empty expr doesn't match the pattern above and falls through
+      to "stim" below, same as before -- there's no "x0+...+x(-1)" shape to
+      check against).
+    - numVars==0 (and not a sum): a genuine stimulus, a pure constant/
+      time-based driver with no pool inputs at all -- type "stim".
+    - numVars>0 (and not a sum): a general function, user-authored,
+      referencing its own x0, x1, ... inputs however it likes (and possibly
+      other names too, unlike a summation function) -- type "genfunc" (the
+      f(x) icon).
     All three still drive a target pool the same way (_stim_field)."""
     f = moose.element(path)
     target_id, dest_field = _stim_field(f)
     input_ids = _function_inputs(f)
-    if not f.allowUnknownVariable:
+    expr = clean_func_expr(f)
+    if _is_plain_sum_expr(expr, f.numVars):
         node_type = "func"
     elif f.numVars == 0:
         node_type = "stim"
     else:
         node_type = "genfunc"
     return _node(f, node_type, {
-        "expr": clean_func_expr(f),
+        "expr": expr,
         "targetId": target_id,
         # "conc" / "concInit" -- stripped of the "set" prefix moose's dest
         # field names carry, to match the plain field names used elsewhere

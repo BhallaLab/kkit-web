@@ -138,32 +138,44 @@ function selectedGlow(selected) {
 // overridden explicitly here since they'd otherwise fight the border-trick
 // geometry (e.g. a stray 1px border-right left over on a "rightward"
 // triangle would blunt its point).
-const triangleCommon = {
-  position: 'absolute',
-  top: '50%',
-  width: 0,
-  height: 0,
-  minWidth: 0,
-  minHeight: 0,
-  background: 'transparent',
-  borderRadius: 0,
-  borderTop: '7px solid transparent',
-  borderBottom: '7px solid transparent',
-  transform: 'translateY(-50%)',
-};
+// Was a static object; now a factory of iconScale like scaledBaseStyle
+// above -- a connection handle is part of the icon's own visual size, so it
+// has to grow/shrink along with everything else ScaleIcons touches instead
+// of staying a fixed, now-mismatched pixel size.
+function triangleCommon(iconScale) {
+  return {
+    position: 'absolute',
+    top: '50%',
+    width: 0,
+    height: 0,
+    minWidth: 0,
+    minHeight: 0,
+    background: 'transparent',
+    borderRadius: 0,
+    borderTop: `${7 * iconScale}px solid transparent`,
+    borderBottom: `${7 * iconScale}px solid transparent`,
+    transform: 'translateY(-50%)',
+  };
+}
 
 // Rightward (base-left/tip-right, ▶) and leftward (base-right/tip-left, ◀)
 // triangles -- an actual mirror-image shape, not a transformed copy of the
 // same one, so it stays a real DOM measurement React Flow can anchor to.
-const triangleRight = { ...triangleCommon, borderLeft: '11px solid #333', borderRight: 'none' };
-const triangleLeft = { ...triangleCommon, borderRight: '11px solid #333', borderLeft: 'none' };
+function triangleRight(iconScale) {
+  return { ...triangleCommon(iconScale), borderLeft: `${11 * iconScale}px solid #333`, borderRight: 'none' };
+}
+function triangleLeft(iconScale) {
+  return { ...triangleCommon(iconScale), borderRight: `${11 * iconScale}px solid #333`, borderLeft: 'none' };
+}
 
-const dotHandleStyle = {
-  width: 8,
-  height: 8,
-  background: '#555',
-  border: '1px solid #333',
-};
+function dotHandleStyle(iconScale) {
+  return {
+    width: 8 * iconScale,
+    height: 8 * iconScale,
+    background: '#555',
+    border: '1px solid #333',
+  };
+}
 
 // Explicit per-case geometry for a flippable arrow handle, rather than
 // visually mirroring one shared handle with a CSS transform: React Flow
@@ -182,7 +194,7 @@ const dotHandleStyle = {
 // left-side triangles anchor on their own right edge (Position.Right),
 // right-side ones on their own left edge (Position.Left) -- in both cases,
 // that's the edge that ends up touching the node's true boundary.
-function ArrowHandle({ type, id, side, pointsRight }) {
+function ArrowHandle({ type, id, side, pointsRight, iconScale }) {
   // The Position prop (chosen above for anchor purposes) also adds React
   // Flow's default -left/-right CSS class, which sets its own default
   // left:0 or right:0 -- left unresolved, that conflicts with our own
@@ -193,29 +205,34 @@ function ArrowHandle({ type, id, side, pointsRight }) {
   // that ambiguity entirely -- `right` is never touched, so there's nothing
   // left for the class's default to conflict with.
   const anchorPosition = side === 'left' ? Position.Right : Position.Left;
-  const glyph = pointsRight ? triangleRight : triangleLeft;
-  const offset = { left: side === 'left' ? '-11px' : '100%', right: 'auto' };
+  const glyph = pointsRight ? triangleRight(iconScale) : triangleLeft(iconScale);
+  // -11px (the triangle's own border-left/right width) scales the same way
+  // so the glyph still sits flush against the node's edge, rather than
+  // drifting away from (or into) it as it grows/shrinks with iconScale.
+  const offset = { left: side === 'left' ? `${-11 * iconScale}px` : '100%', right: 'auto' };
   return <Handle type={type} position={anchorPosition} id={id} style={{ ...glyph, ...offset }} />;
 }
 
-function SubstrateHandle({ flipped }) {
+function SubstrateHandle({ flipped, iconScale }) {
   return (
     <ArrowHandle
       type="target"
       id="substrate"
       side={flipped ? 'right' : 'left'}
       pointsRight={!flipped}
+      iconScale={iconScale}
     />
   );
 }
 
-function ProductHandle({ flipped }) {
+function ProductHandle({ flipped, iconScale }) {
   return (
     <ArrowHandle
       type="source"
       id="product"
       side={flipped ? 'left' : 'right'}
       pointsRight={!flipped}
+      iconScale={iconScale}
     />
   );
 }
@@ -280,26 +297,35 @@ export function PoolNode({ id, data, selected }) {
             which isn't handle-based). */}
         {!data.isEnzComplex && (
           <>
-            <Handle type="target" position={flipped ? Position.Right : Position.Left} />
-            <Handle type="source" position={flipped ? Position.Left : Position.Right} />
+            {/* Only width/height overridden -- left/top/transform still come
+                from React Flow's own default -left/-right class, same
+                reasoning as the dot-handle styles above: a fixed library
+                default size never grew with ScaleIcons otherwise. */}
+            <Handle type="target" position={flipped ? Position.Right : Position.Left} style={dotHandleStyle(iconScale)} />
+            <Handle type="source" position={flipped ? Position.Left : Position.Right} style={dotHandleStyle(iconScale)} />
           </>
         )}
         {data.name}
+        {data.plotWindow && (
+          // Draggable (native HTML5 DnD, not React Flow's node dragging,
+          // since this is a plain child element) so it can be dragged onto
+          // the palette's trash icon to un-plot -- see EntityPalette.jsx's
+          // TrashTarget and App.jsx's handleUnplot. Inside this (position:
+          // relative) div -- the pool's own actual box, not the outer fixed
+          // grid cell it's centred in -- so bottom:100%/right:0 touch and
+          // stay within the real, content-sized pool shape even when that
+          // differs from the cell (a long name, iconScale != 1, etc.),
+          // same reasoning as the Handles' own comment just above.
+          <div
+            draggable
+            onDragStart={handleBadgeDragStart}
+            title="Drag to the trash icon above to un-plot"
+            style={{ position: 'absolute', bottom: '100%', right: 0, cursor: 'grab' }}
+          >
+            <PlotSquiggleIcon width={36 * iconScale} height={26 * iconScale} traceColor={PLOT_WINDOW_COLORS[data.plotWindow]} />
+          </div>
+        )}
       </div>
-      {data.plotWindow && (
-        // Draggable (native HTML5 DnD, not React Flow's node dragging,
-        // since this is a plain child element) so it can be dragged onto
-        // the palette's trash icon to un-plot -- see EntityPalette.jsx's
-        // TrashTarget and App.jsx's handleUnplot.
-        <div
-          draggable
-          onDragStart={handleBadgeDragStart}
-          title="Drag to the trash icon above to un-plot"
-          style={{ position: 'absolute', top: -40, right: -40, cursor: 'grab' }}
-        >
-          <PlotSquiggleIcon width={36} height={26} traceColor={PLOT_WINDOW_COLORS[data.plotWindow]} />
-        </div>
-      )}
     </div>
   );
 }
@@ -347,8 +373,8 @@ export function ReacNode({ id, data, selected }) {
           fontSize: 48 * iconScale,
         }}
       >
-        <SubstrateHandle flipped={flipped} />
-        <ProductHandle flipped={flipped} />
+        <SubstrateHandle flipped={flipped} iconScale={iconScale} />
+        <ProductHandle flipped={flipped} iconScale={iconScale} />
         &#8596;
       </div>
     </div>
@@ -442,8 +468,8 @@ export function EnzNode({ id, data, selected }) {
             ...selectedGlow(selected),
           }}
         />
-        <SubstrateHandle flipped={flipped} />
-        <ProductHandle flipped={flipped} />
+        <SubstrateHandle flipped={flipped} iconScale={iconScale} />
+        <ProductHandle flipped={flipped} iconScale={iconScale} />
         {/* The structural link to the enzyme's own real parent molecule --
             on the top or bottom edge (mirroring the arrow's own notch at
             75%/25% down, the same distance from the shaft's edge as the
@@ -460,23 +486,29 @@ export function EnzNode({ id, data, selected }) {
           position={parentSide === 'top' ? Position.Top : Position.Bottom}
           id="enzSite"
           style={{
-            ...dotHandleStyle,
+            ...dotHandleStyle(iconScale),
             left: flipped ? '70%' : '30%',
             top: parentSide === 'top' ? '25%' : '75%',
             transform: 'translate(-50%, -50%)',
           }}
         />
+        {data.complexPlotWindow && (
+          // Moved inside the (scaled) icon wrapper, not the outer fixed
+          // cell -- its own position:relative is the enzyme icon's actual
+          // box, which bottom:100%/right:0 need to resolve against to
+          // touch and stay within *that*, not the fixed cell it's centred
+          // in (the two only coincide at iconScale 1). Same reasoning as
+          // PoolNode's own matching badge.
+          <div
+            draggable
+            onDragStart={handleBadgeDragStart}
+            title="Drag to the trash icon above to un-plot"
+            style={{ position: 'absolute', bottom: '100%', right: 0, cursor: 'grab' }}
+          >
+            <PlotSquiggleIcon width={36 * iconScale} height={26 * iconScale} traceColor={PLOT_WINDOW_COLORS[data.complexPlotWindow]} />
+          </div>
+        )}
       </div>
-      {data.complexPlotWindow && (
-        <div
-          draggable
-          onDragStart={handleBadgeDragStart}
-          title="Drag to the trash icon above to un-plot"
-          style={{ position: 'absolute', top: -40, right: -40, cursor: 'grab' }}
-        >
-          <PlotSquiggleIcon width={36} height={26} traceColor={PLOT_WINDOW_COLORS[data.complexPlotWindow]} />
-        </div>
-      )}
     </div>
   );
 }
@@ -492,12 +524,16 @@ export function EnzNode({ id, data, selected }) {
 // SubstrateHandle/ProductHandle do, so the two arrows never cross.
 const CONC_CHAN_SIZE = { width: 128, height: 60 };
 
-function ChanInHandle({ flipped }) {
-  return <ArrowHandle type="target" id="chanIn" side={flipped ? 'right' : 'left'} pointsRight={!flipped} />;
+function ChanInHandle({ flipped, iconScale }) {
+  return (
+    <ArrowHandle type="target" id="chanIn" side={flipped ? 'right' : 'left'} pointsRight={!flipped} iconScale={iconScale} />
+  );
 }
 
-function ChanOutHandle({ flipped }) {
-  return <ArrowHandle type="source" id="chanOut" side={flipped ? 'left' : 'right'} pointsRight={!flipped} />;
+function ChanOutHandle({ flipped, iconScale }) {
+  return (
+    <ArrowHandle type="source" id="chanOut" side={flipped ? 'left' : 'right'} pointsRight={!flipped} iconScale={iconScale} />
+  );
 }
 
 export function ConcChanNode({ id, data, selected }) {
@@ -560,10 +596,10 @@ export function ConcChanNode({ id, data, selected }) {
           type="target"
           position={parentSide === 'top' ? Position.Top : Position.Bottom}
           id="chanParent"
-          style={{ ...dotHandleStyle, left: '50%', top: parentSide === 'top' ? '0%' : '100%', transform: 'translate(-50%, -50%)' }}
+          style={{ ...dotHandleStyle(iconScale), left: '50%', top: parentSide === 'top' ? '0%' : '100%', transform: 'translate(-50%, -50%)' }}
         />
-        <ChanInHandle flipped={flipped} />
-        <ChanOutHandle flipped={flipped} />
+        <ChanInHandle flipped={flipped} iconScale={iconScale} />
+        <ChanOutHandle flipped={flipped} iconScale={iconScale} />
         {/* The name sits inside the hollow of the tube, between the two
             rails, rather than floating above it. */}
         <div
@@ -631,7 +667,7 @@ export function StimNode({ id, data, selected }) {
           type="source"
           position={Position.Bottom}
           id="stimTip"
-          style={{ ...dotHandleStyle, left: '38%', top: '95%', transform: 'translate(-50%, -50%)' }}
+          style={{ ...dotHandleStyle(iconScale), left: '38%', top: '95%', transform: 'translate(-50%, -50%)' }}
         />
         <div
           style={{
@@ -698,12 +734,12 @@ export function FuncNode({ id, data, selected }) {
           fontSize: 48 * iconScale,
         }}
       >
-        <Handle type="target" position={flipped ? Position.Right : Position.Left} />
+        <Handle type="target" position={flipped ? Position.Right : Position.Left} style={dotHandleStyle(iconScale)} />
         <Handle
           type="source"
           position={Position.Bottom}
           id="stimTip"
-          style={{ ...dotHandleStyle, left: '50%', top: '95%', transform: 'translate(-50%, -50%)' }}
+          style={{ ...dotHandleStyle(iconScale), left: '50%', top: '95%', transform: 'translate(-50%, -50%)' }}
         />
         &#931;
       </div>
@@ -761,12 +797,12 @@ export function GenFuncNode({ id, data, selected }) {
           fontSize: 32 * iconScale,
         }}
       >
-        <Handle type="target" position={flipped ? Position.Right : Position.Left} />
+        <Handle type="target" position={flipped ? Position.Right : Position.Left} style={dotHandleStyle(iconScale)} />
         <Handle
           type="source"
           position={Position.Bottom}
           id="stimTip"
-          style={{ ...dotHandleStyle, left: '50%', top: '95%', transform: 'translate(-50%, -50%)' }}
+          style={{ ...dotHandleStyle(iconScale), left: '50%', top: '95%', transform: 'translate(-50%, -50%)' }}
         />
         <div
           title={`Handles ${numInputs} input${numInputs === 1 ? '' : 's'} -- connect a pool to the left/right dot, referred to in the expression above as x0, x1, ... in the order they're connected`}

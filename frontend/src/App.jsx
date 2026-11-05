@@ -1103,6 +1103,21 @@ function buildFlowNodes(graph, scale, cellUnit, preserve = {}) {
       type: REACT_FLOW_NODE_TYPE[n.type] ?? n.type,
       position: { x: relX * scale, y: -relY * scale },
       data: { ...n, color },
+      // A node's own fixed grid-cell wrapper can render visually larger
+      // than its nominal cell (overflow:visible, see nodes.jsx's own
+      // ScaleIcons comments) without ever becoming geometrically larger
+      // for layout/overlap purposes -- in a densely packed group two such
+      // wrappers can genuinely overlap on screen. Without an explicit
+      // zIndex, React Flow/the browser breaks a click in that overlap by
+      // DOM order, which has no relation to which node visually reads as
+      // "in front" -- verified directly as the cause of a click clearly
+      // over a lower pool instead picking up the pool above it. Ordering
+      // by each node's own screen Y (further down the screen = higher
+      // zIndex = wins the overlap) matches how overlapping objects read
+      // visually everywhere else in the app. Overridden just below for a
+      // container, which always needs to stay behind its own contents
+      // regardless of its own position.
+      zIndex: Math.round(-relY * scale),
     };
     if (n.type === 'pool' || n.type === 'reac' || n.type === 'enz' || n.type === 'concchan' || n.type === 'func' || n.type === 'genfunc') {
       node.data.flipped = preserve.flipped?.[n.id] ?? flips[n.id] ?? false;
@@ -1917,6 +1932,23 @@ export default function App() {
     const api = canvasApiRef.current;
     const prevViewport = api?.getViewport?.();
     api?.fitView?.({ padding: 0.1, duration: 0 });
+    // A fixed setTimeout here raced the browser's own actual style
+    // recalc/paint of the new fitView transform on a large model (more
+    // nodes to reflow) -- verified directly as the cause of the exported
+    // SVG's own icons measuring too big relative to the diagram: getViewport
+    // ()'s returned zoom below already reflects fitView's new *target*
+    // value immediately (used for the edge path transform), but
+    // getBoundingClientRect() on each node (used for its own on-screen
+    // size) only reflects whatever zoom the DOM had actually finished
+    // painting at by the time it's called -- a genuine race, not just a
+    // "needs more milliseconds" tuning issue, since the right number of ms
+    // depends on how big this particular model is. Two rAFs (the standard
+    // "wait for a style change to actually paint" idiom -- the first fires
+    // before the new frame is painted, the second only after it has) plus
+    // a short settle buffer for onlyRenderVisibleElements to finish
+    // mounting newly-visible nodes replaces the single fixed delay that
+    // used to do both jobs at once.
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     await new Promise((resolve) => setTimeout(resolve, 150));
     const zoom = api?.getViewport?.()?.zoom ?? 1;
     const restore = () => {
@@ -1935,14 +1967,50 @@ export default function App() {
   // the filename field's only real effect is the *suggested* filename
   // that dialog offers, via the same document.title trick browsers'
   // own "print to PDF" flow already keys off of.
+  //
+  // A fixed/generic page size (even "landscape") only ever matched the
+  // fitted diagram's own aspect ratio by coincidence -- #printable-canvas's
+  // own 100vw/100vh under print CSS stretches/crops to whatever page shape
+  // is actually in effect, but the CONTENT inside it is already zoomed/
+  // panned (by prepareCanvasForCapture's own fitView, above) to fit the
+  // on-screen canvas's shape specifically; a mismatched page shape is
+  // exactly "only a fraction of the layout window" made it on. Measuring
+  // #printable-canvas's own fitted on-screen box right here and injecting
+  // an @page rule of that EXACT size (in inches, the unit @page expects)
+  // makes the two shapes match by construction instead of by luck.
   const handlePrintLayout = useCallback(
     async (filename) => {
       const { restore } = await prepareCanvasForCapture();
+      const canvasEl = document.getElementById('printable-canvas');
+      const rect = canvasEl?.getBoundingClientRect();
+      const pageStyle = document.createElement('style');
+      if (rect && rect.width > 0 && rect.height > 0) {
+        // 96 CSS px per inch -- the standard, browser-universal conversion
+        // (not the OS/printer's own DPI, which @page's own size never uses).
+        const widthIn = (rect.width / 96).toFixed(3);
+        const heightIn = (rect.height / 96).toFixed(3);
+        // index.css's own #printable-canvas print rule sizes it via
+        // 100vw/100vh -- resolving THAT against whatever @page just
+        // declared is one more layer of indirection than measuring it
+        // directly once already needs (verified directly: with only the
+        // @page rule above, the fitted diagram still landed shifted away
+        // from the page's own top-left corner and cropped on the far
+        // side, rather than filling it exactly). An explicit pixel size
+        // here, matching the same measured rect @page's own inches came
+        // from, pins #printable-canvas to that exact size directly,
+        // sidestepping vw/vh's own resolution entirely. !important and
+        // later-in-the-cascade both override index.css's own rule.
+        pageStyle.textContent =
+          `@page { size: ${widthIn}in ${heightIn}in; margin: 0; }` +
+          `@media print { #printable-canvas { width: ${rect.width}px !important; height: ${rect.height}px !important; } }`;
+        document.head.appendChild(pageStyle);
+      }
       const originalTitle = document.title;
       const suggested = (filename || 'layout').trim().replace(/\.pdf$/i, '') || 'layout';
       document.title = suggested;
       window.print();
       document.title = originalTitle;
+      pageStyle.remove();
       restore();
     },
     [prepareCanvasForCapture]

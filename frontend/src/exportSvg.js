@@ -45,12 +45,26 @@ const ROUND_GLYPH = {
   genfunc: 'f(x)',
 };
 
-// EnzNode's own clip-path (see nodes.jsx): a 7-point arrow/chevron polygon
-// in percentages of the node's own box, filled with the enzyme's color and
-// carrying no text at all on the live canvas -- reproduced here as literal
-// fractions of (w, h) rather than a CSS clip-path (portable SVG has no
-// direct equivalent, but a plain polygon reproduces the identical shape).
-const ENZ_ARROW_POINTS = [
+// EnzNode's own two clip-paths (see nodes.jsx's ENZ_CLIP_PATH_RIGHT/_LEFT):
+// a 7-point arrow/chevron polygon in percentages of the node's own box,
+// filled with the enzyme's color and carrying no text at all on the live
+// canvas -- reproduced here as literal fractions of (w, h) rather than a
+// CSS clip-path (portable SVG has no direct equivalent, but a plain
+// polygon reproduces the identical shape). Two variants, not one: which
+// one applies depends on data.flipped exactly like the live canvas (see
+// this function's own enz branch below) -- a single, always-used point set
+// drew every non-flipped enzyme pointing the wrong way (verified directly:
+// this literal list is ENZ_CLIP_PATH_LEFT's own fractions, not _RIGHT's).
+const ENZ_ARROW_POINTS_RIGHT = [
+  [0, 0.25],
+  [0.65, 0.25],
+  [0.65, 0],
+  [1, 0.5],
+  [0.65, 1],
+  [0.65, 0.75],
+  [0, 0.75],
+];
+const ENZ_ARROW_POINTS_LEFT = [
   [1, 0.25],
   [0.35, 0.25],
   [0.35, 0],
@@ -142,7 +156,28 @@ export function buildStandaloneSvg(canvasEl, nodes, edges, zoom) {
     const node = nodeById[id];
     if (!node) return;
     const type = shapeTypeFor(node);
-    const r = el.getBoundingClientRect();
+    // A plain entity's own `.react-flow__node` always shrink-wraps to its
+    // single child -- nodes.jsx's own fixed-size OUTER grid-cell wrapper
+    // (every node type's own "fixed outer / scaled inner" split, e.g.
+    // PoolNode's matching comment) -- which deliberately never grows or
+    // shrinks with iconScale (overflow:visible lets the real, scaled icon
+    // spill past it without ever enlarging the wrapper itself, by design,
+    // so a bigger icon doesn't disturb the grid). Measuring `el` itself
+    // therefore always measures that fixed slot, not the icon actually
+    // visible inside it -- every exported shape came out at its default,
+    // iconScale-independent size, which only happened to match the GUI at
+    // whatever iconScale makes an icon exactly fill its own cell. The real
+    // on-screen icon is always exactly two levels down (the outer
+    // wrapper's own single child) for every entity type, verified directly
+    // against each one's own render (Pool/Reac/Func/GenFunc's scaledBaseStyle
+    // div, Enz's ENZ_WIDTH/HEIGHT div, ConcChan's width/height svg wrapper,
+    // Stim's 46x56 div). A container's own box, by contrast, genuinely IS
+    // el's own size (a group/compartment gets its real box directly as
+    // node.style, not this fixed-cell pattern), so it alone still measures
+    // `el` itself.
+    const isContainer = CONTAINER_TYPES.has(type);
+    const measureEl = isContainer ? el : (el.firstElementChild?.firstElementChild ?? el);
+    const r = measureEl.getBoundingClientRect();
     const x = r.left - canvasRect.left;
     const y = r.top - canvasRect.top;
     const w = r.width;
@@ -150,15 +185,26 @@ export function buildStandaloneSvg(canvasEl, nodes, edges, zoom) {
     if (w <= 0 || h <= 0) return;
     const name = escapeXml(node.data?.name ?? '');
 
-    if (CONTAINER_TYPES.has(type)) {
+    if (isContainer) {
       const resolved = resolveGroupColor(node.data?.color, id);
       const collapsed = !!node.data?.collapsed;
       const fill = collapsed ? paleColor(resolved ?? '#c0c0c0') : resolved ? paleColor(resolved, 0.72) : 'rgba(0,0,0,0.07)';
       const dash = type === 'compartment' ? '' : ' stroke-dasharray="6,4"';
       const fontSize = fitFontSize(node.data?.name ?? '', w - 12, 24, { maxSize: 16, hPad: 0.95 });
+      // Matches nodes.jsx's own ContainerNode exactly: the root compartment
+      // (no parentId) and any collapsed container show their name as an
+      // inside badge (nothing else is visible inside a collapsed one to
+      // collide with); an *expanded* non-root container instead moves it
+      // fully outside, above the box -- left inside here unconditionally,
+      // it sat directly on top of whatever was rendered near an expanded
+      // group's own top edge.
+      const isRoot = !node.parentId;
+      const label =
+        isRoot || collapsed
+          ? `<text x="${x + 6}" y="${y + fontSize + 2}" font-size="${fontSize}" font-family="sans-serif" fill="#333">${name}</text>`
+          : `<text x="${x}" y="${y - 6}" font-size="${fontSize}" font-family="sans-serif" font-weight="bold" fill="#333">${name}</text>`;
       containerParts.push(
-        `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="4" fill="${fill}" stroke="#333" stroke-width="2"${dash}/>` +
-          `<text x="${x + 6}" y="${y + fontSize + 2}" font-size="${fontSize}" font-family="sans-serif" fill="#333">${name}</text>`
+        `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="4" fill="${fill}" stroke="#333" stroke-width="2"${dash}/>` + label
       );
       return;
     }
@@ -166,7 +212,8 @@ export function buildStandaloneSvg(canvasEl, nodes, edges, zoom) {
     const color = node.data?.color || '#ffffff';
 
     if (type === 'enz') {
-      const points = ENZ_ARROW_POINTS.map(([fx, fy]) => `${x + fx * w},${y + fy * h}`).join(' ');
+      const shape = node.data?.flipped ? ENZ_ARROW_POINTS_LEFT : ENZ_ARROW_POINTS_RIGHT;
+      const points = shape.map(([fx, fy]) => `${x + fx * w},${y + fy * h}`).join(' ');
       entityParts.push(`<polygon points="${points}" fill="${color}" stroke="#333" stroke-width="1"/>`);
       return;
     }

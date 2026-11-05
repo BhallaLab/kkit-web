@@ -1,6 +1,7 @@
 import { useCallback, useContext, useRef } from 'react';
 import { BaseEdge, EdgeLabelRenderer, Position, useReactFlow } from '@xyflow/react';
 import { EdgeActionsContext } from './EdgeContext';
+import { NodeActionsContext } from './NodeActionsContext';
 
 const DRAG_THRESHOLD = 4;
 const MAX_DEPARTURE_OFFSET = 60;
@@ -125,6 +126,7 @@ export default function BendableEdge({
 }) {
   const { screenToFlowPosition } = useReactFlow();
   const { selectEdge, moveEdgeVia } = useContext(EdgeActionsContext);
+  const { iconScale } = useContext(NodeActionsContext);
   const dragState = useRef(null);
 
   // data.via is normally a single {x,y} (a plain user drag, or a legacy
@@ -294,8 +296,8 @@ export default function BendableEdge({
                   style={{
                     position: 'absolute',
                     transform: `translate(-50%, -50%) translate(${mid.x}px, ${mid.y}px)`,
-                    width: 6,
-                    height: 6,
+                    width: 6 * iconScale,
+                    height: 6 * iconScale,
                     borderRadius: '50%',
                     background: selected ? '#1a73e8' : '#666',
                     border: 'none',
@@ -314,8 +316,8 @@ export default function BendableEdge({
                 style={{
                   position: 'absolute',
                   transform: `translate(-50%, -50%) translate(${via.x}px, ${via.y}px)`,
-                  width: 6,
-                  height: 6,
+                  width: 6 * iconScale,
+                  height: 6 * iconScale,
                   borderRadius: '50%',
                   background: selected ? '#1a73e8' : '#666',
                   border: 'none',
@@ -335,14 +337,14 @@ export default function BendableEdge({
             className="nodrag nopan"
             style={{
               position: 'absolute',
-              transform: `translate(-50%, -50%) translate(${via.x + 10}px, ${via.y - 10}px)`,
-              fontSize: 12,
+              transform: `translate(-50%, -50%) translate(${via.x + 10 * iconScale}px, ${via.y - 10 * iconScale}px)`,
+              fontSize: 12 * iconScale,
               fontWeight: 'bold',
               color: '#333',
               background: '#fff',
               border: '1px solid #333',
               borderRadius: 3,
-              padding: '0 3px',
+              padding: `0 ${3 * iconScale}px`,
               pointerEvents: 'none',
             }}
           >
