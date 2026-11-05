@@ -3,6 +3,7 @@ import { Snackbar, Alert } from '@mui/material';
 import { applyNodeChanges, applyEdgeChanges } from '@xyflow/react';
 import { buildStandaloneSvg } from './exportSvg';
 import AppLayout from './AppLayout';
+import { NO_LICENSE } from './components/MenuBoxes/FileMenuBox';
 import { RAINBOW_16, resolveGroupColor } from './colorUtils';
 import {
   computeCollapsedView,
@@ -1502,6 +1503,16 @@ export default function App() {
   // choice of where that duration should come from.
   const [runtime, setRuntime] = useState('3000');
   const [plotDt, setPlotDt] = useState('1');
+  // Lifted out of FileMenuBox for the same reason runtime/plotDt are: that
+  // box fully unmounts/remounts every time activeMenu moves away from
+  // 'File' and back (AppLayout's menuComponents[activeMenu] only ever
+  // mounts the active one), which was silently resetting the file name,
+  // notes, creator and license to blank every time the user switched menus.
+  const [fileName, setFileName] = useState('model.xml');
+  const [modelNotes, setModelNotes] = useState('');
+  const [creator, setCreator] = useState('');
+  const [license, setLicense] = useState(NO_LICENSE);
+  const [modified, setModified] = useState('');
   // Which solver a Start click uses -- 'lsoda' (deterministic, Ksolve) or
   // 'gssa' (Gillespie's Stochastic Simulation Algorithm, Gsolve) -- see
   // sim_runner.py's build_solver.
@@ -2408,88 +2419,149 @@ export default function App() {
         bottom = Math.min(bottom, contentBottom);
       }
 
-      // Edges snapped onto the SAME global lattice everything else in
-      // this app uses (the user's own explicit design: "groups are
-      // placed on square grid points and their boundaries are also
-      // aligned to the grid") -- floor/ceil, not round-to-nearest,
-      // specifically so snapping never shrinks the box back past the
-      // content-safe bounds just computed: each edge only ever moves
-      // further AWAY from the content it has to contain, never toward it.
-      x = Math.floor(x / cellPitch) * cellPitch;
-      right = Math.ceil(right / cellPitch) * cellPitch;
-      y = Math.ceil(y / rowPitch) * rowPitch;
-      bottom = Math.floor(bottom / rowPitch) * rowPitch;
+      // Edges snapped onto THIS group's own lattice -- the user's own
+      // explicit design: "groups are placed on square grid points and
+      // their boundaries are also aligned to the grid" -- floor/ceil, not
+      // round-to-nearest, specifically so snapping never shrinks the box
+      // back past the content-safe bounds just computed: each edge only
+      // ever moves further AWAY from the content it has to contain, never
+      // toward it. Snapped relative to the group's own IMMEDIATE PARENT's
+      // origin, not the global (0,0) origin -- every child's own ix/iy is
+      // defined relative to ITS parent (see the "Integer grid rebuild"
+      // plan), so "on lattice" only means anything measured from that
+      // same reference point. Rounding the raw GLOBAL x/y instead (the
+      // previous version) only coincided with the group's own correct
+      // lattice when its parent happened to sit exactly at a global
+      // cellPitch multiple itself (true for a brand new model's root
+      // compartment, at (0,0)) -- for any NESTED group, or a root loaded
+      // from a file with an arbitrary native coordinate origin, it didn't,
+      // which is what read as "the group doesn't snap to grid" (and then,
+      // since its contents' own positions were never touched by this
+      // resize at all, left them sitting on a lattice now out of phase
+      // with the group's own newly (mis-)snapped origin).
+      const immediateParentId = rawById[nodeId]?.parentId;
+      const parentBoxForSnap = immediateParentId
+        ? effectiveContainerBox(rawById[immediateParentId], containerIndex, boxById, cellUnit)
+        : null;
+      const snapOriginX = parentBoxForSnap ? parentBoxForSnap.x : 0;
+      const snapOriginY = parentBoxForSnap ? parentBoxForSnap.y : 0;
+      x = snapOriginX + Math.floor((x - snapOriginX) / cellPitch) * cellPitch;
+      right = snapOriginX + Math.ceil((right - snapOriginX) / cellPitch) * cellPitch;
+      y = snapOriginY + Math.ceil((y - snapOriginY) / rowPitch) * rowPitch;
+      bottom = snapOriginY + Math.floor((bottom - snapOriginY) / rowPitch) * rowPitch;
       const width = right - x;
       const height = y - bottom;
 
       const oldRaw = byId[nodeId]?.data;
-      const dx = oldRaw ? x - oldRaw.x : 0;
-      const dy = oldRaw ? y - oldRaw.y : 0;
-      // The user's own explicit design: a group's children move AS ONE
-      // with it -- same cascade onNodeDragStop's own container-move
-      // branch uses (see its own comment), needed here too since
-      // resizing from a top/left handle moves the box's own corner
-      // exactly the same way a plain drag does.
-      const cascadeTargets = rawNodes.filter((n) => n.id !== nodeId && isDescendantOf(n.id, nodeId, rawById));
-      const cascadeUpdates = cascadeTargets.map((n) => ({ id: n.id, x: n.x + dx, y: n.y + dy }));
+      // Deliberately NO cascade here, unlike onNodeDragStop's own
+      // container-MOVE branch -- the user's own explicit correction: a
+      // resize only moves the BORDER, so a descendant's stored absolute
+      // x/y must stay exactly as it was, not shift with the origin. Its
+      // own ix/iy (relative to the group) is never actually stored
+      // anywhere -- it's derived fresh on every render as
+      // `child.x - parentBox.x` (see buildFlowNodes) -- so leaving
+      // child.x untouched while only the group's own origin moves is
+      // EXACTLY what keeps the child's on-screen position fixed while its
+      // derived ix/iy updates to compensate, matching React Flow's own
+      // native resize behavior (it already re-anchors each child's own
+      // relative `position` live during the drag for this same reason --
+      // see XYResizer's own "correct the relative positions of child
+      // nodes so that they stay in the same position" comment). The
+      // previous version copied onNodeDragStop's cascade here, which
+      // instead shifted every descendant's stored x/y by the same delta
+      // the origin moved by -- preserving their RELATIVE offset (ix/iy)
+      // instead of their SCREEN position, which is backwards for a resize
+      // and is what read as "the whole group jumps" the instant the
+      // resize committed (right after React Flow's own live preview had
+      // already shown the correct, content-stays-put behavior).
 
-      Promise.all(
-        [{ id: nodeId, x, y, width, height }, ...cascadeUpdates].map((u) =>
-          fetch(`${API_BASE}/api/update_position`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(u),
-          }).then((r) => r.json())
-        )
-      )
-        .then((results) => {
-          const failed = results.find((r) => r.error);
-          if (failed) {
-            setStatus(`error: ${failed.error}`);
-            return;
+      // The user's own explicit correction: the group has to snap to its
+      // final box IMMEDIATELY, synchronously, not only once the backend
+      // round-trip resolves -- committing `flowGraph` state here, BEFORE
+      // the fetch even goes out, is what guarantees every other handler
+      // (a child drag's own grid snap, a new pool dropped via the Add
+      // palette, anything reading `flowGraph.nodes`) sees the group's
+      // real, final, on-lattice box from the very next synchronous event
+      // onward, rather than a window where the committed React state
+      // still shows the OLD pre-resize box until an async .then() fires.
+      // Previously that state update lived inside the fetch's own .then()
+      // -- a child dragged (or a pool dropped) during that window
+      // computed its own snap against the stale box, landing off the
+      // group's real lattice and/or in the wrong spot entirely; worse,
+      // since the GROUP's own box in local state hadn't actually changed
+      // yet, a `refreshGraph()` triggered by that other action (e.g.
+      // dropping a new pool into a group always refreshes, see
+      // handleAddPool) could appear to "revert" the just-resized group if
+      // its own backend write hadn't landed yet either (see the fetch
+      // below -- now fire-and-forget, since the committed-state ordering
+      // problem that previously motivated awaiting it is the actual bug
+      // being fixed here).
+      const parentBoxNow = oldRaw?.parentId ? effectiveContainerBox(rawById[oldRaw.parentId], containerIndex, boxById, cellUnit) : null;
+      const relX = parentBoxNow ? x - parentBoxNow.x : x;
+      const relY = parentBoxNow ? y - parentBoxNow.y : y;
+      const flowPos = { x: relX * scale, y: -relY * scale };
+      const flowStyle = { width: width * scale, height: height * scale };
+      // A DIRECT child's own stored x/y never changes (see the comment
+      // above `directChildren`'s own cascade-free fetch), but its
+      // RENDERED `position` is relative to THIS container's own box (see
+      // buildFlowNodes' own matching relX/relY formula) -- left at its
+      // pre-resize value, it would visibly jump by whatever the origin
+      // just moved by, the instant this state commits and overrides
+      // React Flow's own (already-correct) live preview. Recomputed here
+      // against the new box so the child's own ON-SCREEN position stays
+      // exactly where it was. Only direct children need this -- a deeper
+      // descendant's own `position` is relative to ITS immediate parent
+      // (not this container), and that parent's own stored x/y hasn't
+      // moved either, so there's nothing stale to fix at that level.
+      const directChildPositionById = new Map(
+        directChildren.map((child) => [
+          child.id,
+          { x: (child.x - x) * scale, y: -(child.y - y) * scale },
+        ])
+      );
+      setFlowGraph((g) => ({
+        ...g,
+        nodes: g.nodes.map((n) => {
+          if (n.id === nodeId) {
+            return {
+              ...n,
+              position: flowPos,
+              style: flowStyle,
+              // expandedStyle has to move in lockstep with the manual
+              // resize, not just node.style -- it's the value
+              // buildFlowNodes recomputes this container's own real
+              // box from on every future refreshGraph, and until now
+              // it was only ever set once, back at the last
+              // buildFlowNodes call; left unsynced here, the next
+              // refresh (or a save/reload round-trip) would silently
+              // snap this container back to its pre-resize box.
+              // A manual resize (like a manual drag, see
+              // onNodeDragStop) counts as "manually positioned" --
+              // see data.locked's own comment.
+              data: { ...n.data, x, y, width, height, expandedStyle: flowStyle, locked: true },
+            };
           }
-          // The box actually applied can differ from the resize handle's
-          // own live, unsnapped `box` (clamped to content, snapped to the
-          // lattice) -- position/style have to reflect the REAL final
-          // box, in the same relative-to-parent flow-pixel space `box`
-          // itself was given in, not the handle's own raw, pre-clamp
-          // report.
-          const parentBoxNow = oldRaw?.parentId ? effectiveContainerBox(rawById[oldRaw.parentId], containerIndex, boxById, cellUnit) : null;
-          const relX = parentBoxNow ? x - parentBoxNow.x : x;
-          const relY = parentBoxNow ? y - parentBoxNow.y : y;
-          const flowPos = { x: relX * scale, y: -relY * scale };
-          const flowStyle = { width: width * scale, height: height * scale };
-          const cascadeById = new Map(cascadeUpdates.map((u) => [u.id, u]));
-          setFlowGraph((g) => ({
-            ...g,
-            nodes: g.nodes.map((n) => {
-              if (n.id === nodeId) {
-                return {
-                  ...n,
-                  position: flowPos,
-                  style: flowStyle,
-                  // expandedStyle has to move in lockstep with the manual
-                  // resize, not just node.style -- it's the value
-                  // buildFlowNodes recomputes this container's own real
-                  // box from on every future refreshGraph, and until now
-                  // it was only ever set once, back at the last
-                  // buildFlowNodes call; left unsynced here, the next
-                  // refresh (or a save/reload round-trip) would silently
-                  // snap this container back to its pre-resize box.
-                  // A manual resize (like a manual drag, see
-                  // onNodeDragStop) counts as "manually positioned" --
-                  // see data.locked's own comment.
-                  data: { ...n.data, x, y, width, height, expandedStyle: flowStyle, locked: true },
-                };
-              }
-              // A cascaded descendant's own RENDERED position never
-              // changes -- see onNodeDragStop's own matching comment.
-              const u = cascadeById.get(n.id);
-              return u ? { ...n, data: { ...n.data, x: u.x, y: u.y } } : n;
-            }),
-          }));
+          const newPos = directChildPositionById.get(n.id);
+          return newPos ? { ...n, position: newPos } : n;
+        }),
+      }));
+
+      fetch(`${API_BASE}/api/update_position`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: nodeId, x, y, width, height }),
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.error) {
+            setStatus(`error: ${res.error}`);
+            refreshGraphRef.current?.();
+          }
         })
-        .catch((err) => setStatus(`error: ${err}`));
+        .catch((err) => {
+          setStatus(`error: ${err}`);
+          refreshGraphRef.current?.();
+        });
     },
     [flowGraph.nodes, scale, sx]
   );
@@ -4523,6 +4595,16 @@ export default function App() {
         setRuntime={setRuntime}
         plotDt={plotDt}
         setPlotDt={setPlotDt}
+        fileName={fileName}
+        setFileName={setFileName}
+        modelNotes={modelNotes}
+        setModelNotes={setModelNotes}
+        creator={creator}
+        setCreator={setCreator}
+        license={license}
+        setLicense={setLicense}
+        modified={modified}
+        setModified={setModified}
         solverMethod={solverMethod}
         setSolverMethod={setSolverMethod}
         overlayPlots={overlayPlots}

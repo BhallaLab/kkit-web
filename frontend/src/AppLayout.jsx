@@ -95,6 +95,16 @@ export default function AppLayout({
   setLengthUnit,
   scaleIcons,
   setScaleIcons,
+  fileName,
+  setFileName,
+  modelNotes,
+  setModelNotes,
+  creator,
+  setCreator,
+  license,
+  setLicense,
+  modified,
+  setModified,
   ...canvasProps
 }) {
   const menuComponents = {
@@ -113,6 +123,16 @@ export default function AppLayout({
         setPlotDt={setPlotDt}
         sx={canvasProps.sx}
         scaleIcons={scaleIcons}
+        fileName={fileName}
+        setFileName={setFileName}
+        modelNotes={modelNotes}
+        setModelNotes={setModelNotes}
+        creator={creator}
+        setCreator={setCreator}
+        license={license}
+        setLicense={setLicense}
+        modified={modified}
+        setModified={setModified}
       />
     ),
     Properties: (

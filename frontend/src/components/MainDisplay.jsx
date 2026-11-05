@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Tabs, Tab } from '@mui/material';
-import { ReactFlow, ReactFlowProvider, Background, Controls, ControlButton, useReactFlow, useNodesInitialized } from '@xyflow/react';
+import {
+  ReactFlow,
+  ReactFlowProvider,
+  Background,
+  BackgroundVariant,
+  Controls,
+  ControlButton,
+  useReactFlow,
+  useNodesInitialized,
+} from '@xyflow/react';
 import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
 import ZoomInMapIcon from '@mui/icons-material/ZoomInMap';
@@ -372,7 +381,21 @@ function Canvas({
           // here only gets in the way.
           autoPanOnNodeDrag={false}
         >
-          <Background />
+          {/* The user's own explicit request: a reference grid aligned to
+              the actual integral (ix, iy) lattice every object snaps to --
+              `gap` in the same flow-space pixel units as every node's own
+              size/position (see nodeActions' own cellWidthPx/cellHeightPx,
+              App.jsx's `sx*scale`/`(sx/2)*scale`), not React Flow's own
+              unrelated default 20px dot spacing, so the lines actually
+              line up with where things land. No `offset` needed -- the
+              pattern's own implicit origin is flow (0, 0), the same point
+              a top-level, unparented entity's own (ix=0, iy=0) maps to
+              (see buildFlowNodes' own relX/relY formula). */}
+          <Background
+            variant={BackgroundVariant.Lines}
+            gap={[nodeActions.cellWidthPx, nodeActions.cellHeightPx]}
+            color="#bcd6f0"
+          />
           <Controls>
             {/* The user's own explicit placement: directly under React
                 Flow's own built-in +/- zoom buttons (which <Controls>
@@ -386,7 +409,7 @@ function Canvas({
               disabled={scaleIcons <= SCALE_ICONS_MIN + 1e-9}
               title="Shrink icons (ScaleIcons -= 0.1)"
             >
-              <EnzSizeIcon size={6} />
+              <EnzSizeIcon size={11} />
             </ControlButton>
             <ControlButton
               onClick={handleToggleAllCollapsed}

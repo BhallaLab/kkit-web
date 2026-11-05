@@ -105,6 +105,27 @@ def _node(elem, node_type, extra=None):
 _CONTAINER_CLASSES = ("Neutral", "CubeMesh")
 
 
+def _canonical_model_path(model_path):
+    """`model_path` as passed around this whole file is the bare
+    f"/model_{n}" string _new_model_path() hands out, with no array-index
+    suffix -- but every LIVE moose element's own .path always has one
+    (e.g. "/model_6[0]"), so a plain string comparison between the two
+    never matches (verified directly against the currently-installed
+    moose). Every "walk up to model_path" loop below used to rely on
+    exactly that comparison to know when it had reached the model's own
+    root and should stop -- silently never matching meant the walk went
+    one step too far, onto the root element itself, which is a plain
+    Neutral and so (wrongly) satisfies container_parent_id's own "is this
+    a container" check too -- concretely, a top-level COMPARTMENT's own
+    parent came back as the bare model root's id instead of None, which
+    isn't a real node build_graph ever emits, so the frontend (React
+    Flow) silently dropped that compartment -- and everything nested
+    inside it -- from rendering entirely. Resolved to this canonical,
+    already-[0]-suffixed form once, wherever `model_path` is used as a
+    stopping point, so the comparison actually matches."""
+    return moose.element(model_path).path
+
+
 def container_parent_id(path, model_path):
     """Walks up from `path` to the nearest ancestor that's a recognized
     container -- a plain Neutral "group", or a CubeMesh "compartment" --
@@ -119,6 +140,7 @@ def container_parent_id(path, model_path):
     (parented under the enzyme itself) -- both walk past those non-container
     ancestors to whatever group/compartment they conceptually belong to.
     """
+    model_path = _canonical_model_path(model_path)
     elem = moose.element(path).parent
     while elem.path not in (model_path, "/"):
         if elem.className in _CONTAINER_CLASSES:
@@ -155,14 +177,25 @@ def is_enz_complex(path):
     is structurally nested directly under its parent Enz element -- that
     nesting, not the name, is the reliable signal (verified directly: an
     Enz's own cplx pool's .parent.className is "Enz"; a plain pool's parent
-    is a Neutral/compartment)."""
+    is a Neutral/compartment).
+
+    A model round-tripped through SBML has no Enz element to nest under
+    (moose.io.sbml's reader currently reconstructs an explicit-complex
+    enzyme as a plain pool plus two plain Reacs, not a real EnzBase -- see
+    its own writer.py comment on the 'enzComplex' annotation field), so the
+    writer instead tags that pool's own SBML annotation and the reader
+    marks it back via the otherwise-unused Annotator 'icon' field -- a
+    second, non-structural signal checked here as a fallback."""
     p = moose.element(path)
     parent = p.parent
-    return parent is not None and "Enz" in parent.className
+    if parent is not None and "Enz" in parent.className:
+        return True
+    return moose.exists(path + "/info") and moose.element(path + "/info").icon == "enzComplex"
 
 
 def compartment_name(path, model_path):
     """Name of the nearest enclosing CubeMesh, walking up from `path`."""
+    model_path = _canonical_model_path(model_path)
     elem = moose.element(path).parent
     while elem.path not in (model_path, "/"):
         if elem.className == "CubeMesh":
@@ -202,9 +235,26 @@ def name_path(path, model_path):
         # here as Enz/MMenz for the two sides to agree.
         return name_path(elem.parent.path, model_path) + (elem.name,)
 
+    model_path = _canonical_model_path(model_path)
     names = [elem.name]
     cur = elem.parent
-    while cur.path != model_path:
+    # Also stops at "/" (the absolute root), same safety net
+    # container_parent_id/compartment_name both already have -- without
+    # it, an element whose ancestry never actually reaches `model_path`
+    # (verified directly: a real case with a genuine SBML file) walks
+    # PAST the real root and keeps calling .parent on it forever (MOOSE's
+    # own Neutral::parent just warns "tried to take parent of root" and
+    # returns root again, it doesn't raise), looping indefinitely while
+    # `names` grows without bound -- this is exactly what ran the backend
+    # process up to ~2GB RAM and multiple GB of repeated warning-spam log
+    # output before it had to be killed. The _canonical_model_path call
+    # above fixes the underlying mismatch that made this loop (and
+    # container_parent_id's/compartment_name's) never match `model_path`
+    # in the first place -- without it, this would have kept silently
+    # appending one extra, spurious leading segment (the bare model
+    # root's own name) to every name_path tuple this whole time, not just
+    # relying on the "/" safety net to merely avoid hanging.
+    while cur.path not in (model_path, "/"):
         names.append(cur.name)
         cur = cur.parent
     names.reverse()
@@ -424,8 +474,16 @@ def describe_concchan(path):
         # The parent pool (like an enzyme's substrate) is structural --
         # it's this element's own MOOSE parent, not a message neighbor.
         "parentPoolId": c.parent.path,
-        "inPoolId": in_pools[0].path if in_pools else None,
-        "outPoolId": out_pools[0].path if out_pools else None,
+        # .neighbors[...] returns bare Ids, not ObjIds -- Id.path omits
+        # the array-index suffix every live element's own .path otherwise
+        # always carries (e.g. ".../CaM_gr[0]/CaM_Ca4" instead of
+        # ".../CaM_gr[0]/CaM_Ca4[0]"), so a frontend id lookup against
+        # this value never matches the real node id build_graph gives
+        # that same pool elsewhere -- re-wrapped through moose.element()
+        # here (same fix as every add_edge call below) to get the
+        # properly-indexed path back.
+        "inPoolId": moose.element(in_pools[0]).path if in_pools else None,
+        "outPoolId": moose.element(out_pools[0]).path if out_pools else None,
     })
 
 
@@ -523,13 +581,36 @@ def _stim_field(func):
     valueOut is wired to -- read back from the live message itself (not
     re-derived from the target's current isBuffered state), so a stimulus
     keeps behaving the way it was actually built even if the target pool's
-    buffered flag is changed afterward."""
-    for m in func.msgOut:
+    buffered flag is changed afterward.
+
+    Deliberately reached from the TARGET's own msgIn, not func's own
+    msgOut -- verified directly against a real legacy .g file (a
+    SUMTOTAL-derived Function, Vinu_23Sep_with_gr.g's own tot_CaM_CaMKII)
+    that iterating func.msgOut segfaults the whole process: one of its
+    cached entries is a corrupted ObjId (a MOOSE/pybind11-level dangling
+    reference, most likely a stale cache left behind by however ReadKkit
+    assembles a SUMTOTAL Function's own messages) where even repr() or
+    reading a single field crashes, not just moose.element() -- no
+    Python-level try/except can catch that, since it's a native
+    segmentation fault, not a catchable exception. func.neighbors
+    (MOOSE's own higher-level, already-resolved neighbor lookup -- the
+    same API _function_inputs already relies on) never touched the
+    broken entry and reliably finds the real target; crossing over to
+    the TARGET's own msgIn from there (a completely separate cache)
+    avoids the corrupted entry entirely and was confirmed safe against
+    the same file."""
+    targets = func.neighbors["valueOut"]
+    if not targets:
+        return None, None
+    target = moose.element(targets[0])
+    for m in target.msgIn:
         msg = moose.element(m)
+        if moose.element(msg.e1).path != func.path:
+            continue
         if "valueOut" in msg.srcFieldsOnE1:
             dest = msg.destFieldsOnE2[0] if msg.destFieldsOnE2 else None
-            return moose.element(msg.e2).path, dest
-    return None, None
+            return target.path, dest
+    return target.path, None
 
 
 def _function_inputs(f):
@@ -683,10 +764,22 @@ def build_graph(model_path, extra_plot_windows=None, extra_collapsed=None):
     for r in moose.wildcardFind(model_path + "/##[ISA=Reac]"):
         r = moose.element(r)
         nodes.append(describe_reac(r.path))
+        # .neighbors[...] returns bare Ids, not ObjIds -- Id.path omits
+        # the array-index suffix every live element's own .path otherwise
+        # always carries, so an edge built straight from it carries a
+        # substrate/product endpoint id that never matches any real node
+        # id build_graph gives that same pool elsewhere -- React Flow
+        # silently drops any edge whose endpoint doesn't resolve, which is
+        # exactly what read as "edges connecting Reac/Pool/Enz objects are
+        # frequently missing" (verified directly: half of a real file's
+        # own substrate/product/chan edges had this exact shape). Re-
+        # wrapped through moose.element() here, and at every other
+        # .neighbors[...]-sourced add_edge call below, to get the
+        # properly-indexed path back.
         for sub in r.neighbors["sub"]:
-            add_edge(sub.path, r.path, "substrate")
+            add_edge(moose.element(sub).path, r.path, "substrate")
         for prd in r.neighbors["prd"]:
-            add_edge(r.path, prd.path, "product")
+            add_edge(r.path, moose.element(prd).path, "product")
 
     for e in moose.wildcardFind(model_path + "/##[ISA=EnzBase]"):
         e = moose.element(e)
@@ -704,18 +797,18 @@ def build_graph(model_path, extra_plot_windows=None, extra_collapsed=None):
         # all.
         add_edge(e.parent.path, e.path, "enzyme")
         for sub in e.neighbors["sub"]:
-            add_edge(sub.path, e.path, "substrate")
+            add_edge(moose.element(sub).path, e.path, "substrate")
         for prd in e.neighbors["prd"]:
-            add_edge(e.path, prd.path, "product")
+            add_edge(e.path, moose.element(prd).path, "product")
 
     for c in moose.wildcardFind(model_path + "/##[ISA=ConcChan]"):
         c = moose.element(c)
         nodes.append(describe_concchan(c.path))
         add_edge(c.parent.path, c.path, "chanParent")
         for in_pool in c.neighbors["in"]:
-            add_edge(in_pool.path, c.path, "chanIn")
+            add_edge(moose.element(in_pool).path, c.path, "chanIn")
         for out_pool in c.neighbors["out"]:
-            add_edge(c.path, out_pool.path, "chanOut")
+            add_edge(c.path, moose.element(out_pool).path, "chanOut")
 
     for f in moose.wildcardFind(model_path + "/##[ISA=Function]"):
         f = moose.element(f)

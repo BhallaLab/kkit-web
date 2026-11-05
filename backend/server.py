@@ -86,17 +86,11 @@ def _extract_g_model_notes(content):
     return _unescape_g_string(m.group(1)) if m else ""
 
 
-_GROUP_ANNOTATION_FIELD_RE = re.compile(r"<moose:(x|y|width|height|bgColor)>([^<]*)</moose:\1>")
-_GROUP_META_RE = re.compile(
-    r"<moose:Group>([^<]*)</moose:Group>|<moose:Compartment>([^<]*)</moose:Compartment>"
-)
 _ENZYME_REF_RE = re.compile(r"<moose:enzyme>([^<]*)</moose:enzyme>")
 
 _SPECIES_BLOCK_RE = re.compile(r"<species\b[^>]*>.*?</species>", re.DOTALL)
 _REACTION_BLOCK_RE = re.compile(r"<reaction\b[^>]*>.*?</reaction>", re.DOTALL)
 _ID_ATTR_RE = re.compile(r'\bid="([^"]+)"')
-_XCORD_RE = re.compile(r"(<moose:xCord>)[^<]*(</moose:xCord>)")
-_YCORD_RE = re.compile(r"(<moose:yCord>)[^<]*(</moose:yCord>)")
 
 
 class _SbmlNamePaths:
@@ -116,42 +110,60 @@ class _SbmlNamePaths:
             c.getId(): (c.getName() or c.getId()) for c in model.getListOfCompartments()
         }
         self._group_name = {}
-        self._group_name_to_id = {}
-        self._group_parent_name = {}
-        self._group_compartment_id = {}
         self._member_group = {}
         plugin = model.getPlugin("groups")
         if plugin is not None:
             for i in range(plugin.getNumGroups()):
                 grp = plugin.getGroup(i)
                 gid = grp.getId()
-                name = grp.getName() or gid
-                self._group_name[gid] = name
-                self._group_name_to_id[name] = gid
-                parent_name = None
-                compt_id = None
-                for m in _GROUP_META_RE.finditer(grp.getAnnotationString() or ""):
-                    if m.group(1) is not None:
-                        parent_name = m.group(1)
-                    elif m.group(2) is not None:
-                        compt_id = m.group(2)
-                self._group_parent_name[gid] = parent_name
-                self._group_compartment_id[gid] = compt_id
+                self._group_name[gid] = grp.getName() or gid
                 for member in grp.getListOfMembers():
                     self._member_group[member.getIdRef()] = gid
+
+    def _group_compartment_id(self, group_id, visited=None):
+        """A group's own compartment id, inferred from any species/reaction
+        member it has (recursing into nested sub-group members when it has
+        none of its own) -- a <group> carries no compartment attribute of
+        its own in the SBML groups package. Mirrors moose.io.sbml.reader's
+        own _group_compartment exactly, since that's what decided where
+        this group was actually recreated on the moose side."""
+        if visited is None:
+            visited = set()
+        if group_id in visited:
+            return None
+        visited.add(group_id)
+        for member_id, parent_gid in self._member_group.items():
+            if parent_gid != group_id:
+                continue
+            sp = self._model.getSpecies(member_id)
+            if sp is not None:
+                return sp.getCompartment()
+            r = self._model.getReaction(member_id)
+            if r is not None:
+                for ref_list in (r.getListOfReactants(), r.getListOfProducts()):
+                    if ref_list.size() > 0:
+                        sp2 = self._model.getSpecies(ref_list.get(0).getSpecies())
+                        if sp2 is not None:
+                            return sp2.getCompartment()
+            if member_id in self._group_name:
+                compt_id = self._group_compartment_id(member_id, visited)
+                if compt_id is not None:
+                    return compt_id
+        return None
 
     def group_path(self, group_id):
         name = self._group_name.get(group_id)
         if name is None:
             return None
-        parent_name = self._group_parent_name.get(group_id)
-        if parent_name:
-            parent_id = self._group_name_to_id.get(parent_name)
-            parent_path = self.group_path(parent_id) if parent_id else None
+        # A group nested inside another is itself a member (its own id as
+        # the idRef) of that outer group -- the same mechanism as a plain
+        # species/reaction membership, not a separate annotation.
+        parent_gid = self._member_group.get(group_id)
+        if parent_gid is not None and parent_gid in self._group_name:
+            parent_path = self.group_path(parent_gid)
             if parent_path is not None:
                 return parent_path + (name,)
-            return (parent_name, name)
-        compt_id = self._group_compartment_id.get(group_id)
+        compt_id = self._group_compartment_id(group_id)
         return (self._compartment_name.get(compt_id, compt_id), name)
 
     def _species_name(self, species_id):
@@ -219,76 +231,6 @@ class _SbmlNamePaths:
         return (None, name)
 
 
-def _snapshot_positions(model_path):
-    """moose.writeSBML has a confirmed side effect: for any pool, reaction,
-    or enzyme that's (or, for an enzyme, whose parent pool is) a member of
-    an SBML group, it silently overwrites that element's *live* /info x/y
-    with an internally auto-computed layout position while producing the
-    file -- verified directly for all three kinds (a plain top-level
-    pool/reac's position survives a save untouched; the identical one
-    nested in a group gets its live Annotator corrupted by the save itself,
-    before the file is even looked at again). Snapshotting beforehand,
-    keyed by name_path rather than MOOSE's own idValue (session-ephemeral --
-    see that function's docstring), is what lets save_sbml both restore the
-    live model afterward (so just clicking Save doesn't scramble the
-    running session) and patch the written XML with the true values (see
-    _fix_positions_in_sbml)."""
-    snapshot = {}
-    for isa in ("PoolBase", "Reac", "EnzBase", "ConcChan"):
-        for e in moose.wildcardFind(f"{model_path}/##[ISA={isa}]"):
-            e = moose.element(e)
-            if moose.exists(e.path + "/info"):
-                info = moose.element(e.path + "/info")
-                snapshot[name_path(e.path, model_path)] = (e.path, info.x, info.y)
-    return snapshot
-
-
-def _restore_positions(snapshot):
-    for path, x, y in snapshot.values():
-        info = moose.element(path + "/info")
-        info.x = x
-        info.y = y
-
-
-def _fix_positions_in_sbml(content, snapshot):
-    """Patches the xCord/yCord baked into the SBML text for every species
-    and reaction (the latter also covering each stage of an
-    EnzymaticReaction) using the pre-write snapshot (see
-    _snapshot_positions), since moose.writeSBML writes the very same
-    auto-computed value into the file that it corrupts the live model
-    with."""
-    doc = libsbml.readSBMLFromString(content)
-    model = doc.getModel()
-    if model is None:
-        return content
-    paths = _SbmlNamePaths(model)
-
-    def _patch(block, key):
-        if key not in snapshot:
-            return block
-        _, x, y = snapshot[key]
-        block = _XCORD_RE.sub(rf"\g<1>{x}\g<2>", block, count=1)
-        block = _YCORD_RE.sub(rf"\g<1>{y}\g<2>", block, count=1)
-        return block
-
-    def _replace_species(m):
-        sid_match = _ID_ATTR_RE.search(m.group(0))
-        if not sid_match:
-            return m.group(0)
-        return _patch(m.group(0), paths.species_path(sid_match.group(1)))
-
-    content = _SPECIES_BLOCK_RE.sub(_replace_species, content)
-
-    def _replace_reaction(m):
-        rid_match = _ID_ATTR_RE.search(m.group(0))
-        reaction = model.getReaction(rid_match.group(1)) if rid_match else None
-        if reaction is None:
-            return m.group(0)
-        return _patch(m.group(0), paths.reaction_path(reaction))
-
-    return _REACTION_BLOCK_RE.sub(_replace_reaction, content)
-
-
 _LIST_OF_MEMBERS_CLOSE_RE = re.compile(r"</groups:listOfMembers>")
 
 
@@ -351,6 +293,70 @@ def _fix_missing_reaction_group_memberships(content):
 
 
 _KKIT_NS = "http://www.moose.ncbs.res.in/kkit-web"
+
+
+def _inject_kkit_tags(block, inner_xml, close_tag):
+    """Inserts `inner_xml` (one or more already-built <kkit:X>...</kkit:X>
+    tags, each WITHOUT its own xmlns:kkit attribute) into this element's
+    own <annotation>, nested inside a single shared <kkit:info> wrapper --
+    reusing one an EARLIER call already added (for a different kind of
+    kkit annotation on the same element) rather than adding a second
+    top-level kkit:-namespaced sibling. SBML forbids more than one
+    top-level annotation child per namespace (L3V1 Section 3.2.4) --
+    independent top-level <kkit:X> siblings (this file's previous
+    approach, one per injector function) violated that the moment one
+    element needed more than one kind of kkit annotation (e.g. a plotted
+    species that's also a stimulus target) -- verified directly: this is
+    exactly what made every SBML file this app had ever saved with more
+    than one kind of per-species annotation unreadable by libsbml's own
+    strict parser on the next load (see TESTS/vinu_layout*.xml, which
+    predate this fix and still have the old, broken shape). `close_tag`
+    (e.g. "</species>") is only used when this element has no <annotation>
+    at all yet."""
+    if "<kkit:info" in block:
+        return block.replace("</kkit:info>", inner_xml + "</kkit:info>", 1)
+    wrapped = f'<kkit:info xmlns:kkit="{_KKIT_NS}">{inner_xml}</kkit:info>'
+    if "</annotation>" in block:
+        return block.replace("</annotation>", wrapped + "</annotation>", 1)
+    return block.replace(close_tag, f"<annotation>{wrapped}</annotation>{close_tag}", 1)
+
+
+_ANNOTATION_BLOCK_RE = re.compile(r"<annotation>(.*?)</annotation>", re.DOTALL)
+_KKIT_XMLNS_DECL = f' xmlns:kkit="{_KKIT_NS}"'
+
+
+def _repair_duplicate_kkit_namespace(content):
+    """A file saved by this app BEFORE _inject_kkit_tags existed has one
+    independent xmlns:kkit declaration per top-level kkit: annotation
+    child on a given element (one per injector function/model-level
+    field, all writing a top-level sibling rather than nesting under a
+    shared wrapper) -- which SBML forbids the instant an element carries
+    more than one (L3V1 Section 3.2.4: "no more than one top-level
+    element using a given namespace is allowed" per annotation),  making
+    such a file entirely unreadable by libsbml's own strict parser.
+    Repaired here, in the raw XML text, as the very first thing load_sbml
+    does with a freshly-uploaded file -- before libsbml (here, or inside
+    moose.readSBML) ever sees it: within each <annotation>...</annotation>
+    block with more than one xmlns:kkit declaration, every individual
+    declaration is stripped and the whole block is given exactly one, on
+    a wrapping <kkit:info> element -- the exact shape _inject_kkit_tags
+    (and the model-level save_sbml code) now write directly, so every
+    existing regex this app reads kkit: tags back with (a plain substring
+    search over the whole annotation string, never anchored to
+    "top-level") keeps matching unchanged, and a model-level block with
+    only ONE kkit: child (e.g. just modelMeta, no runSettings yet) is
+    left completely untouched since it was never actually invalid."""
+
+    def _repair_block(m):
+        inner = m.group(1)
+        if inner.count(_KKIT_XMLNS_DECL) <= 1:
+            return m.group(0)
+        stripped = inner.replace(_KKIT_XMLNS_DECL, "")
+        return f"<annotation><kkit:info{_KKIT_XMLNS_DECL}>{stripped}</kkit:info></annotation>"
+
+    return _ANNOTATION_BLOCK_RE.sub(_repair_block, content)
+
+
 _PLOT_WINDOW_TAG_RE = re.compile(r"<kkit:plotWindow[^>]*>(\d+)</kkit:plotWindow>")
 
 
@@ -386,11 +392,8 @@ def _inject_plot_annotations(content, model_path, plots):
         if not sid_match or sid_match.group(1) not in window_by_species_id:
             return m.group(0)
         window = window_by_species_id[sid_match.group(1)]
-        tag = f'<kkit:plotWindow xmlns:kkit="{_KKIT_NS}">{window}</kkit:plotWindow>'
-        block = m.group(0)
-        if "</annotation>" in block:
-            return block.replace("</annotation>", tag + "</annotation>", 1)
-        return block.replace("</species>", f"<annotation>{tag}</annotation></species>", 1)
+        tag = f"<kkit:plotWindow>{window}</kkit:plotWindow>"
+        return _inject_kkit_tags(m.group(0), tag, "</species>")
 
     return _SPECIES_BLOCK_RE.sub(_replace, content)
 
@@ -604,9 +607,8 @@ def _inject_stim_annotations(content, model_path, stims):
         sid_match = _ID_ATTR_RE.search(m.group(0))
         if not sid_match or sid_match.group(1) not in by_species_id:
             return m.group(0)
-        block = m.group(0)
         tags = "".join(
-            f'<kkit:stimulus xmlns:kkit="{_KKIT_NS}" name="{html.escape(s["name"])}" '
+            f'<kkit:stimulus name="{html.escape(s["name"])}" '
             f'field="{s["field"]}" kind="{s["kind"]}" numInputs="{s["num_inputs"]}" '
             # Each input pool is written as its own name-path (the same
             # stable, session-independent identifier the target itself is
@@ -620,9 +622,7 @@ def _inject_stim_annotations(content, model_path, stims):
             f'{html.escape(s["expr"])}</kkit:stimulus>'
             for s in by_species_id[sid_match.group(1)]
         )
-        if "</annotation>" in block:
-            return block.replace("</annotation>", tags + "</annotation>", 1)
-        return block.replace("</species>", f"<annotation>{tags}</annotation></species>", 1)
+        return _inject_kkit_tags(m.group(0), tags, "</species>")
 
     return _SPECIES_BLOCK_RE.sub(_replace, content)
 
@@ -658,12 +658,34 @@ def _restore_stims(doc, model_path):
             func.doEvalAtReinit = True
             if kind == "sum":
                 func.allowUnknownVariable = False
+            # valueOut must already be connected, and expr already set,
+            # before any func.x[i] indexing below -- a Function's own expr
+            # setter is what allocates its x[] array (to exactly as many
+            # x0/x1/... slots as the formula references, per MOOSE's own
+            # "Function::setNumVar is deprecated. Function object infers
+            # number of variables from the expression" message) -- the
+            # older explicit func.numVars=N setter this used to rely on no
+            # longer does anything on the current Function class (verified
+            # directly: it silently no-ops and leaves x[] at whatever the
+            # expr alone implies, so every x[slot] below would otherwise
+            # raise IndexError) -- see set_func_expr's own docstring for
+            # the valueOut-first requirement. One consequence: a capacity
+            # declared ahead of actually wiring that many inputs (see
+            # update_stim's own numInputs handling) can no longer be
+            # reserved independent of the expr -- num_inputs_str is kept in
+            # the annotation for display purposes but no longer applied
+            # here; any input beyond what the expr itself references is
+            # simply left unconnected (guarded by the slot < len(func.x)
+            # check below) rather than crashing.
+            dest_field = "set" + field[0].upper() + field[1:] if field else "setConc"
+            moose.connect(func, "valueOut", target, dest_field)
+            set_func_expr(func, html.unescape(expr))
             # Reconnect every input pool, in its own original x0/x1/...
             # order, resolved via the SAME live_by_path name-path map the
-            # target itself was just matched through -- see add_edge's
-            # own func.x[i] comment for why a bare, non-field-indexed
-            # element reference here would silently misconnect everything
-            # past the first input.
+            # target itself was just matched through -- see add_edge's own
+            # func.x[i] comment for why a bare, non-field-indexed element
+            # reference here would silently misconnect everything past the
+            # first input.
             slot = 0
             for name_path_str in (inputs_str or "").split(";"):
                 if not name_path_str:
@@ -671,123 +693,14 @@ def _restore_stims(doc, model_path):
                 input_path = live_by_path.get(tuple(name_path_str.split("/")))
                 if input_path is None:
                     continue
-                func.numVars = slot + 1
-                moose.connect(moose.element(input_path), "nOut", func.x[slot], "input")
+                if slot < len(func.x):
+                    moose.connect(moose.element(input_path), "nOut", func.x[slot], "input")
                 slot += 1
-            # A general function's own declared capacity can exceed how
-            # many inputs actually got reconnected (a reserved,
-            # not-yet-wired slot -- see update_stim's own numInputs
-            # handling); never shrunk below what was just wired.
-            if num_inputs_str:
-                try:
-                    func.numVars = max(func.numVars, int(num_inputs_str))
-                except ValueError:
-                    pass
-            dest_field = "set" + field[0].upper() + field[1:] if field else "setConc"
-            moose.connect(func, "valueOut", target, dest_field)
-            set_func_expr(func, html.unescape(expr))
             create_info(func.path, float(x), float(y), color="red")
 
 
 _GROUP_BLOCK_RE = re.compile(r"<groups:group\b.*?</groups:group>", re.DOTALL)
 _GROUPS_ID_ATTR_RE = re.compile(r'groups:id="([^"]+)"')
-_GROUP_ANN_OPEN_RE = re.compile(r"(<moose:GroupAnnotation>)")
-_STALE_LAYOUT_FIELD_RE = re.compile(r"<moose:(x|y|width|height|bgColor)>[^<]*</moose:\1>\s*")
-
-
-def _snapshot_group_boxes(model_path):
-    """Companion to _snapshot_positions, for groups: moose.writeSBML has a
-    second, distinct bug here -- rather than writing a wrong auto-computed
-    value like it does for a grouped pool/reac/enz, it omits a group's
-    x/y/width/height annotation *entirely* whenever its live width is 0
-    (verified directly), which is true for every group that's never been
-    explicitly resized -- the common case for a freshly-loaded legacy .g
-    file. Snapshotting each group's full box (plus color) beforehand is
-    what lets _fix_group_positions_in_sbml regenerate it unconditionally."""
-    snapshot = {}
-    for g in moose.wildcardFind(f"{model_path}/##[CLASS=Neutral]"):
-        g = moose.element(g)
-        if moose.exists(g.path + "/info"):
-            info = moose.element(g.path + "/info")
-            snapshot[name_path(g.path, model_path)] = (
-                info.x, info.y, info.width, info.height, info.color
-            )
-    return snapshot
-
-
-def _fix_group_positions_in_sbml(content, snapshot):
-    """Regenerates each group's x/y/width/height/bgColor annotation fields
-    from the pre-write snapshot (see _snapshot_group_boxes) unconditionally
-    -- rather than patch-if-present, since the writer may have omitted them
-    entirely -- dropping whatever (possibly absent, possibly present) ones
-    it actually produced."""
-    doc = libsbml.readSBMLFromString(content)
-    model = doc.getModel()
-    if model is None:
-        return content
-    paths = _SbmlNamePaths(model)
-
-    def _replace(m):
-        block = m.group(0)
-        id_match = _GROUPS_ID_ATTR_RE.search(block)
-        if not id_match:
-            return block
-        key = paths.group_path(id_match.group(1))
-        if key not in snapshot:
-            return block
-        x, y, width, height, color = snapshot[key]
-        fresh = (
-            f"<moose:x>{x}</moose:x><moose:y>{y}</moose:y>"
-            f"<moose:width>{width}</moose:width><moose:height>{height}</moose:height>"
-            f"<moose:bgColor>{color}</moose:bgColor>"
-        )
-        block = _STALE_LAYOUT_FIELD_RE.sub("", block)
-        return _GROUP_ANN_OPEN_RE.sub(r"\1" + fresh.replace("\\", "\\\\"), block, count=1)
-
-    return _GROUP_BLOCK_RE.sub(_replace, content)
-
-
-def _restore_group_annotations(doc, model_path):
-    """moose.writeSBML already emits a full, native SBML "groups" package
-    entry for each kkit Group -- structure and membership round-trip on
-    their own via moose.readSBML -- but its position/size/color (carried in
-    a custom moose:GroupAnnotation on that same group element, verified
-    directly by writing then reloading one) isn't recreated as an /info
-    Annotator on read. This re-derives that Annotator from the SBML text
-    itself after the structural reload, matching each SBML group to the
-    reloaded moose Neutral by name_path (not bare name -- two groups with
-    the same name in different compartments/parents, while unusual, would
-    otherwise collide; name_path disambiguates them exactly like it does
-    for positions -- see _snapshot_positions)."""
-    model = doc.getModel()
-    if model is None:
-        return
-    plugin = model.getPlugin("groups")
-    if plugin is None:
-        return
-    paths = _SbmlNamePaths(model)
-
-    live_by_path = {}
-    for g in moose.wildcardFind(model_path + "/##[CLASS=Neutral]"):
-        g = moose.element(g)
-        live_by_path[name_path(g.path, model_path)] = g.path
-
-    for i in range(plugin.getNumGroups()):
-        grp = plugin.getGroup(i)
-        fields = dict(_GROUP_ANNOTATION_FIELD_RE.findall(grp.getAnnotationString() or ""))
-        if not fields:
-            continue
-        live_path = live_by_path.get(paths.group_path(grp.getId()))
-        if live_path is None:
-            continue
-        create_info(
-            live_path,
-            float(fields.get("x", 0)),
-            float(fields.get("y", 0)),
-            color=fields.get("bgColor", "white"),
-            width=float(fields.get("width", 0)),
-            height=float(fields.get("height", 0)),
-        )
 
 
 _LIST_OF_REACTIONS_OPEN_RE = re.compile(r"<listOfReactions\b[^>]*>")
@@ -842,6 +755,25 @@ def _ensure_reaction_present(content, model):
     if _LIST_OF_REACTIONS_OPEN_RE.search(content):
         return _LIST_OF_REACTIONS_OPEN_RE.sub(lambda m: m.group(0) + dummy, content, count=1)
     return content.replace("</model>", f"<listOfReactions>{dummy}</listOfReactions></model>", 1)
+
+
+def _try_read_sbml(path, model_path):
+    """Thin wrapper over moose.readSBML, which changed its own return
+    contract out from under this file's two call sites (verified
+    directly, against the currently-installed moose): it used to return
+    an (id, errorString) tuple, consulted below as `_, load_error =
+    moose.readSBML(...)`; the installed version instead RAISES (e.g.
+    moose.io.sbml.reader.SBMLValidationError) on failure and returns a
+    single bare ObjId -- not a 2-tuple at all -- on success, which made
+    that same unpacking throw "cannot unpack non-iterable ObjId object"
+    on every load, valid or not. Returns None on success, or the
+    exception's own message on failure, so every existing `if
+    load_error:` check at each call site keeps working unchanged."""
+    try:
+        moose.readSBML(path, model_path)
+    except Exception as e:
+        return str(e)
+    return None
 
 
 def _strip_dummy_reaction(model_path):
@@ -968,6 +900,22 @@ def _update_node(node_id, fields, numeric_fields, bool_fields, describe_fn, stri
 
     result = describe_fn(elem.path)
     result["previousId"] = node_id
+    # None of the describe_X functions set this themselves -- build_graph
+    # is the only other caller, and it always adds it itself afterward in
+    # one combined pass (see its own comment) rather than having every
+    # describe_X function duplicate the same container_parent_id call.
+    # Omitting it here left the frontend's own onSaveNode merging this
+    # response straight into the edited node's data -- which does NOT
+    # fall back to the node's previous parentId the way it explicitly
+    # does for every other field the backend never reports (color,
+    # flipped, plotWindow, ...) -- silently wipe out data.parentId on
+    # EVERY save of EVERY node type (every update_X endpoint routes
+    # through this one function), even though the node's real structural
+    # parent in MOOSE never actually changed. Verified directly: this is
+    # exactly what read as "editing a pool's concInit makes it (or its
+    # group) look top-level" -- nothing moved in the model, only the
+    # frontend's own cached copy of where it belonged got corrupted.
+    result["parentId"] = container_parent_id(elem.path, _current_model_path)
     return jsonify(result)
 
 
@@ -1209,22 +1157,29 @@ def add_edge():
             reac_elem = candidate
             old_sub_order, old_prd_order = _reac_orders(reac_elem)
 
+    # .neighbors[...] returns bare Ids, not ObjIds -- Id.path omits the
+    # array-index suffix a real node id (from_id/to_id, as sent by the
+    # frontend) always carries, so comparing it directly against n.path
+    # never matched at all here, silently undercounting every one of
+    # these as stoich=0 regardless of how many real connections existed
+    # (same root cause, and same moose.element() re-wrap fix, as
+    # moose_graph.py's build_graph own add_edge calls).
     if edge_type == "substrate":
         moose.connect(moose.element(to_id), "sub", moose.element(from_id), "reac")
-        stoich = sum(1 for n in moose.element(to_id).neighbors["sub"] if n.path == from_id)
+        stoich = sum(1 for n in moose.element(to_id).neighbors["sub"] if moose.element(n).path == from_id)
     elif edge_type == "product":
         moose.connect(moose.element(from_id), "prd", moose.element(to_id), "reac")
-        stoich = sum(1 for n in moose.element(from_id).neighbors["prd"] if n.path == to_id)
+        stoich = sum(1 for n in moose.element(from_id).neighbors["prd"] if moose.element(n).path == to_id)
     elif edge_type == "chanIn":
         # A ConcChan's two exchange partners are wired after the fact via
         # ordinary drag-to-connect, unlike its structural parent pool (set
         # at creation, see create_concchan) -- mirrors substrate/product's
         # own pool-to/from-reac shape exactly (chan plays the reac/enz role).
         moose.connect(moose.element(to_id), "in", moose.element(from_id), "reac")
-        stoich = sum(1 for n in moose.element(to_id).neighbors["in"] if n.path == from_id)
+        stoich = sum(1 for n in moose.element(to_id).neighbors["in"] if moose.element(n).path == from_id)
     elif edge_type == "chanOut":
         moose.connect(moose.element(from_id), "out", moose.element(to_id), "reac")
-        stoich = sum(1 for n in moose.element(from_id).neighbors["out"] if n.path == to_id)
+        stoich = sum(1 for n in moose.element(from_id).neighbors["out"] if moose.element(n).path == to_id)
     elif edge_type == "funcInput":
         func = moose.element(to_id)
         if func.className != "Function":
@@ -2061,56 +2016,62 @@ def save_sbml():
     modified = body.get("modified", "")
     sx = body.get("sx")
     scale_icons = body.get("scaleIcons")
-    snapshot = _snapshot_positions(_current_model_path)
-    group_snapshot = _snapshot_group_boxes(_current_model_path)
     stim_snapshot = _snapshot_stims(_current_model_path)
+
+    # Both custom model-level annotations have to go in through a SINGLE
+    # setAnnotation call -- it replaces the model's whole annotation block
+    # rather than appending to it (confirmed directly), so building one
+    # combined string here is the only way runSettings and modelMeta both
+    # survive together. The whole combined string is wrapped in ONE
+    # <kkit:info> element (its own xmlns:kkit declared exactly once) rather
+    # than left as several independent top-level <kkit:X> siblings -- SBML
+    # forbids more than one top-level annotation child per namespace (L3V1
+    # Section 3.2.4), which three separate top-level kkit: elements
+    # violated the moment a model had more than one of runSettings/
+    # modelMeta/layoutGrid set at once -- verified directly: this is
+    # exactly what made every SBML file this app had ever saved unreadable
+    # by libsbml's own strict parser on the next load (see TESTS/
+    # vinu_layout*.xml, saved before this fix). See _inject_kkit_tags' own
+    # matching fix for the equivalent per-species case. Passed straight
+    # into moose.writeSBML's own extra_annotation hook (see writer.write())
+    # instead of a separate readSBMLFromString/setAnnotation/
+    # writeSBMLToString pass over the file it just wrote.
+    have_meta = creator or license_ or modified
+    annotation = ""
+    if runtime is not None and plot_dt is not None:
+        # The user's preferred Run-panel settings -- not part of the model
+        # itself, so a plain custom model-level annotation (same mechanism
+        # as the per-species plotWindow/stimulus annotations) rather than
+        # any native SBML construct.
+        annotation += f'<kkit:runSettings runtime="{runtime}" plotDt="{plot_dt}"/>'
+    if have_meta:
+        annotation += (
+            f'<kkit:modelMeta creator="{html.escape(creator)}" '
+            f'license="{html.escape(license_)}" modified="{html.escape(modified)}"/>'
+        )
+    if sx is not None:
+        # Frontend-only layout settings (kkit-unit grid pitch and the
+        # icon-size multiplier) -- same model-level-annotation mechanism as
+        # runSettings/modelMeta above.
+        annotation += (
+            f'<kkit:layoutGrid sx="{sx}" '
+            f'scaleIcons="{scale_icons if scale_icons is not None else 0.4}"/>'
+        )
+
     fd, path = tempfile.mkstemp(suffix=".xml")
     os.close(fd)
-    moose.writeSBML(_current_model_path, path)
+    moose.writeSBML(
+        _current_model_path, path,
+        notes=_wrap_notes(notes) if notes else None,
+        extra_annotation=f'<kkit:info xmlns:kkit="{_KKIT_NS}">{annotation}</kkit:info>' if annotation else None,
+    )
     with open(path) as f:
         content = f.read()
     os.remove(path)
-    _restore_positions(snapshot)
-    content = _fix_positions_in_sbml(content, snapshot)
-    content = _fix_group_positions_in_sbml(content, group_snapshot)
     content = _fix_missing_reaction_group_memberships(content)
     content = _inject_plot_annotations(content, _current_model_path, plots)
     content = _inject_stim_annotations(content, _current_model_path, stim_snapshot)
     content = _inject_collapsed_annotations(content, _current_model_path, collapsed)
-    have_meta = creator or license_ or modified
-    if notes or (runtime is not None and plot_dt is not None) or have_meta or sx is not None:
-        doc = libsbml.readSBMLFromString(content)
-        model = doc.getModel()
-        if notes:
-            model.setNotes(_wrap_notes(notes))
-        # Both custom model-level annotations have to go in through a
-        # SINGLE setAnnotation call -- it replaces the model's whole
-        # annotation block rather than appending to it (confirmed
-        # directly), so building one combined string here is the only way
-        # runSettings and modelMeta both survive together.
-        annotation = ""
-        if runtime is not None and plot_dt is not None:
-            # The user's preferred Run-panel settings -- not part of the
-            # model itself, so a plain custom model-level annotation
-            # (same mechanism as the per-species plotWindow/stimulus
-            # annotations) rather than any native SBML construct.
-            annotation += f'<kkit:runSettings xmlns:kkit="{_KKIT_NS}" runtime="{runtime}" plotDt="{plot_dt}"/>'
-        if have_meta:
-            annotation += (
-                f'<kkit:modelMeta xmlns:kkit="{_KKIT_NS}" creator="{html.escape(creator)}" '
-                f'license="{html.escape(license_)}" modified="{html.escape(modified)}"/>'
-            )
-        if sx is not None:
-            # Frontend-only layout settings (kkit-unit grid pitch and the
-            # icon-size multiplier) -- same model-level-annotation
-            # mechanism as runSettings/modelMeta above.
-            annotation += (
-                f'<kkit:layoutGrid xmlns:kkit="{_KKIT_NS}" sx="{sx}" '
-                f'scaleIcons="{scale_icons if scale_icons is not None else 0.4}"/>'
-            )
-        if annotation:
-            model.setAnnotation(annotation)
-        content = libsbml.writeSBMLToString(doc)
     return jsonify({"sbml": content})
 
 
@@ -2126,6 +2087,9 @@ def load_sbml():
     content = request.json.get("sbml")
     if not content:
         return jsonify({"error": "no sbml content provided"}), 400
+    # Must run before ANY libsbml parse of this content (here, and inside
+    # moose.readSBML below) -- see its own docstring.
+    content = _repair_duplicate_kkit_namespace(content)
     notes = ""
     run_settings = None
     model_meta = None
@@ -2153,12 +2117,11 @@ def load_sbml():
     with os.fdopen(fd, "w") as f:
         f.write(content_for_moose)
     model_path = _new_model_path()
-    _, load_error = moose.readSBML(path, model_path)
+    load_error = _try_read_sbml(path, model_path)
     os.remove(path)
     if load_error:
         return jsonify({"error": f"could not load SBML: {load_error.strip()}"}), 400
     _strip_dummy_reaction(model_path)
-    _restore_group_annotations(doc, model_path)
     _restore_stims(doc, model_path)
     extra_plot_windows = _extract_plot_windows(content, model_path)
     extra_collapsed = _extract_collapsed(content, model_path)
@@ -2236,7 +2199,7 @@ def tools_compare_file():
         fd, path = tempfile.mkstemp(suffix=".xml")
         with os.fdopen(fd, "w") as f:
             f.write(content_for_moose)
-        _, load_error = moose.readSBML(path, side_path)
+        load_error = _try_read_sbml(path, side_path)
         os.remove(path)
         if load_error:
             if moose.exists(side_path):

@@ -19,7 +19,7 @@ const API_BASE = `http://${window.location.hostname}:5001`;
 // A real, saveable choice always overwrites this -- but until then, it
 // reads unambiguously as "we don't actually know," rather than silently
 // showing "CC BY" as if the user (or the file) had actually chosen it.
-const NO_LICENSE = '(not set)';
+export const NO_LICENSE = '(not set)';
 const LICENSE_OPTIONS = [NO_LICENSE, 'CC BY', 'CC BY-SA', 'GPLv3', 'None'];
 
 // Order/labels match the File menu's own read-only model-info line.
@@ -80,14 +80,24 @@ export default function FileMenuBox({
   onSaveLayoutSvg,
   sx,
   scaleIcons,
+  // Lifted to App.jsx (rather than kept as local state here) so these
+  // survive a menu switch -- this box fully unmounts/remounts every time
+  // activeMenu moves away from 'File' and back (see AppLayout's own
+  // menuComponents[activeMenu], only the active one is ever in the DOM),
+  // which was silently resetting every one of these to its blank default.
+  fileName,
+  setFileName,
+  modelNotes,
+  setModelNotes,
+  creator,
+  setCreator,
+  license,
+  setLicense,
+  modified,
+  setModified,
 }) {
-  const [modelNotes, setModelNotes] = useState('');
-  const [fileName, setFileName] = useState('model.xml');
   const [svgFileName, setSvgFileName] = useState('layout.svg');
   const [pdfFileName, setPdfFileName] = useState('layout.pdf');
-  const [creator, setCreator] = useState('');
-  const [license, setLicense] = useState(NO_LICENSE);
-  const [modified, setModified] = useState('');
 
   const [aboutKkitOpen, setAboutKkitOpen] = useState(false);
   const [aboutMooseOpen, setAboutMooseOpen] = useState(false);
